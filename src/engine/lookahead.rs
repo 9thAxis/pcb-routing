@@ -182,21 +182,21 @@ impl Engine<'_> {
         terminals.iter().flat_map(|t| t.states(self.plan.space)).collect()
     }
 
-    /// What to look ahead with towards `goals`. The first times a connection is laid, the straight way: on a
-    /// board where most connections are laid once, an exact table for each would cost far more than the
-    /// searches themselves. A connection that is laid again and again (the nets that negotiate) gets its
-    /// table from the `exact_after`-th time on, and that table is shared by all attempts.
+    /// What to look ahead with towards `goals`: the straight way, unless `options.exact_after` asks for an
+    /// exact table from the so-manieth time the connection is laid on (a connection that is laid again and
+    /// again while nets negotiate can repay a table; one laid once cannot). The table is shared by all attempts.
     pub(super) fn look(&self, n: usize, goals: &[Term], holes: &[u32], others: &[u32]) -> Look {
-        let after = self.p.options.exact_after;
-        let asked = {
-            let mut asked = self.policy.asked.borrow_mut();
-            let count = asked.entry((n, goals.to_vec(), holes.to_vec())).or_insert(0);
-            *count += 1;
-            *count
-        };
         // (a table towards many terminals at once covers most of the board and changes as they are joined)
-        if asked as usize > after && goals.len() <= 4 {
-            return Look::Exact(self.floor(n, goals, holes, others));
+        if let (Some(after), true) = (self.p.options.exact_after, goals.len() <= 4) {
+            let asked = {
+                let mut asked = self.policy.asked.borrow_mut();
+                let count = asked.entry((n, goals.to_vec(), holes.to_vec())).or_insert(0);
+                *count += 1;
+                *count
+            };
+            if asked as usize > after {
+                return Look::Exact(self.floor(n, goals, holes, others));
+            }
         }
         let unit = self.plan.layer_cost[n]
             .iter()

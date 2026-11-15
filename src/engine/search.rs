@@ -260,7 +260,7 @@ impl Engine<'_> {
         // (the fixed look-ahead, or that the state lies beyond the bound the first pass stopped at).
         let back: Option<Look> = from.map(|from| match from {
             From::Terminals(from) => self.look(n, from, holes, &self.states_of(goals)),
-            From::Copper if self.p.options.exact_after == 0 => {
+            From::Copper if self.p.options.exact_after == Some(0) => {
                 let _t = self.shared.timed(1);
                 Look::Exact(self.floor_to_copper(n, sources, holes, floor, &self.states_of(goals)))
             }
