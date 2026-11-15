@@ -1,4 +1,4 @@
-//! Command line: route a problem file, or write the fixed mask of one net.
+//! Command line: route a problem file, write the fixed mask of one net, or answer a question about zones.
 
 use pcb_routing::{mask::net_mask, Event, Grid, Problem, Router, Status};
 use std::process::ExitCode;
@@ -7,9 +7,13 @@ use std::time::Instant;
 const USAGE: &str =
     "usage: pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N] [--trace] [--verify] [--only ATTEMPT]
        pcb-routing masks PROBLEM.json --net KEY -o MASK.bin
+       pcb-routing pours [QUESTION.json] [-o ANSWER.json]
 
 route   lay the nets of the problem; exit status 0 if every net is laid and none are too close, 1 otherwise
 masks   one byte per cell, row by row: bit i set = routing layer i closed to the net's tracks, 0x80 = closed to its vias
+pours   answer a question about a board's filled zones (what they join, where a net may be joined to one, how
+        each pad is tied to its zone); the question is read from standard input and the answer written to
+        standard output where no file is named
 
 --trace   one line per round of negotiation and the time spent per kind of work (also: PCB_ROUTING_TRACE=1)
 --verify  run every search a second time in one pass and report any whose cost differs (also: PCB_ROUTING_CHECK=1)
@@ -29,6 +33,9 @@ fn run() -> Result<ExitCode, String> {
     let args: Vec<String> = std::env::args().collect();
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
     let flag = |flag: &str, env: &str| args.iter().any(|a| a == flag) || std::env::var(env).is_ok();
+    if args.get(1).map(String::as_str) == Some("pours") {
+        return pours(args.get(2).filter(|a| *a != "-o"), value("-o"));
+    }
     if args.len() < 3 || !["route", "masks"].contains(&args[1].as_str()) {
         return Err(USAGE.into());
     }
@@ -104,4 +111,25 @@ fn run() -> Result<ExitCode, String> {
         println!("  {}", solution.message);
     }
     Ok(if solution.status == Status::Routed { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// Answer a question about zones: from a file or standard input, to a file or standard output.
+fn pours(question: Option<&String>, out: Option<String>) -> Result<ExitCode, String> {
+    use std::io::Read;
+    let (name, text) = match question {
+        Some(path) => (path.as_str(), std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?),
+        None => {
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text).map_err(|e| format!("cannot read the question: {e}"))?;
+            ("the question", text)
+        }
+    };
+    let ask: pcb_routing::pours::Ask = serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))?;
+    let answer = pcb_routing::pours::answer(&ask).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&answer).map_err(|e| e.to_string())?;
+    match out {
+        Some(path) => std::fs::write(&path, json).map_err(|e| format!("cannot write {path}: {e}"))?,
+        None => println!("{json}"),
+    }
+    Ok(ExitCode::SUCCESS)
 }

@@ -55,24 +55,27 @@ pub(crate) fn push(run: &mut Vec<Pt>, p: Pt) {
     }
 }
 
+/// True if a point is on a polygon given as its rings (even-odd: the outline, then its holes).
+pub(crate) fn within(rings: &[Vec<Pt>], p: Pt) -> bool {
+    let mut within = false;
+    for ring in rings {
+        let n = ring.len();
+        for k in 0..n {
+            let (a, b) = (ring[k], ring[(k + 1) % n]);
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
+                within = !within;
+            }
+        }
+    }
+    within
+}
+
 /// True if a point lies on a shape.
 pub(crate) fn inside(shape: &Shape, p: Pt) -> bool {
     match shape {
         Shape::Seg { a, b, w } => dist2_segment(p, *a, *b) <= (w / 2.0) * (w / 2.0),
         Shape::Circle { c, r } => (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= r * r,
-        Shape::Poly { rings } => {
-            let mut within = false;
-            for ring in rings {
-                let n = ring.len();
-                for k in 0..n {
-                    let (a, b) = (ring[k], ring[(k + 1) % n]);
-                    if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
-                        within = !within;
-                    }
-                }
-            }
-            within
-        }
+        Shape::Poly { rings } => within(rings, p),
     }
 }
 

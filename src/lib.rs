@@ -52,6 +52,7 @@ mod geom;
 mod grid;
 pub mod mask;
 pub mod model;
+pub mod pours;
 mod queue;
 mod router;
 mod validate;
@@ -59,7 +60,7 @@ mod validate;
 pub use error::Error;
 pub use grid::Grid;
 pub use model::{
-    Attempt, Clearance, Conflict, ConflictKind, Copper, Hole, Net, NetResult, Options, Pair, Problem, Pt, Region,
+    Attempt, Clearance, Conflict, ConflictKind, Copper, Dear, Hole, Net, NetResult, Options, Pair, Problem, Pt, Region,
     Rules, Shape, Solution, Stats, Status, Terminal, Track,
 };
 pub use router::{route, Event, Router};
