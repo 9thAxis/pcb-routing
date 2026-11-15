@@ -11,6 +11,9 @@ const STATE_LIMIT: usize = (u32::MAX / 9) as usize;
 /// Claims are counted per cell in a byte.
 const MOST_NETS: usize = 250;
 
+/// The greatest factor on the cost of dear ground: beyond it the ground is as good as closed.
+const MOST_DEAR: f64 = 100.0;
+
 fn positive(field: String, v: f64) -> Result<(), Error> {
     if v.is_finite() && v > 0.0 {
         Ok(())
@@ -136,6 +139,22 @@ impl Problem {
         for (k, g) in self.regions.iter().enumerate() {
             region(format!("regions[{k}]"), g)?;
         }
+        for (k, d) in self.dear.iter().enumerate() {
+            rings(&format!("dear[{k}].rings"), &d.rings)?;
+            for l in d.layers.iter().flatten() {
+                if !names.contains(l.as_str()) {
+                    return Err(invalid(format!("dear[{k}].layers"), format!("{l} is not a routing layer")));
+                }
+            }
+            if !(d.factor.is_finite() && (1.0..=MOST_DEAR).contains(&d.factor)) {
+                return Err(invalid(format!("dear[{k}].factor"), format!("is {}: from 1 to {MOST_DEAR}", d.factor)));
+            }
+        }
+        let kinds = crate::engine::dear::kinds(self).len();
+        if kinds > crate::engine::dear::MOST_KINDS {
+            let most = crate::engine::dear::MOST_KINDS;
+            return Err(invalid("dear", format!("at most {most} different pairs of factor and net, {kinds} given")));
+        }
 
         if self.nets.len() >= MOST_NETS {
             return Err(invalid(
@@ -180,8 +199,10 @@ impl Problem {
                 positive(at(&format!("layer_cost.{l}")), *v)?;
             }
             let fewest = if stub_keys.contains(n.key.as_str()) { 1 } else { 2 };
-            if n.terminals.len() < fewest {
-                return Err(invalid(at("terminals"), format!("at least {fewest}, {} given", n.terminals.len())));
+            let pieces: HashSet<u32> = n.terminals.iter().filter_map(|t| t.piece).collect();
+            let apart = pieces.len() + n.terminals.iter().filter(|t| t.piece.is_none()).count();
+            if apart < fewest {
+                return Err(invalid(at("terminals"), format!("at least {fewest} not yet joined, {apart} given")));
             }
             for (t, term) in n.terminals.iter().enumerate() {
                 point(at(&format!("terminals[{t}].xy")), term.xy)?;

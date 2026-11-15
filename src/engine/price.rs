@@ -121,7 +121,7 @@ impl<'a> Prices<'a> {
                 } else {
                     ((1.0 + give * e.history.hist[s] as f64) * (1.0 + give * present * occ as f64)) as f32
                 };
-                self.swept[s].mult.set(mult * self.ground.apart_at(s));
+                self.swept[s].mult.set(mult * self.ground.apart_at(s) * e.plan.dear.track(n, s));
                 self.swept[s].open.set(open[i]);
             }
             k += len;
@@ -145,7 +145,9 @@ impl<'a> Prices<'a> {
             let cost = if net.no_vias || mask[c - from] & VIA_BIT != 0 || (hard && occ > 0) {
                 SHUT_COST
             } else {
-                (self.via_cost * (1.0 + give * e.history.hist_v[c] as f64) * (1.0 + give * present * occ as f64)) as f32
+                ((self.via_cost + e.plan.dear.via(n, c))
+                    * (1.0 + give * e.history.hist_v[c] as f64)
+                    * (1.0 + give * present * occ as f64)) as f32
             };
             self.ground.vcost[c].set(self.ground.hole_price(c, self.own_hole, net.no_vias).unwrap_or(cost));
         }

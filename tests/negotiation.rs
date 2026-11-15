@@ -512,3 +512,115 @@ fn bus_names_without_pull_change_nothing() {
     };
     assert_eq!(run(true), run(false));
 }
+
+/// Track length of a result's entry, in mm.
+fn length(s: &Solution, n: usize) -> f64 {
+    let far = |a: &[f64; 2], b: &[f64; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+    s.nets[n].tracks.iter().flat_map(|t| t.points.windows(2)).map(|w| far(&w[0], &w[1])).sum()
+}
+
+fn terminal(xy: [f64; 2], piece: Option<u32>) -> Value {
+    json!({"xy": xy, "layers": ["F"], "piece": piece})
+}
+
+#[test]
+fn a_piece_of_copper_is_joined_at_its_nearest_terminal_only() {
+    // one piece with points at x 1 and x 8, a pad at x 9: joined to the point at 8, and nothing laid between
+    // the two points of the piece
+    let piece = vec![terminal([1.0, 3.0], Some(7)), terminal([8.0, 3.0], Some(7)), terminal([9.0, 3.0], None)];
+    let s = route(&problem(&["F", "B"], vec![], vec![entry("a", "A", 0.15, json!(piece), json!({}))])).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    assert!((length(&s, 0) - 1.0).abs() < 1e-6, "{} mm laid", length(&s, 0));
+    // whichever comes first in the list
+    let piece = vec![terminal([9.0, 3.0], None), terminal([1.0, 3.0], Some(7)), terminal([8.0, 3.0], Some(7))];
+    let s = route(&problem(&["F", "B"], vec![], vec![entry("a", "A", 0.15, json!(piece), json!({}))])).unwrap();
+    assert!((length(&s, 0) - 1.0).abs() < 1e-6, "{} mm laid", length(&s, 0));
+}
+
+#[test]
+fn a_piece_is_reached_where_it_is_open() {
+    // the nearer point of the piece is walled in: the pad is joined to the other, and nothing is reported
+    let box_ = |x: f64| vec![wall(x - 0.5, 2.5, 3.5, &["F", "B"]), wall(x + 0.5, 2.5, 3.5, &["F", "B"])];
+    let mut copper = box_(8.0);
+    copper.push(json!({"t": "seg", "a": [7.5, 2.5], "b": [8.5, 2.5], "w": 0.2, "net": "WALL", "layers": ["F", "B"]}));
+    copper.push(json!({"t": "seg", "a": [7.5, 3.5], "b": [8.5, 3.5], "w": 0.2, "net": "WALL", "layers": ["F", "B"]}));
+    let piece = vec![terminal([9.5, 3.0], None), terminal([8.0, 3.0], Some(1)), terminal([2.0, 3.0], Some(1))];
+    let s = route(&problem(&["F", "B"], copper, vec![entry("a", "A", 0.15, json!(piece), json!({}))])).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    assert!(s.unrouted.is_empty(), "{:?}", s.unrouted);
+    assert!(joined(&s, 0, [9.5, 3.0], [2.0, 3.0]));
+}
+
+#[test]
+fn two_pieces_are_joined_once() {
+    // two pieces of two points each, opposite each other: one connection, between the nearest two
+    let terminals = vec![
+        terminal([2.0, 1.0], Some(1)),
+        terminal([2.0, 5.0], Some(1)),
+        terminal([4.0, 1.0], Some(2)),
+        terminal([8.0, 5.0], Some(2)),
+    ];
+    let s = route(&problem(&["F", "B"], vec![], vec![entry("a", "A", 0.15, json!(terminals), json!({}))])).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    assert!((length(&s, 0) - 2.0).abs() < 1e-6, "{} mm laid", length(&s, 0));
+}
+
+#[test]
+fn terminals_of_one_piece_alone_are_nothing_to_join() {
+    let terminals = vec![terminal([2.0, 1.0], Some(1)), terminal([2.0, 5.0], Some(1))];
+    let p = problem(&["F", "B"], vec![], vec![entry("a", "A", 0.15, json!(terminals), json!({}))]);
+    let why = route(&p).unwrap_err().to_string();
+    assert!(why.contains("not yet joined"), "{why}");
+}
+
+fn dear(x: [f64; 2], y: [f64; 2], factor: f64, net: Option<&str>) -> Value {
+    json!({"rings": [[[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]]], "layers": ["F"], "factor": factor, "net": net})
+}
+
+/// A problem with one net straight across dear ground from x 4 to 6, which ends at y 4 (and at y 0, the window's edge).
+fn across_dear_ground(factor: f64, of: Option<&str>) -> Problem {
+    let mut p = problem(&["F"], vec![], vec![net("a", [2.0, 3.0], [8.0, 3.0], &["F"])]);
+    p.dear = vec![serde_json::from_value(dear([4.0, 6.0], [-1.0, 4.0], factor, of)).unwrap()];
+    p
+}
+
+#[test]
+fn dear_ground_is_gone_round_when_that_is_cheaper() {
+    // straight through: 2 mm of dear ground; round it: about 0.9 mm more track
+    let through = route(&across_dear_ground(1.2, None)).unwrap();
+    assert!((length(&through, 0) - 6.0).abs() < 1e-6, "{} mm laid", length(&through, 0));
+    let round = route(&across_dear_ground(3.0, None)).unwrap();
+    assert_eq!(round.status, Status::Routed);
+    assert!(length(&round, 0) > 6.5, "{} mm laid", length(&round, 0));
+    let highest = round.nets[0].tracks.iter().flat_map(|t| &t.points).map(|p| p[1]).fold(0.0, f64::max);
+    assert!(highest > 4.0, "the track stays below y {highest}");
+}
+
+#[test]
+fn dear_ground_costs_its_own_net_nothing() {
+    let s = route(&across_dear_ground(3.0, Some("a"))).unwrap();
+    assert!((length(&s, 0) - 6.0).abs() < 1e-6, "{} mm laid", length(&s, 0));
+}
+
+#[test]
+fn a_via_is_kept_out_of_dear_ground() {
+    // A wall on F from top to bottom at x 5, passed on B. Without dear ground the net comes back up at its
+    // terminal; with the terminal in a patch of dear ground on F it comes up before the patch, and pays for
+    // 0.2 mm of track in it rather than for a via.
+    let mut p =
+        problem(&["F", "B"], vec![wall(5.0, -1.0, 7.0, &["F"])], vec![net("a", [2.0, 3.0], [7.5, 3.0], &["F", "B"])]);
+    let via_at = |p: &Problem| route(p).unwrap().nets[0].vias.clone();
+    let plain = via_at(&p);
+    assert_eq!(plain.len(), 2, "{plain:?}");
+    p.dear = vec![serde_json::from_value(dear([7.3, 7.7], [2.8, 3.2], 20.0, None)).unwrap()];
+    let kept_out = via_at(&p);
+    assert_eq!(kept_out.len(), 2, "{kept_out:?}");
+    assert!(plain.iter().any(|v| v[0] > 7.3 && v[0] < 7.7), "without dear ground the via is not there: {plain:?}");
+    assert!(kept_out.iter().all(|v| v[0] < 7.3 || v[0] > 7.7), "{kept_out:?}");
+}
+
+#[test]
+fn a_factor_below_one_is_refused() {
+    let why = route(&across_dear_ground(0.5, None)).unwrap_err().to_string();
+    assert!(why.contains("dear[0].factor"), "{why}");
+}

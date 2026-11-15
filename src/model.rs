@@ -31,6 +31,9 @@ pub struct Problem {
     /// Ground closed to every net.
     #[serde(default)]
     pub regions: Vec<Region>,
+    /// Ground that is open but costs more.
+    #[serde(default)]
+    pub dear: Vec<Dear>,
     /// Distances that hold for all nets.
     #[serde(default)]
     pub rules: Rules,
@@ -146,6 +149,24 @@ pub struct Region {
     pub vias: bool,
 }
 
+/// Ground that is open to routing but costs more: a filled zone that a track would cut, the spokes that
+/// tie a pad to it. A track pays `factor` times its length there, and a via as a track of its own diameter
+/// would on the dearest layer it passes. Where several overlap, the dearest counts.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Dear {
+    /// Rings of one polygon, even-odd.
+    pub rings: Vec<Vec<Pt>>,
+    /// The layers it is on; all routing layers if absent.
+    #[serde(default)]
+    pub layers: Option<Vec<String>>,
+    /// What a unit of track length costs there, as a factor: 1 or more.
+    pub factor: f64,
+    /// The electrical net whose ground it is, if any: its entries pay nothing more there.
+    #[serde(default)]
+    pub net: Option<String>,
+}
+
 fn yes() -> bool {
     true
 }
@@ -201,6 +222,12 @@ pub struct Terminal {
     pub xy: Pt,
     /// Layers on which the net may arrive here. More than one means a through connection (a via or a pin).
     pub layers: Vec<String>,
+    /// The piece of copper it stands on, for terminals that copper already on the board joins (the pads on a
+    /// filled zone, and points of the zone itself): terminals of an entry with the same number are joined
+    /// already, and the entry is joined to their piece where it reaches any one of them. A terminal without
+    /// one stands alone.
+    #[serde(default)]
+    pub piece: Option<u32>,
 }
 
 /// One piece of work: terminals to be joined, and the rules for the copper that joins them.
@@ -219,7 +246,7 @@ pub struct Net {
     pub layers: Vec<String>,
     /// Distances to copper already on the board.
     pub clearance: Clearance,
-    /// The points to join. Two or more (one for the stub of a [`Pair`]).
+    /// The points to join: two pieces or more (see [`Terminal::piece`]; one for the stub of a [`Pair`]).
     pub terminals: Vec<Terminal>,
     /// The length of detour accepted before a layer change is preferred.
     #[serde(default = "ten")]

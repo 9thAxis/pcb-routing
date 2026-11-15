@@ -129,7 +129,8 @@ impl Engine<'_> {
             if la == lb {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
                 let len = if ja != jb && ia != ib { std::f64::consts::SQRT_2 } else { 1.0 };
-                apart += lc[lb] * len * (ground.apart_at(pair[1] as usize) as f64 - 1.0);
+                let step = lc[lb] * len * self.plan.dear.track(n, pair[1] as usize) as f64;
+                apart += step * (ground.apart_at(pair[1] as usize) as f64 - 1.0);
             }
         }
         apart

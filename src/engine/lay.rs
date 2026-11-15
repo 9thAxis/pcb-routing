@@ -84,15 +84,43 @@ impl Engine<'_> {
         let mode = Mode { present, hard };
         let own_hole = self.own_hole(n);
         let mut state = NetState::default();
-        let mut terms: Vec<Term> = Vec::new();
+        // The terminals that can be reached, each with its piece of copper (see `Terminal::piece`): the pieces
+        // are what is joined, each at whichever of its terminals comes cheapest. A terminal that cannot be
+        // reached is a failure only where its piece has no other.
+        let own_piece = |t: usize| (1u64 << 32) + t as u64;
+        let mut terms: Vec<(Term, u64)> = Vec::new();
+        let mut closed: Vec<(usize, u64, &String)> = Vec::new();
         for (t, at) in self.plan.terms[n].iter().enumerate() {
+            let piece = net.terminals[t].piece.map_or(own_piece(t), u64::from);
             match at {
-                Ok(term) => terms.push(*term),
-                Err(why) => state.failed.push(format!("{}: terminal {:?} {why}", net.key, net.terminals[t].xy)),
+                Ok(term) => terms.push((*term, piece)),
+                Err(why) => closed.push((t, piece, why)),
             }
         }
-        terms.extend_from_slice(&self.pairs.extra_terms[n]);
-        if terms.len() < 2 {
+        for (t, piece, why) in closed {
+            if !terms.iter().any(|&(_, other)| other == piece) {
+                state.failed.push(format!("{}: terminal {:?} {why}", net.key, net.terminals[t].xy));
+            }
+        }
+        let extra = self.pairs.extra_terms[n].iter().enumerate();
+        terms.extend(extra.map(|(k, &term)| (term, own_piece(net.terminals.len() + k))));
+        let mut left: Vec<Term> = terms.iter().map(|t| t.0).collect();
+        let mut left_piece: Vec<u64> = terms.iter().map(|t| t.1).collect();
+        // (take every terminal of a piece out of what is left)
+        let take = |left: &mut Vec<Term>, left_piece: &mut Vec<u64>, piece: u64| -> Vec<Term> {
+            let mut taken = Vec::new();
+            for k in (0..left.len()).rev() {
+                if left_piece[k] == piece {
+                    left_piece.remove(k);
+                    taken.push(left.remove(k));
+                }
+            }
+            taken.reverse();
+            taken
+        };
+        let first = left_piece.first().copied();
+        let mut joined: Vec<Term> = first.map_or(Vec::new(), |piece| take(&mut left, &mut left_piece, piece));
+        if left.is_empty() {
             if state.failed.is_empty() {
                 state.failed.push(format!("{}: fewer than two terminals", net.key));
             }
@@ -100,9 +128,7 @@ impl Engine<'_> {
         }
         let mut tree: Vec<u32> = Vec::new();
         let add_term = |tree: &mut Vec<u32>, t: Term| tree.extend(t.states(space));
-        add_term(&mut tree, terms[0]);
-        let mut joined: Vec<Term> = vec![terms[0]];
-        let mut left: Vec<Term> = terms[1..].to_vec();
+        joined.iter().for_each(|&t| add_term(&mut tree, t));
         // connections laid before the tree was last begun anew: a later one branches from the present tree only
         let mut islands = 0usize;
         let mut first_of_tree = 0usize;
@@ -135,10 +161,10 @@ impl Engine<'_> {
                         places(&left),
                         if hard { " and the other nets" } else { "" }
                     ));
-                    let next = left.remove(0);
+                    let piece = left_piece[0];
+                    joined = take(&mut left, &mut left_piece, piece);
                     tree.clear();
-                    add_term(&mut tree, next);
-                    joined = vec![next];
+                    joined.iter().for_each(|&t| add_term(&mut tree, t));
                     islands += 1;
                     continue;
                 }
@@ -146,7 +172,8 @@ impl Engine<'_> {
             let end = *path.last().unwrap();
             let (el, ec) = space.split(end as usize);
             let k = left.iter().position(|t| t.cell as usize == ec && t.on(el)).unwrap();
-            let reached = left.remove(k);
+            let piece = left_piece[k];
+            let reached = take(&mut left, &mut left_piece, piece);
             let new_vias = self.account(n, &path, own_hole, w, &mut state);
             // A layer change on the via of another entry of the net is on a via of this entry too from now
             // on, at no cost: the other entry may be laid again without it.
@@ -177,8 +204,8 @@ impl Engine<'_> {
             if net.branch_anywhere {
                 tree.extend_from_slice(&path);
             }
-            add_term(&mut tree, reached);
-            joined.push(reached);
+            reached.iter().for_each(|&t| add_term(&mut tree, t));
+            joined.extend(reached);
             state.conns.push(path);
         }
         state
@@ -197,7 +224,7 @@ impl Engine<'_> {
             if la != lb {
                 if w.ground.via_flag[ca] != FREE && !new_vias.contains(&(ca as u32)) {
                     new_vias.push(ca as u32);
-                    state.cost += net.via_penalty_mm / p.step;
+                    state.cost += net.via_penalty_mm / p.step + self.plan.dear.via(n, ca);
                 } else {
                     state.cost += own_hole as f64;
                 }
@@ -209,8 +236,9 @@ impl Engine<'_> {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
                 let diag = ja != jb && ia != ib;
                 let len = if diag { std::f64::consts::SQRT_2 } else { 1.0 };
-                state.cost += lc[lb] * len;
-                state.apart += lc[lb] * len * (w.ground.apart_at(pair[1] as usize) as f64 - 1.0);
+                let step = lc[lb] * len * self.plan.dear.track(n, pair[1] as usize) as f64;
+                state.cost += step;
+                state.apart += step * (w.ground.apart_at(pair[1] as usize) as f64 - 1.0);
                 state.steps += len;
             }
         }

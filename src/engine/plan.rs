@@ -1,5 +1,6 @@
 //! What follows from the problem alone and does not change during a run: worked out once, used by every attempt.
 
+use super::dear::DearGround;
 use super::fixed::Fixed;
 use super::space::{Space, Steps, Term};
 use crate::geom::{dist, inside};
@@ -34,6 +35,8 @@ pub(crate) struct Plan {
     pub(super) exact: Vec<HashMap<u32, Pt>>,
     /// The offsets of the cells too close to a hole for another hole.
     pub(super) shut: Vec<(i32, i32)>,
+    /// The ground that costs more without being closed.
+    pub(super) dear: DearGround,
 }
 
 fn class_of(list: &mut Vec<(f64, bool)>, v: (f64, bool)) -> usize {
@@ -86,6 +89,7 @@ impl Plan {
         }
         Plan {
             steps: Steps::new(grid.w),
+            dear: DearGround::new(p, &grid, space),
             shut: grid.disc(p.rules.hole_centre_mm),
             siblings: (0..p.nets.len())
                 .map(|n| (0..p.nets.len()).filter(|&m| m != n && p.nets[m].net == p.nets[n].net).collect())
