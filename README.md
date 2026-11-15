@@ -38,17 +38,49 @@ and KiCad's design rule check reports no error that the unrouted board did not h
 |---|---|---|---|---|---|
 | D3-A (small) | 99 | 2 to 13 | 99 of 99 | 1,301 of 1,301 | 0.5 s |
 | D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.0 s |
-| D3-C (large), first 10 | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 10.9 s |
+| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 10.9 s |
 
-Run on 15 November 2026 through the KiCad bridge with its defaults, two threads, on a laptop that was doing
-other work; the time includes loading and saving the board in KiCad.
+Run on 15 November 2026 through the KiCad bridge with its defaults, on an idle Apple M5 Max laptop; the time
+is the whole run, including loading and saving the board in KiCad. A single attempt uses one core, so the
+thread count does not change these figures.
 
-For orientation, the figures the benchmark's authors publish for other open routers (clean pass, time per
-board): FreeRouting 0.80 and 7.1 s on D3-A, 0.78 and 9.9 s on D3-B; KiCadRoutingTools 0.74 and 0.65 s on D3-A,
-0.20 and 3.3 s on D3-B. **These are not a like-for-like comparison with the table above**: the authors
-prepare the boards with their own KiCad 9 pipeline and score under their own protocol on their own machine,
-and the table above uses this repository's preparation with KiCad 10. A run of all three routers on one
-machine with one scorer is planned and will replace this paragraph.
+### Against other open routers, on the same machine
+
+The same 119 stripped boards, the same KiCad 10 rule check, one board at a time on the same idle machine.
+FreeRouting 2.5.0 ran headless with its defaults from KiCad's Specctra export. KiCadRoutingTools (commit
+435ffbb) ran through its router `route.py` on all nets, which takes track, clearance and via sizes from the
+board's project file. Times are each tool's whole run.
+
+| Set | Router | Clean pass | Clean pass, track width forgiven | Connections made | Time per board |
+|---|---|---|---|---|---|
+| D3-A (99) | pcb-routing | 99 | 99 | 100% | 0.47 s |
+| | KiCadRoutingTools | 94 | 95 | 100% | 0.69 s |
+| | FreeRouting | 46 | 92 | 99.5% | 2.8 s |
+| D3-B (10) | pcb-routing | 10 | 10 | 100% | 2.0 s |
+| | KiCadRoutingTools | 8 | 8 | 100% | 2.0 s |
+| | FreeRouting | 4 | 8 | 99.3% | 3.7 s |
+| D3-C (10) | pcb-routing | 10 | 10 | 100% | 10.9 s |
+| | KiCadRoutingTools | 6 | 6 | 99.5% | 8.2 s |
+| | FreeRouting | 0 | 7 | 96.5% | 12.4 s |
+
+How to read it:
+
+- **Track width.** Both other routers narrow some tracks near pads (FreeRouting to 75% of the class
+  width), and on many of these boards that falls below the board's minimum track width,
+  which KiCad reports as an error. The fourth column counts a board as clean when those are its only errors.
+  With FreeRouting's `automatic_neckdown` turned off it leaves more connections open and does worse in both
+  columns (69, 2 and 1 clean), so the table shows it as shipped.
+- **Vias.** On the boards both routers made clean, pcb-routing used 59 vias where KiCadRoutingTools used 263
+  (D3-A, 94 boards), 26 against 137 (D3-B, 8 boards) and 141 against 421 (D3-C, 6 boards), for 0.6 to 4% less
+  track.
+- **Speed on large boards.** KiCadRoutingTools is the faster router there: on the six D3-C boards both made
+  clean it took 20 s in all where pcb-routing took 66 s.
+- **Front-ends.** KiCadRoutingTools' `autoroute.py` front-end, run with no arguments, routed every board with
+  0.1 mm tracks and clearances instead of the board's own and made no board clean; the table uses `route.py`.
+- **Not the paper's protocol.** The benchmark's authors prepare the boards with a KiCad 9 pipeline, pin older
+  versions of both routers and score differently; they report clean pass 0.80 (D3-A) and 0.78 (D3-B) for
+  FreeRouting 2.1.0 and 0.74 and 0.20 for KiCadRoutingTools. The figures above are this repository's
+  preparation and are comparable with each other, not with the paper's.
 
 ### What it has
 
