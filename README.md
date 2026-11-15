@@ -37,8 +37,8 @@ and KiCad's design rule check reports no error that the unrouted board did not h
 | Set | Boards | Nets per board | Clean pass | Connections made | Time per board |
 |---|---|---|---|---|---|
 | D3-A (small) | 99 | 2 to 13 | 99 of 99 | 1,301 of 1,301 | 0.5 s |
-| D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.0 s |
-| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 10.9 s |
+| D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.1 s |
+| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 11.2 s |
 
 Run on 15 November 2026 through the KiCad bridge with its defaults, on an idle Apple M5 Max laptop; the time
 is the whole run, including loading and saving the board in KiCad. A single attempt uses one core, so the
@@ -53,13 +53,13 @@ board's project file. Times are each tool's whole run.
 
 | Set | Router | Clean pass | Clean pass, track width forgiven | Connections made | Time per board |
 |---|---|---|---|---|---|
-| D3-A (99) | pcb-routing | 99 | 99 | 100% | 0.47 s |
+| D3-A (99) | pcb-routing | 99 | 99 | 100% | 0.50 s |
 | | KiCadRoutingTools | 94 | 95 | 100% | 0.69 s |
 | | FreeRouting | 46 | 92 | 99.5% | 2.8 s |
-| D3-B (10) | pcb-routing | 10 | 10 | 100% | 2.0 s |
+| D3-B (10) | pcb-routing | 10 | 10 | 100% | 2.1 s |
 | | KiCadRoutingTools | 8 | 8 | 100% | 2.0 s |
 | | FreeRouting | 4 | 8 | 99.3% | 3.7 s |
-| D3-C (10) | pcb-routing | 10 | 10 | 100% | 10.9 s |
+| D3-C (10) | pcb-routing | 10 | 10 | 100% | 11.2 s |
 | | KiCadRoutingTools | 6 | 6 | 99.5% | 8.2 s |
 | | FreeRouting | 0 | 7 | 96.5% | 12.4 s |
 
@@ -70,9 +70,6 @@ How to read it:
   which KiCad reports as an error. The fourth column counts a board as clean when those are its only errors.
   With FreeRouting's `automatic_neckdown` turned off it leaves more connections open and does worse in both
   columns (69, 2 and 1 clean), so the table shows it as shipped.
-- **Vias.** On the boards both routers made clean, pcb-routing used 59 vias where KiCadRoutingTools used 263
-  (D3-A, 94 boards), 26 against 137 (D3-B, 8 boards) and 141 against 421 (D3-C, 6 boards), for 0.6 to 4% less
-  track.
 - **Speed on large boards.** KiCadRoutingTools is the faster router there: on the six D3-C boards both made
   clean it took 20 s in all where pcb-routing took 66 s.
 - **Front-ends.** KiCadRoutingTools' `autoroute.py` front-end, run with no arguments, routed every board with
@@ -81,6 +78,25 @@ How to read it:
   versions of both routers and score differently; they report clean pass 0.80 (D3-A) and 0.78 (D3-B) for
   FreeRouting 2.1.0 and 0.74 and 0.20 for KiCadRoutingTools. The figures above are this repository's
   preparation and are comparable with each other, not with the paper's.
+
+### What the routes look like
+
+Passing the rule check says nothing of how a route reads to a designer. These boards are real designs with
+their tracks removed, so the original routing is there to compare with. Measured on the 111 boards that all
+three routers connected completely, over the 1,105 nets (2,723 connections) that the designer routed with
+tracks and not with a copper pour:
+
+| | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
+|---|---|---|---|---|---|---|
+| The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
+| pcb-routing | 0.89 | 1.11 | 10.3 | 1.6 | 13 | 39 |
+| KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
+| FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
+
+Detour is track length over the shortest tree through a net's pad centres. A short segment is one shorter
+than twice its width. pcb-routing has the least track, the fewest vias and the fewest corners;
+KiCadRoutingTools has fewer sharp turns. Not measured: how buses are kept together, how tracks leave pads,
+and anything that needs to know what the circuit does.
 
 ### What it has
 
@@ -201,7 +217,10 @@ All lengths are in mm. A misspelt field is an error, not ignored.
    more of the net, or as much for less.
 7. **Pairs** (`src/engine/pairs.rs`). A pair negotiates as one wide track; once the nets have settled it is
    split into two legs a fixed pitch apart, each joined to its pads by a short stub.
-8. **Attempts** (`src/router.rs`). `variants` runs differently ordered attempts side by side and keeps the
+8. **Ends** (`src/engine/ends.rs`). A pad seldom stands on a cell centre. The last corner of a track slides
+   along the stretch before it so that the track ends on the pad's own point and keeps its directions; what
+   moves is tested off the grid against all other copper, and a short stub is laid where it may not move.
+9. **Attempts** (`src/router.rs`). `variants` runs differently ordered attempts side by side and keeps the
    best: complete before incomplete, then least missing, then the lowest sum of weighted lengths plus vias.
 
 `docs/design-notes.md` records what each of these bought when it was added, and what was tried and dropped.
