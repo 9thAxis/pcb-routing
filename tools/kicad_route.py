@@ -52,14 +52,29 @@ def pad_polygon(pad, layer):
 
 
 def mask_opening(pad, layer):
-    """How far the solder mask opening of a pad reaches beyond its copper on a copper layer, in mm (0 if covered)."""
+    """How far the solder mask opening of a pad reaches beyond its outline on an outer copper layer, in mm; a
+    large negative number where the mask covers it there (or on an inner layer)."""
     mask = pcbnew.F_Mask if layer == pcbnew.F_Cu else pcbnew.B_Mask if layer == pcbnew.B_Cu else None
     if mask is None or not pad.IsOnLayer(mask):
-        return 0.0
+        return -10.0
     try:
         return max(MM(pad.GetSolderMaskExpansion(layer)), 0.0)
     except TypeError:
         return max(MM(pad.GetSolderMaskExpansion()), 0.0)
+
+
+def local_clearance(pad):
+    """A pad's own clearance in mm, where it or its footprint overrides the net class; else None."""
+    for owner in (pad, pad.GetParentFootprint()):
+        try:
+            value = owner.GetLocalClearance()
+        except Exception:
+            value = None
+        if isinstance(value, tuple):
+            value = value[0] if value else None
+        if value:
+            return MM(value)
+    return None
 
 
 def drawing_polygon(item, layer):
@@ -101,32 +116,38 @@ def build_problem(board, args):
     copper, holes = [], []
     # the smallest clearance any net keeps from other copper, with the slack: what every track keeps from a pad anyway
     classes = {pad.GetNetname(): pad.GetNet().GetNetClassSlow() for pad in board.GetPads() if pad.GetNetCode() > 0}
+    class_clear = {n: max(MM(c.GetClearance()), min_clear) for n, c in classes.items()}
     least_clear = min((max(MM(c.GetClearance()), min_clear) for c in classes.values()), default=min_clear) + slack
 
-    def add_hole(at, drill, net):
+    def add_hole(at, drill, net, local=None):
         holes.append(dict(xy=xy(at), net=net or None))
-        # copper keeps the hole clearance from the edge of a drilled hole: the hole stands as a disc of no net
-        # (of its own net when plated), grown by what the hole clearance asks beyond the copper clearance
-        grow = max(hole_clear - min_clear, 0.0)
+        # copper keeps the hole clearance (or the pad's own) from the edge of a drilled hole: the hole stands
+        # as a disc, grown by what that asks beyond the smallest clearance every track keeps anyway
+        grow = max(max(hole_clear, local or 0.0) + slack - least_clear, 0.0)
         copper.append(dict(t="circle", c=xy(at), r=round(drill / 2 + grow, 6), net=net or None, layers=all_names))
 
     for pad in board.GetPads():
         net = pad.GetNetname() or None
         on = [l for l in enabled if pad.IsOnLayer(l)]
         smd = len(on) == 1
-        for l in on:
-            # Copper of another net may not lie in the pad's solder mask opening (it would be bare beside the
-            # pad): where the opening is wider than the clearance, the pad stands as large as its opening.
-            grow = mask_opening(pad, l) - least_clear + 0.01
-            shape = pad_polygon(pad, l)
-            if grow > 0:
+        # What a pad asks of other nets' copper beyond the smallest clearance every track keeps anyway: its own
+        # clearance where it has one, and its solder mask opening (copper of another net there would be bare).
+        local = local_clearance(pad)
+        own = (local + slack - least_clear) if local is not None else 0.0
+        for l in enabled:
+            grow = max(own if l in on else -1.0, mask_opening(pad, l) - least_clear + 0.01)
+            if l not in on and grow <= -1.0:
+                continue  # no copper and no opening on this layer
+            if l in on and grow <= 0:
+                shape = pad_polygon(pad, l)
+            else:
                 shape = pcbnew.SHAPE_POLY_SET()
-                pad.TransformShapeToPolygon(shape, l, pcbnew.FromMM(grow), pcbnew.FromMM(0.005), pcbnew.ERROR_OUTSIDE)
+                pad.TransformShapeToPolygon(shape, l if l in on else on[0], pcbnew.FromMM(max(grow, 0.0)), pcbnew.FromMM(0.005), pcbnew.ERROR_OUTSIDE)
             for rings in rings_of(shape):
-                copper.append(dict(t="poly", rings=rings, net=net, layers=[name(l)], pad=smd))
+                copper.append(dict(t="poly", rings=rings, net=net, layers=[name(l)], pad=smd and l in on))
         drill = pad.GetDrillSize()
         if drill.x > 0:
-            add_hole(pad.GetPosition(), MM(max(drill.x, drill.y)), net)
+            add_hole(pad.GetPosition(), MM(max(drill.x, drill.y)), net, local)
     for track in board.GetTracks():
         net = track.GetNetname() or None
         if track.Type() == pcbnew.PCB_VIA_T:
@@ -217,8 +238,9 @@ def build_problem(board, args):
         if len(terminals) < len(groups):
             print(f"skipped {net_name}: a pad of it is on no routing layer", file=sys.stderr)
             continue
+        more = {other: round(c + slack, 6) for other, c in class_clear.items() if c > clear and other != net_name}
         nets.append(dict(key=net_name, net=net_name, width=round(width, 6), via=[round(v, 6) for v in via], layers=layers,
-                         clearance=dict(default=round(clear + slack, 6)), terminals=terminals, via_penalty_mm=args.via_penalty))
+                         clearance=dict(default=round(clear + slack, 6), nets=more), terminals=terminals, via_penalty_mm=args.via_penalty))
 
     via_drill = max((n["via"][1] for n in nets), default=0.3)
     rules = dict(hole_centre_mm=round(via_drill + MM(settings.m_HoleToHoleMin) + slack, 6), pad_drill_margin_mm=0.0,

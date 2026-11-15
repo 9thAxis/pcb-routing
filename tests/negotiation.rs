@@ -119,10 +119,27 @@ fn too_many_nets_for_a_gap_is_reported_by_name() {
         vec![net("a", [2.0, 2.8], [8.0, 2.8], &["F"]), net("b", [2.0, 3.2], [8.0, 3.2], &["F"])],
     );
     p.options.max_iterations = 25;
+    p.options.drop_conflicts = false;
     let s = route(&p).unwrap();
     assert_eq!(s.status, Status::Conflicts);
     assert!(s.conflicts.iter().any(|c| c.key == "a" && c.with == vec!["b".to_string()]));
     assert!(s.conflicts.iter().any(|c| c.key == "b" && c.with == vec!["a".to_string()]));
+}
+
+#[test]
+fn a_net_with_no_room_is_left_out_and_the_rest_is_clean() {
+    // the same gap for one: by default the result breaks no rule, one net is laid and the other is listed
+    let mut p = problem(
+        &["F"],
+        vec![wall(5.0, -1.0, 2.6, &["F"]), wall(5.0, 3.4, 7.0, &["F"])],
+        vec![net("a", [2.0, 2.8], [8.0, 2.8], &["F"]), net("b", [2.0, 3.2], [8.0, 3.2], &["F"])],
+    );
+    p.options.max_iterations = 25;
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Unroutable);
+    assert!(s.conflicts.is_empty());
+    assert_eq!(s.unrouted.len(), 1, "{:?}", s.unrouted);
+    assert_eq!(s.nets.iter().filter(|n| !n.tracks.is_empty()).count(), 1);
 }
 
 #[test]

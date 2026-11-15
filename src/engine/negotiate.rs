@@ -125,7 +125,32 @@ impl Engine<'_> {
             Err(e) => return fail(e, rounds),
         };
         if !settled {
-            return self.report(Status::Conflicts, rounds, variant, String::new());
+            if !o.drop_conflicts {
+                return self.report(Status::Conflicts, rounds, variant, String::new());
+            }
+            // The rounds ended with nets still too close. So that what is returned can be used, the net that
+            // stands in the most claimed ground is taken out, and so on until none is in conflict; each is
+            // then tried once more with the others fixed, and those that still do not fit are listed.
+            let mut out: Vec<usize> = Vec::new();
+            loop {
+                let worst = order
+                    .iter()
+                    .map(|&n| {
+                        let t = self.trouble(n);
+                        (t.track.len() + t.via.len() + t.own.len(), n)
+                    })
+                    .filter(|t| t.0 > 0)
+                    .max_by_key(|t| (t.0, std::cmp::Reverse(t.1)));
+                let Some((_, n)) = worst else { break };
+                self.place(n, NetState::default());
+                out.push(n);
+            }
+            for n in out {
+                match self.route_net(n, 0.0, true) {
+                    Ok(state) => self.place(n, state),
+                    Err(e) => self.unlaid.push(format!("no room left by the other nets: {e}")),
+                }
+            }
         }
         for _ in 0..o.refine_passes {
             let mut better = false;

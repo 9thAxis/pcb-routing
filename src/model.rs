@@ -301,6 +301,10 @@ pub struct Options {
     pub stall_after: usize,
     /// Such rounds before the attempt is given up (0: never).
     pub patience: usize,
+    /// When the rounds end with nets still too close to each other: take those nets out (and list them in
+    /// [`Solution::unrouted`]) so that what is returned breaks no rule (true), or return everything as it stands
+    /// with the places of conflict (false).
+    pub drop_conflicts: bool,
     /// Threads for the attempts and the masks (0: as many as the machine has).
     pub threads: usize,
     /// The largest grid accepted, in (layer, cell) states. A run needs roughly 400 bytes per state for the first
@@ -327,6 +331,7 @@ impl Default for Options {
             exact_after: 2,
             stall_after: 3,
             patience: 20,
+            drop_conflicts: true,
             threads: 0,
             max_states: 10_000_000,
         }
@@ -339,7 +344,8 @@ impl Default for Options {
 pub enum Status {
     /// Every net is laid and no two are too close.
     Routed,
-    /// Every net is laid but some are still too close to each other; see [`Solution::conflicts`].
+    /// Every net is laid but some are still too close to each other; see [`Solution::conflicts`]. Only with
+    /// [`Options::drop_conflicts`] off.
     Conflicts,
     /// Some terminal cannot be reached; see [`Solution::unrouted`]. The rest is laid.
     Unroutable,
