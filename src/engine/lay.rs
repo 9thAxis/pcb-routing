@@ -43,10 +43,7 @@ impl Engine<'_> {
         }
         self.mark_bus(n, &mut w);
         let result = self.route_alone(n, present, hard, &mut w);
-        for idx in w.ground.beside_set.drain(..) {
-            w.ground.beside[idx as usize] = 0;
-        }
-        w.ground.apart = 0.0;
+        w.ground.clear_bus();
         for &m in &mine {
             for &idx in self.laid.nets[m].claims_t.get(self.plan.tclass[n]).map_or(&[][..], |v| &v[..]) {
                 w.ground.own_t[idx as usize] = 0;
@@ -60,13 +57,15 @@ impl Engine<'_> {
     }
 
     /// For a net of a bus: mark in `w` the ground beside the laid nets of its bus, within twice the least
-    /// distance between their tracks' middles, and set what the net pays more away from it.
+    /// distance between their tracks' middles and on the same layer, and set what the net pays more away from
+    /// it. Nothing for a net of no bus, or with none of its bus laid.
     fn mark_bus(&self, n: usize, w: &mut Worker) {
         let (p, plan) = (self.p, self.plan);
         let pull = p.options.bus_pull;
         if pull <= 0.0 || plan.mates[n].iter().all(|&m| self.laid.nets[m].conns.is_empty()) {
             return;
         }
+        let _t = self.shared.timed(9);
         let (grid, space, rules) = (&plan.grid, plan.space, &p.rules);
         let ground = &mut w.ground;
         ground.apart = pull as f32;
@@ -76,11 +75,14 @@ impl Engine<'_> {
             let gap = if p.nets[m].quiet != p.nets[n].quiet { quiet } else { rules.new_clearance_mm };
             let reach = 2.0 * (p.nets[n].width / 2.0 + gap + p.nets[m].width / 2.0);
             let disc = grid.disc(reach);
-            // (discs this wide overlap well when drawn round every few cells of a path)
-            let stride = ((reach / grid.step) as usize / 3).max(1);
+            // Discs this wide, drawn round every few cells of a path, leave a band nine tenths as wide between
+            // them at the least. The ends of every stretch on a layer get theirs whatever its length.
+            let stride = ((reach / grid.step * 2.0 / 3.0) as usize).max(1);
             for conn in &self.laid.nets[m].conns {
+                let layer = |k: usize| space.split(conn[k] as usize).0;
                 for (k, &s) in conn.iter().enumerate() {
-                    if k % stride != 0 && k + 1 != conn.len() {
+                    let end = k == 0 || k + 1 == conn.len() || layer(k - 1) != layer(k) || layer(k + 1) != layer(k);
+                    if k % stride != 0 && !end {
                         continue;
                     }
                     let (layer, cell) = space.split(s as usize);
@@ -96,7 +98,31 @@ impl Engine<'_> {
         }
     }
 
-    /// The same, with the search memory `w` in which the net's own claims are marked.
+    /// For a net of a bus: what of the cost of its path as it lies is for steps away from the laid nets of its
+    /// bus as they stand now (see `NetState::apart`, which says the same of them as they stood). 0 for a net
+    /// of no bus.
+    pub(super) fn apart_now(&self, n: usize) -> f64 {
+        if self.p.options.bus_pull <= 0.0 || self.plan.mates[n].is_empty() {
+            return 0.0;
+        }
+        let space = self.plan.space;
+        let lc = &self.plan.layer_cost[n];
+        let mut w = Worker::take(self.shared, space.states(), space.hw);
+        self.mark_bus(n, &mut w);
+        let mut apart = 0.0;
+        for pair in self.laid.nets[n].conns.iter().flat_map(|conn| conn.windows(2)) {
+            let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
+            if la == lb && w.ground.apart_at(pair[1] as usize) > 1.0 {
+                let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
+                apart += lc[lb] * if ja != jb && ia != ib { std::f64::consts::SQRT_2 } else { 1.0 };
+            }
+        }
+        w.ground.clear_bus();
+        w.give_back(self.shared);
+        apart
+    }
+
+    /// Lay net `n` (see `lay`), with the search memory `w` in which the net's own claims and its bus are marked.
     fn route_alone(&self, n: usize, present: f64, hard: bool, w: &mut Worker) -> NetState {
         let p = self.p;
         let net = &p.nets[n];
@@ -224,7 +250,7 @@ impl Engine<'_> {
     }
 
     /// Add what the connection `path` of net `n` costs, free of the other nets (its steps by layer, its
-    /// corners, its layer changes), and its length, to `state`. Returns the cells where it needs a new via.
+    /// corners, its layer changes), its length, and what of the cost is away from its bus, to `state`. Returns the cells where it needs a new via.
     fn account(&self, n: usize, path: &[u32], own_hole: f32, w: &Worker, state: &mut NetState) -> Vec<u32> {
         let (p, net, space) = (self.p, &self.p.nets[n], self.plan.space);
         let lc = &self.plan.layer_cost[n];
@@ -248,7 +274,10 @@ impl Engine<'_> {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
                 let diag = ja != jb && ia != ib;
                 let len = if diag { std::f64::consts::SQRT_2 } else { 1.0 };
-                state.cost += lc[lb] * len * w.ground.apart_at(pair[1] as usize) as f64;
+                state.cost += lc[lb] * len;
+                if w.ground.apart_at(pair[1] as usize) > 1.0 {
+                    state.apart += lc[lb] * len;
+                }
                 state.steps += len;
             }
         }

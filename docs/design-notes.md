@@ -53,6 +53,13 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   0.2, 0.3, 0.4, 0.6 gave 64.2, 64.4, 65.0, 64.4, 64.7 %, with corners per connection rising from 1.58 to
   1.70. Pairs of neighbours that cross: 30 % without, 34, 37, 32, 30, 32 % with, in no order: a few more,
   within what one run differs from the next. Nothing orders the nets within the bundle.
+  The price: a net away from its bus looks ahead with 1/(1 + pull) of its real cost, so its first pass
+  covers more ground (two bus nets far apart on an open board: 38,000 to 81,000 states at 0.2), and the
+  negotiation takes a round more now and then (18 of 251 random problems at 0.2). A review found that the
+  closing passes compared a new path, priced against the bus as it stood, with the old path's price from
+  when it was laid: the net of a bus laid first, with nothing to be beside yet, was never drawn in. Both
+  are now priced against the bus as it stands (65 % beside, 37 % crossing at 0.2: the crossings are a real
+  cost of the pull, not chance).
 * Open: a via between a decoupling capacitor and its pin twice as often (14 % against 6 %); short
   last stretches before a pad.
 

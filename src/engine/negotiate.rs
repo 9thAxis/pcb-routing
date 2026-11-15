@@ -146,7 +146,8 @@ impl Engine<'_> {
     }
 
     /// Closing passes: each net is laid once more with all the others fixed, and the new path is kept only if
-    /// it joins more of the net, or as much for less, and stands in nobody's ground. Repeated until nothing
+    /// it joins more of the net, or as much for less (what a net of a bus pays away from its bus counted in),
+    /// and stands in nobody's ground. Repeated until nothing
     /// improves; a net that found no room before is so tried again once the others have moved.
     fn refine(&mut self, order: &[usize]) {
         for _ in 0..self.p.options.refine_passes {
@@ -155,7 +156,10 @@ impl Engine<'_> {
                 let state = self.lay_fixed(n);
                 let now = &self.laid.nets[n];
                 let (missing, was_missing) = (state.failed.len(), now.failed.len());
-                if missing < was_missing || (missing == was_missing && state.cost < now.cost - 1e-6) {
+                // (for a net of a bus, both paths as they stand to its bus now: the others have moved since)
+                let pull = self.p.options.bus_pull;
+                let (cost, was_cost) = (state.cost + pull * state.apart, now.cost + pull * self.apart_now(n));
+                if missing < was_missing || (missing == was_missing && cost < was_cost - 1e-6) {
                     let old = now.clone();
                     self.place(n, state);
                     if self.trouble(n).any() {

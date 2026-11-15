@@ -113,7 +113,7 @@ class Structure(Shape):
         self.assertEqual(problem["layers"], ["F.Cu", "B.Cu"])
         self.assertEqual(problem["window"], [-1.0, -1.0, 21.0, 11.0])
         self.assertEqual(problem["step"], 0.05)
-        self.assertEqual(problem["options"], dict(variants=2, max_states=1000))
+        self.assertEqual(problem["options"], dict(variants=2, max_states=1000, bus_pull=0.2))
         self.assertNotIn("pairs", problem)
 
     def test_only_unjoined_nets_become_entries(self):
@@ -297,6 +297,33 @@ class Buses(unittest.TestCase):
         # on U2 the three are spread among other pads: no two of them are neighbours there
         spread = self.row("U2", ["a", "x", "b", "y", "c"], 20)
         self.assertEqual(k.buses(self.row("U1", ["a", "b", "c"], 0) + spread), {})
+
+    def test_pads_of_no_net_between_them_keep_nets_apart_too(self):
+        spread = self.row("U2", ["a", None, "b", None, "c"], 20)
+        self.assertEqual(k.buses(self.row("U1", ["a", "b", "c"], 0) + spread), {})
+
+    def test_a_net_that_is_not_to_be_routed_is_of_no_bus(self):
+        pads = self.row("U1", ["a", "b", "c", "d"], 0) + self.row("U2", ["a", "b", "c", "d"], 20)
+        self.assertEqual(set(k.buses(pads, {"a", "b", "c"})), {"a", "b", "c"})
+        self.assertEqual(k.buses(pads, {"a", "b"}), {})  # two are not a bus, whatever lies beside them
+        self.assertEqual(k.buses(pads, {"a", "c", "d"}), {})  # a is no neighbour of c
+
+    def test_the_buses_do_not_depend_on_the_order_of_the_pads(self):
+        pads = self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c"], 20)
+        self.assertEqual(k.buses(pads), k.buses(pads[::-1]))
+
+    def test_the_bridge_and_the_quality_measure_agree_on_what_a_bus_is(self):
+        import sys
+        sys.path.insert(0, str(support.TOOLS / "quality"))
+        try:
+            import measures
+        except ImportError:
+            self.skipTest("the quality measures need shapely")
+        pads = self.row("U1", ["a", None, "b", "c", "d"], 0) + self.row("U2", ["a", "b", "c", "d"], 20)
+        near = measures.neighbour_nets(dict(pads=[dict(ref=p.part, net=p.net, at=p.at) for p in pads]))
+        on_both = {pair for pair, where in near.items() if len(where) == 2}
+        self.assertEqual(on_both, {("b", "c"), ("c", "d")})
+        self.assertEqual(set(k.buses(pads)), {net for pair in on_both for net in pair})
 
     def test_two_buses_between_other_parts_stay_two(self):
         pads = (self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c"], 20)

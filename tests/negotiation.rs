@@ -1,6 +1,6 @@
 //! Small cases with known answers.
 
-use pcb_routing::{route, Problem, Solution, Status};
+use pcb_routing::{route, Problem, Router, Solution, Status};
 use serde_json::{json, Value};
 
 fn net(key: &str, a: [f64; 2], b: [f64; 2], layers: &[&str]) -> Value {
@@ -354,23 +354,40 @@ fn beside(s: &Solution, a: usize, b: usize, reach: f64) -> f64 {
 /// the other for most of its length, at the price of a little more track; not drawn, each keeps its own way.
 #[test]
 fn nets_of_a_bus_run_beside_each_other() {
-    let run = |pull: f64| {
-        let mut a = net("a", [1.0, 1.0], [9.0, 1.0], &["F"]);
-        let mut b = net("b", [1.0, 2.4], [9.0, 3.4], &["F"]);
-        a["bus"] = json!("d");
-        b["bus"] = json!("d");
-        let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": [a, b]});
+    // (in either order: the net laid first is drawn to the other in the closing passes)
+    for b_first in [false, true] {
+        let run = |pull: f64| {
+            let mut a = net("a", [1.0, 1.0], [9.0, 1.0], &["F"]);
+            let mut b = net("b", [1.0, 2.4], [9.0, 3.4], &["F"]);
+            a["bus"] = json!("d");
+            b["bus"] = json!("d");
+            let nets = if b_first { vec![b, a] } else { vec![a, b] };
+            let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": nets});
+            v["options"] = json!({"bus_pull": pull});
+            let p: Problem = serde_json::from_value(v).unwrap();
+            let s = Router::new(&p).verify_search(true).run().unwrap();
+            assert_eq!(s.status, Status::Routed, "{}", s.message);
+            assert_eq!(s.stats.mismatches, 0);
+            (beside(&s, 1, 0, 0.7), s.nets.iter().map(|n| n.length_mm).sum::<f64>())
+        };
+        let (apart, shortest) = run(0.0);
+        let (together, longer) = run(0.5);
+        assert!(apart < 1.0, "not drawn together, {apart:.2} mm runs beside");
+        assert!(together > 4.0, "drawn together (b first: {b_first}), only {together:.2} mm runs beside");
+        assert!(longer > shortest && longer < shortest + 2.5, "{shortest:.2} mm apart, {longer:.2} mm together");
+    }
+}
+
+#[test]
+fn a_pull_beyond_reason_is_refused() {
+    for pull in [-0.1, 11.0, f64::NAN] {
+        let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": [net("a", [1.0, 1.0], [9.0, 1.0], &["F"])]});
         v["options"] = json!({"bus_pull": pull});
-        let p: Problem = serde_json::from_value(v).unwrap();
-        let s = route(&p).unwrap();
-        assert_eq!(s.status, Status::Routed, "{}", s.message);
-        (beside(&s, 1, 0, 0.7), s.nets.iter().map(|n| n.length_mm).sum::<f64>())
-    };
-    let (apart, shortest) = run(0.0);
-    let (together, longer) = run(0.5);
-    assert!(apart < 1.0, "not drawn together, {apart:.2} mm of b runs beside a");
-    assert!(together > 4.0, "drawn together, only {together:.2} mm of b runs beside a");
-    assert!(longer > shortest && longer < shortest + 2.5, "{shortest:.2} mm apart, {longer:.2} mm together");
+        assert!(
+            serde_json::from_value::<Problem>(v).map_or(true, |p| route(&p).is_err()),
+            "a pull of {pull} was accepted"
+        );
+    }
 }
 
 /// A net of no bus, and nets of different buses, are not drawn to anything: the result is the same whatever

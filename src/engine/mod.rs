@@ -4,7 +4,7 @@
 //! Where two nets come closer than the rules allow, the ground is made dearer still (a factor that grows with
 //! each round, plus a standing cost that remembers where trouble was) and the nets involved are laid again.
 //! The rounds end when no two nets are too close. Then each net is laid once more with all the others fixed,
-//! which can only shorten it.
+//! and the new path kept if it is better: shorter, or nearer the other nets of its bus.
 //!
 //! How "too close" is measured: each laid net claims, for every size of track and via another net may have,
 //! the cells where the centre of such a track or via would be too close to it. A net is in conflict where the
@@ -74,6 +74,9 @@ struct NetState {
     cost: f64,
     /// Track length in grid steps.
     steps: f64,
+    /// For a net of a bus: what of `cost` is for steps away from the laid nets of its bus, as they stood when
+    /// this was laid (see `Options::bus_pull`; `cost` itself does not hold the pull).
+    apart: f64,
     /// Terminals that could not be joined, each with the reason.
     failed: Vec<String>,
     /// Copper the entry holds besides its paths, as real shapes: (layer, from, to, half width). The leg of a

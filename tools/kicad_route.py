@@ -347,25 +347,26 @@ def _grown(rings, grow, net, layers):
     return out
 
 
-def buses(pads):
-    """Which nets run as buses: net name -> name of its bus.
+def buses(pads, nets=None):
+    """Which nets run as buses: net name -> name of its bus (among `nets`, if given).
 
     Two nets are neighbours on a part if they have pads there no further apart than 1.3 times the distance
-    from one of them to its nearest pad. A bus is three or more nets joined by being neighbours on the same two
-    parts; a net that is in two such groups joins them into one bus.
+    from one of them to its nearest pad, whatever that pad is of. A bus is three or more nets joined by being
+    neighbours on the same two parts; a net that is in two such groups joins them into one bus.
     """
     parts = {}
     for pad in pads:
-        if pad.part and pad.net:
+        if pad.part:
             parts.setdefault(pad.part, []).append(pad)
+    wanted = lambda net: net is not None and (nets is None or net in nets)
     beside = {}  # (net, net) -> the parts they are neighbours on
     for part, own in sorted(parts.items()):
         for a in own:
-            others = sorted((math.dist(a.at, b.at), b.net) for b in own if b is not a and math.dist(a.at, b.at) > 1e-6)
+            others = sorted(((math.dist(a.at, b.at), b.net or "") for b in own if b is not a and math.dist(a.at, b.at) > 1e-6))
             for distance, net in others:
                 if distance > 1.3 * others[0][0]:
                     break
-                if net != a.net:
+                if wanted(a.net) and wanted(net or None) and net != a.net:
                     beside.setdefault(tuple(sorted((a.net, net))), set()).add(part)
     links = {}  # (part, part) -> the pairs of nets that are neighbours on both
     for pair, where in sorted(beside.items()):
@@ -434,9 +435,10 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
     for pad in picture.pads:
         if pad.net and pad.smallest is not None:
             smallest[pad.net] = min(pad.smallest, smallest.get(pad.net, pad.smallest))
-    bus = buses(picture.pads) if rules.settings.bus_pull > 0 else {}
+    unjoined = picture.unjoined(only)
+    bus = buses(picture.pads, set(unjoined)) if rules.settings.bus_pull > 0 else {}
     nets = []
-    for name in picture.unjoined(only):
+    for name in unjoined:
         # one terminal per group of pads that existing copper already joins
         terminals = []
         for group in picture.groups[name]:
@@ -470,7 +472,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
     if narrow:
         problem_rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
     return dict(window=window, step=rules.settings.step, layers=layers, copper=copper, holes=holes, regions=regions,
-                rules=problem_rules, nets=nets, options=dict(options or {}))
+                rules=problem_rules, nets=nets, options=dict(dict(bus_pull=rules.settings.bus_pull), **(options or {})))
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -909,8 +911,10 @@ def main(argv=None):
         step = None if args.step == "auto" else float(args.step)
     except ValueError:
         parser.error("--step takes a number of mm, or auto")
+    if not 0 <= args.bus_pull <= 10:
+        parser.error("--bus-pull takes a number from 0 to 10")
     settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull)
-    options = dict(variants=args.variants, max_states=args.max_states, bus_pull=args.bus_pull)
+    options = dict(variants=args.variants, max_states=args.max_states)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
 
     board = pcbnew.LoadBoard(args.board)

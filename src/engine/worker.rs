@@ -78,8 +78,8 @@ pub(super) struct Swept {
     pub(super) d: Cell<f32>,
     /// The mark of the search that last touched the state, and whether its cost is final.
     pub(super) seen: Cell<u32>,
-    /// What one step into this state costs the net being laid, as a factor on its length: 1 in free ground,
-    /// more where others claim it or conflicts have been, TAKEN where another net stands and may not be
+    /// What one step into this state costs the net being laid, as a factor on its length: 1 in free ground
+    /// (more by `Ground::apart` away from the net's bus), more where others claim it or conflicts have been, TAKEN where another net stands and may not be
     /// crossed (with the others fixed), SHUT_COST where fixed copper closes it. Kept here so that it comes
     /// with the same memory fetch as the first pass's cost.
     pub(super) mult: Cell<f32>,
@@ -162,6 +162,14 @@ impl Ground {
         } else {
             1.0
         }
+    }
+
+    /// Take the marks of a bus away again.
+    pub(super) fn clear_bus(&mut self) {
+        for idx in self.beside_set.drain(..) {
+            self.beside[idx as usize] = 0;
+        }
+        self.apart = 0.0;
     }
 
     /// Note a hole of the net being laid at `cell`: a layer change there is free, and no other via may be

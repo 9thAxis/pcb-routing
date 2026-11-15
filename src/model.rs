@@ -271,8 +271,8 @@ fn ten() -> f64 {
 
 /// How a run is conducted. Every field has a default.
 ///
-/// `variants`, `threads`, `max_states`, `max_iterations`, `refine_passes`, `negotiate`, `bend_mm` and
-/// `drop_conflicts` are meant to be set. The rest
+/// `variants`, `threads`, `max_states`, `max_iterations`, `refine_passes`, `negotiate`, `bend_mm`,
+/// `bus_pull` and `drop_conflicts` are meant to be set. The rest
 /// tune the search and the negotiation; they are not a stable part of the interface, and a later version may
 /// rename, remove or reinterpret them. Leave them at their defaults unless you are experimenting.
 #[derive(Serialize, Deserialize, Clone, Debug)]

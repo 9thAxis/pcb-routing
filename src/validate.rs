@@ -93,6 +93,12 @@ impl Problem {
         not_negative("options.history_step".into(), o.history_step)?;
         not_negative("options.sweep_margin".into(), o.sweep_margin)?;
         not_negative("options.bus_pull".into(), o.bus_pull)?;
+        if o.bus_pull > 10.0 {
+            return Err(invalid(
+                "options.bus_pull",
+                format!("is {}: at most 10 (a net ten times as long to stay beside its bus)", o.bus_pull),
+            ));
+        }
         if !(o.present_growth.is_finite() && o.present_growth >= 1.0) {
             return Err(invalid("options.present_growth", format!("must be 1 or more, is {}", o.present_growth)));
         }

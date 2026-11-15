@@ -89,7 +89,7 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.89 | 1.11 | 10.1 | 1.6 | 12 | 37 |
+| pcb-routing | 0.89 | 1.11 | 10.4 | 1.6 | 12 | 37 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
@@ -104,7 +104,7 @@ pitches of its neighbour on the same layer.
 | | Alongside its neighbour | Same number of vias | The two cross | Difference in length |
 |---|---|---|---|---|
 | The designer | 68% | 80% | 26% | 23% |
-| pcb-routing | 64% | 80% | 36% | 22% |
+| pcb-routing | 65% | 78% | 37% | 22% |
 | pcb-routing, buses not drawn together (`--bus-pull 0`) | 58% | 80% | 30% | 22% |
 | KiCadRoutingTools | 71% | 52% | 35% | 23% |
 | FreeRouting | 64% | 77% | 40% | 23% |
@@ -135,7 +135,6 @@ here.
   way, "no vias", "lay last without disturbing the others".
 * Deterministic: the same problem gives the same answer, whatever the thread count.
 * A self-check of the search (`--verify`), a mask export for comparing with another tool, a trace per round.
-
 * Buses kept together: nets marked as one bus (`bus` on a net; the KiCad bridge marks nets that leave one
   part and arrive at another side by side) are drawn to run beside each other.
 
@@ -210,9 +209,11 @@ Every field is documented on the types in `src/model.rs`. In short:
 * `rules`: hole spacing, clearance between new nets, a larger clearance between `quiet` nets and others,
   whether a via may stand in a land of its own net;
 * `nets`: key, electrical net, width, via, layers, clearance to existing copper, terminals, via penalty, layer
-  costs, `yield` (how readily it gives way), `max_mm` and `weight` (for ranking attempts), `last`, `no_vias`;
+  costs, `yield` (how readily it gives way), `max_mm` and `weight` (for ranking attempts), `last`, `no_vias`, `bus` (the
+  bus it runs with);
 * `pairs`: two nets laid side by side;
-* `options`: rounds, corner cost, number of attempts, threads, the largest grid accepted, whether nets still
+* `options`: rounds, corner cost, number of attempts, threads, the largest grid accepted, how strongly the
+  nets of a bus are drawn together (`bus_pull`), whether nets still
   in conflict at the end are taken out (`drop_conflicts`, the default) or returned as they stand.
 
 All lengths are in mm. A misspelt field is an error, not ignored.
@@ -239,6 +240,8 @@ All lengths are in mm. A misspelt field is an error, not ignored.
    conflict are taken out one by one, laid again with the others fixed, and reported if they still do not fit.
 6. **Closing passes**. Each net is laid once more with all the others fixed; the new path is kept if it joins
    more of the net, or as much for less.
+   **Buses**: a net with a `bus` name pays `options.bus_pull` more per unit length wherever it is not beside
+   a laid net of the same bus, in the rounds and in the closing passes alike, so the nets of a bus gather.
 7. **Pairs** (`src/engine/pairs.rs`). A pair negotiates as one wide track; once the nets have settled it is
    split into two legs a fixed pitch apart, each joined to its pads by a short stub.
 8. **Ends** (`src/engine/ends.rs`). A pad seldom stands on a cell centre. The last corner of a track slides
@@ -271,7 +274,7 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 65 in the engine, 97 in the bridge, 140 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 66 in the engine, 101 in the bridge, 140 in the quality tools |
 
 ## Sources
 

@@ -115,7 +115,7 @@ class TwoTries(WithEngine):
 
     def test_options_reach_the_engine(self):
         self.route(FakeBoard(1), options=dict(variants=3, max_states=5))
-        self.assertEqual(self.runs()[0]["options"], dict(variants=3, max_states=5))
+        self.assertEqual(self.runs()[0]["options"], dict(variants=3, max_states=5, bus_pull=0.2))
 
 
 class Steps(WithEngine):

@@ -35,8 +35,8 @@ First version as a library.
 - Buses: nets given the same `bus` name are drawn to run beside each other. A net of a bus pays
   `options.bus_pull` (0.2) more per unit length wherever it is not beside a laid net of its bus. The KiCad
   bridge names as a bus three or more nets with neighbouring pads on the same two parts (`--bus-pull`, 0 for
-  none). On 241 pairs of bus neighbours on public boards: 58 to 64 % of a net's length beside its neighbour
-  (the designers: 68 %).
+  none). On 241 pairs of bus neighbours on public boards: 58 to 65 % of a net's length beside its neighbour
+  (the designers: 68 %); neighbours that cross, 30 to 37 % (26 %).
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.
