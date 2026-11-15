@@ -34,7 +34,7 @@ What it does not do:
 Exit status: 0 every net joined, 1 some nets left unjoined, 2 the engine failed (what it had laid before that
 is saved all the same).
 """
-import argparse, json, math, os, subprocess, sys, tempfile
+import argparse, collections, itertools, json, math, os, subprocess, sys, tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -86,6 +86,7 @@ class Pad:
     drill: object = None  # the hole's diameter (the longer side of a slot); None: no hole
     clearance: object = None  # its own clearance, where it or its footprint overrides the class
     smallest: object = None  # its smallest dimension on any copper layer
+    part: object = None  # the reference of the part it belongs to
 
 
 @dataclass
@@ -169,6 +170,7 @@ class Settings:
     slack: float = 0.002
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
+    bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
 
 
 def ignored_checks(board_path):
@@ -345,6 +347,48 @@ def _grown(rings, grow, net, layers):
     return out
 
 
+def buses(pads):
+    """Which nets run as buses: net name -> name of its bus.
+
+    Two nets are neighbours on a part if they have pads there no further apart than 1.3 times the distance
+    from one of them to its nearest pad. A bus is three or more nets joined by being neighbours on the same two
+    parts; a net that is in two such groups joins them into one bus.
+    """
+    parts = {}
+    for pad in pads:
+        if pad.part and pad.net:
+            parts.setdefault(pad.part, []).append(pad)
+    beside = {}  # (net, net) -> the parts they are neighbours on
+    for part, own in sorted(parts.items()):
+        for a in own:
+            others = sorted((math.dist(a.at, b.at), b.net) for b in own if b is not a and math.dist(a.at, b.at) > 1e-6)
+            for distance, net in others:
+                if distance > 1.3 * others[0][0]:
+                    break
+                if net != a.net:
+                    beside.setdefault(tuple(sorted((a.net, net))), set()).add(part)
+    links = {}  # (part, part) -> the pairs of nets that are neighbours on both
+    for pair, where in sorted(beside.items()):
+        for two in itertools.combinations(sorted(where), 2):
+            links.setdefault(two, []).append(pair)
+
+    def find(leader, net):
+        while leader.setdefault(net, net) != net:
+            net = leader[net]
+        return net
+
+    bus = {}
+    for two, pairs in sorted(links.items()):
+        group = {}  # nets joined within these two parts
+        for a, b in pairs:
+            group[find(group, a)] = find(group, b)
+        sizes = collections.Counter(find(group, net) for net in group)
+        for a, b in pairs:
+            if sizes[find(group, a)] >= 3:
+                bus[find(bus, a)] = find(bus, b)
+    return {net: "bus " + find(bus, net) for net in bus}
+
+
 def build_problem(picture, rules, only=None, narrow=False, options=None):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
@@ -390,6 +434,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
     for pad in picture.pads:
         if pad.net and pad.smallest is not None:
             smallest[pad.net] = min(pad.smallest, smallest.get(pad.net, pad.smallest))
+    bus = buses(picture.pads) if rules.settings.bus_pull > 0 else {}
     nets = []
     for name in picture.unjoined(only):
         # one terminal per group of pads that existing copper already joins
@@ -406,6 +451,8 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
         nets.append(dict(key=name, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=layers,
                          clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
                          terminals=terminals, via_penalty_mm=rules.settings.via_penalty))
+        if name in bus:
+            nets[-1]["bus"] = bus[name]
 
     # The engine keeps one distance between hole centres: enough for two holes of the widest new via's drill. A
     # wider hole asks more of a new via, and its own net's vias are not held off by its copper: the ground
@@ -729,7 +776,8 @@ def read_board(board, ignored=frozenset(), nets=None):
                                 layers=[name(l) for l in on], shapes=shapes, openings=openings,
                                 hole_at=xy(pad.GetPosition()) if drilled else None,
                                 drill=MM(max(drill.x, drill.y)) if drilled else None,
-                                clearance=local_clearance(pad), smallest=pad_smallest(pad, on)))
+                                clearance=local_clearance(pad), smallest=pad_smallest(pad, on),
+                                part=pad.GetParentFootprint().GetReference() if pad.GetParentFootprint() else None))
 
     for track in board.GetTracks():
         net = track.GetNetname() or None
@@ -846,6 +894,7 @@ def main(argv=None):
     parser.add_argument("--slack", type=float, default=0.002, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
+    parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
     parser.add_argument("--problem", help="keep the problem file here (of the first run of the engine)")
     parser.add_argument("--solution", help="keep the solution file here (of the first run of the engine)")
@@ -860,8 +909,8 @@ def main(argv=None):
         step = None if args.step == "auto" else float(args.step)
     except ValueError:
         parser.error("--step takes a number of mm, or auto")
-    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers))
-    options = dict(variants=args.variants, max_states=args.max_states)
+    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull)
+    options = dict(variants=args.variants, max_states=args.max_states, bus_pull=args.bus_pull)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
 
     board = pcbnew.LoadBoard(args.board)

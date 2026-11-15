@@ -41,7 +41,12 @@ impl Engine<'_> {
                 w.ground.own_v[idx as usize] += 1;
             }
         }
+        self.mark_bus(n, &mut w);
         let result = self.route_alone(n, present, hard, &mut w);
+        for idx in w.ground.beside_set.drain(..) {
+            w.ground.beside[idx as usize] = 0;
+        }
+        w.ground.apart = 0.0;
         for &m in &mine {
             for &idx in self.laid.nets[m].claims_t.get(self.plan.tclass[n]).map_or(&[][..], |v| &v[..]) {
                 w.ground.own_t[idx as usize] = 0;
@@ -52,6 +57,43 @@ impl Engine<'_> {
         }
         w.give_back(self.shared);
         result
+    }
+
+    /// For a net of a bus: mark in `w` the ground beside the laid nets of its bus, within twice the least
+    /// distance between their tracks' middles, and set what the net pays more away from it.
+    fn mark_bus(&self, n: usize, w: &mut Worker) {
+        let (p, plan) = (self.p, self.plan);
+        let pull = p.options.bus_pull;
+        if pull <= 0.0 || plan.mates[n].iter().all(|&m| self.laid.nets[m].conns.is_empty()) {
+            return;
+        }
+        let (grid, space, rules) = (&plan.grid, plan.space, &p.rules);
+        let ground = &mut w.ground;
+        ground.apart = pull as f32;
+        ground.beside.resize(space.states(), 0);
+        let quiet = if rules.quiet_clearance_mm > 0.0 { rules.quiet_clearance_mm } else { rules.new_clearance_mm };
+        for &m in &plan.mates[n] {
+            let gap = if p.nets[m].quiet != p.nets[n].quiet { quiet } else { rules.new_clearance_mm };
+            let reach = 2.0 * (p.nets[n].width / 2.0 + gap + p.nets[m].width / 2.0);
+            let disc = grid.disc(reach);
+            // (discs this wide overlap well when drawn round every few cells of a path)
+            let stride = ((reach / grid.step) as usize / 3).max(1);
+            for conn in &self.laid.nets[m].conns {
+                for (k, &s) in conn.iter().enumerate() {
+                    if k % stride != 0 && k + 1 != conn.len() {
+                        continue;
+                    }
+                    let (layer, cell) = space.split(s as usize);
+                    for c in grid.around(cell, &disc) {
+                        let idx = space.state(layer, c);
+                        if ground.beside[idx] == 0 {
+                            ground.beside[idx] = 1;
+                            ground.beside_set.push(idx as u32);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The same, with the search memory `w` in which the net's own claims are marked.
@@ -206,7 +248,7 @@ impl Engine<'_> {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
                 let diag = ja != jb && ia != ib;
                 let len = if diag { std::f64::consts::SQRT_2 } else { 1.0 };
-                state.cost += lc[lb] * len;
+                state.cost += lc[lb] * len * w.ground.apart_at(pair[1] as usize) as f64;
                 state.steps += len;
             }
         }

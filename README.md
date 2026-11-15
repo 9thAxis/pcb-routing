@@ -89,21 +89,35 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.89 | 1.11 | 10.3 | 1.6 | 11 | 36 |
+| pcb-routing | 0.89 | 1.11 | 10.1 | 1.6 | 12 | 37 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
 Detour is track length over the shortest tree through a net's pad centres. A short segment is one shorter
 than twice its width. pcb-routing has the least track, the fewest vias and the fewest corners;
-KiCadRoutingTools has fewer sharp turns. Not measured: how buses are kept together, how tracks leave pads,
-and anything that needs to know what the circuit does.
+KiCadRoutingTools has fewer sharp turns.
+
+Buses: nets with neighbouring pads on one part and neighbouring pads on another, three or more together (75
+buses, 241 pairs of neighbours on these boards). Alongside is the share of a net's track within 1.5 pad
+pitches of its neighbour on the same layer.
+
+| | Alongside its neighbour | Same number of vias | The two cross | Difference in length |
+|---|---|---|---|---|
+| The designer | 68% | 80% | 26% | 23% |
+| pcb-routing | 64% | 80% | 36% | 22% |
+| pcb-routing, buses not drawn together (`--bus-pull 0`) | 58% | 80% | 30% | 22% |
+| KiCadRoutingTools | 71% | 52% | 35% | 23% |
+| FreeRouting | 64% | 77% | 40% | 23% |
+
+Not in these tables: anything that needs to know what the circuit does.
 
 The table is computed with [`tools/quality`](tools/quality/README.md), which defines each figure and works on
 any routed KiCad board that has a reference routing to compare with:
 
     python3 tools/quality/quality.py DESIGNER.kicad_pcb mine=ROUTED.kicad_pcb
 
-It also has first measures of buses, pad exits and decoupling paths, which are not reported here.
+It also has first measures of pad exits, supply nets, decoupling paths and crystals, which are not reported
+here.
 
 ### What it has
 
@@ -121,6 +135,9 @@ It also has first measures of buses, pad exits and decoupling paths, which are n
   way, "no vias", "lay last without disturbing the others".
 * Deterministic: the same problem gives the same answer, whatever the thread count.
 * A self-check of the search (`--verify`), a mask export for comparing with another tool, a trace per round.
+
+* Buses kept together: nets marked as one bus (`bus` on a net; the KiCad bridge marks nets that leave one
+  part and arrive at another side by side) are drawn to run beside each other.
 
 ### What it lacks
 
@@ -254,7 +271,7 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 63 in the engine, 91 in the bridge, 140 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 65 in the engine, 97 in the bridge, 140 in the quality tools |
 
 ## Sources
 

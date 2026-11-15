@@ -25,6 +25,8 @@ pub(crate) struct Plan {
     pub(super) fixed_free: Vec<Vec<u32>>,
     /// Other entries of the same electrical net: their copper is no obstacle and their vias count as holes of the net.
     pub(super) siblings: Vec<Vec<usize>>,
+    /// Per net: the entries of other nets of its bus (see `Net::bus`).
+    pub(super) mates: Vec<Vec<usize>>,
     /// Per net and terminal: its cell and layers, or why it cannot be reached at all.
     pub(super) terms: Vec<Vec<Result<Term, String>>>,
     /// Per net: the exact place of what stands in a cell (a hole, a terminal), where a track ending in that
@@ -87,6 +89,12 @@ impl Plan {
             shut: grid.disc(p.rules.hole_centre_mm),
             siblings: (0..p.nets.len())
                 .map(|n| (0..p.nets.len()).filter(|&m| m != n && p.nets[m].net == p.nets[n].net).collect())
+                .collect(),
+            mates: (0..p.nets.len())
+                .map(|n| {
+                    let same = |m: &usize| p.nets[*m].net != p.nets[n].net && p.nets[*m].bus == p.nets[n].bus;
+                    (0..p.nets.len()).filter(|m| p.nets[n].bus.is_some() && same(m)).collect()
+                })
                 .collect(),
             grid,
             space,

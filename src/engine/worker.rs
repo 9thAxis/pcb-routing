@@ -62,6 +62,12 @@ pub(super) struct Ground {
     pub(super) priced_vias: Vec<Cell<u32>>,
     /// Counted up for each net laid.
     pub(super) lay: u32,
+    /// For a net of a bus: 1 at the states beside a laid net of its bus, where it does not pay for being apart
+    /// (see `Options::bus_pull`). Empty until a net of a bus is laid; `beside_set` lists what is set.
+    pub(super) beside: Vec<u8>,
+    pub(super) beside_set: Vec<u32>,
+    /// What the net being laid pays more per unit length away from its bus; 0 for a net of none.
+    pub(super) apart: f32,
 }
 
 /// The tables are read and filled through shared references (a page of costs is drawn up in the middle of a
@@ -121,6 +127,9 @@ impl Worker {
                 priced: vec![Cell::new(0); states.div_ceil(PAGE)],
                 priced_vias: vec![Cell::new(0); cells.div_ceil(PAGE)],
                 lay: 0,
+                beside: Vec::new(),
+                beside_set: Vec::new(),
+                apart: 0.0,
             },
         })
     }
@@ -142,6 +151,16 @@ impl Ground {
         if self.lay == 0 {
             self.priced.iter().chain(&self.priced_vias).for_each(|page| page.set(0));
             self.lay = 1;
+        }
+    }
+
+    /// What a step into a state costs more for being away from the bus of the net being laid, as a factor.
+    #[inline]
+    pub(super) fn apart_at(&self, state: usize) -> f32 {
+        if self.apart > 0.0 && self.beside[state] == 0 {
+            1.0 + self.apart
+        } else {
+            1.0
         }
     }
 

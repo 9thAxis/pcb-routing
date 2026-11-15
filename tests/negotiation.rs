@@ -326,3 +326,72 @@ fn a_pair_runs_side_by_side_and_reaches_its_pads() {
         assert!(d > 0.6699, "ordinary net {d} mm from a leg, centre to centre");
     }
 }
+
+/// Length of the first net's track that lies within `reach` of the second's, sampled every 0.05 mm.
+fn beside(s: &Solution, a: usize, b: usize, reach: f64) -> f64 {
+    let near = |q: [f64; 2]| {
+        s.nets[b].tracks.iter().flat_map(|t| t.points.windows(2)).any(|w| {
+            let (vx, vy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
+            let t = (((q[0] - w[0][0]) * vx + (q[1] - w[0][1]) * vy) / (vx * vx + vy * vy)).clamp(0.0, 1.0);
+            (q[0] - w[0][0] - t * vx).hypot(q[1] - w[0][1] - t * vy) <= reach
+        })
+    };
+    let mut total = 0.0;
+    for w in s.nets[a].tracks.iter().flat_map(|t| t.points.windows(2)) {
+        let len = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
+        let pieces = (len / 0.05).ceil().max(1.0) as usize;
+        for k in 0..pieces {
+            let f = (k as f64 + 0.5) / pieces as f64;
+            if near([w[0][0] + (w[1][0] - w[0][0]) * f, w[0][1] + (w[1][1] - w[0][1]) * f]) {
+                total += len / pieces as f64;
+            }
+        }
+    }
+    total
+}
+
+/// Two nets of a bus whose shortest ways lie a millimetre apart: drawn together, one comes over to run beside
+/// the other for most of its length, at the price of a little more track; not drawn, each keeps its own way.
+#[test]
+fn nets_of_a_bus_run_beside_each_other() {
+    let run = |pull: f64| {
+        let mut a = net("a", [1.0, 1.0], [9.0, 1.0], &["F"]);
+        let mut b = net("b", [1.0, 2.4], [9.0, 3.4], &["F"]);
+        a["bus"] = json!("d");
+        b["bus"] = json!("d");
+        let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": [a, b]});
+        v["options"] = json!({"bus_pull": pull});
+        let p: Problem = serde_json::from_value(v).unwrap();
+        let s = route(&p).unwrap();
+        assert_eq!(s.status, Status::Routed, "{}", s.message);
+        (beside(&s, 1, 0, 0.7), s.nets.iter().map(|n| n.length_mm).sum::<f64>())
+    };
+    let (apart, shortest) = run(0.0);
+    let (together, longer) = run(0.5);
+    assert!(apart < 1.0, "not drawn together, {apart:.2} mm of b runs beside a");
+    assert!(together > 4.0, "drawn together, only {together:.2} mm of b runs beside a");
+    assert!(longer > shortest && longer < shortest + 2.5, "{shortest:.2} mm apart, {longer:.2} mm together");
+}
+
+/// A net of no bus, and nets of different buses, are not drawn to anything: the result is the same whatever
+/// the pull.
+#[test]
+fn only_nets_of_one_bus_are_drawn_together() {
+    let run = |pull: f64, buses: [Option<&str>; 2]| {
+        let mut nets = vec![net("a", [1.0, 1.0], [9.0, 1.0], &["F"]), net("b", [1.0, 2.4], [9.0, 3.4], &["F"])];
+        for (n, bus) in nets.iter_mut().zip(buses) {
+            if let Some(bus) = bus {
+                n["bus"] = json!(bus);
+            }
+        }
+        let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": nets});
+        v["options"] = json!({"bus_pull": pull});
+        let mut s = route(&serde_json::from_value::<Problem>(v).unwrap()).unwrap();
+        s.stats = Default::default();
+        s
+    };
+    let plain = run(0.0, [None, None]);
+    assert_eq!(run(0.5, [None, None]), plain);
+    assert_eq!(run(0.5, [Some("d"), None]), plain);
+    assert_eq!(run(0.5, [Some("d"), Some("e")]), plain);
+}

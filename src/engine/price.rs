@@ -121,7 +121,7 @@ impl<'a> Prices<'a> {
                 } else {
                     ((1.0 + give * e.history.hist[s] as f64) * (1.0 + give * present * occ as f64)) as f32
                 };
-                self.swept[s].mult.set(mult);
+                self.swept[s].mult.set(mult * self.ground.apart_at(s));
                 self.swept[s].open.set(open[i]);
             }
             k += len;

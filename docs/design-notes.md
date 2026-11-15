@@ -46,8 +46,14 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   sent a track to a pad of another layer and off its via, and dropped the piece of track in a pad a net
   changes layer in. With these mended, cases more than 0.0025 mm under the rule between new nets went from
   243 (before any of this, from stubs) to none.
-* Open: buses stay together less than the designers keep them (58 % of a net's length beside its neighbour
-  against 68 %); a via between a decoupling capacitor and its pin twice as often (14 % against 6 %); short
+* Buses drawn together (`Net::bus`, `Options::bus_pull`): a net of a bus pays more per unit length wherever
+  it is not within twice the least track pitch of a laid net of its bus, on the same layer. As a surcharge
+  away from the bus and not a discount beside it, so that every look-ahead stays a lower bound. Beside its
+  neighbour: 58 to 64 % of a net's length (the designers 68 %). The strength hardly matters: pulls of 0.1,
+  0.2, 0.3, 0.4, 0.6 gave 64.2, 64.4, 65.0, 64.4, 64.7 %, with corners per connection rising from 1.58 to
+  1.70. Pairs of neighbours that cross: 30 % without, 34, 37, 32, 30, 32 % with, in no order: a few more,
+  within what one run differs from the next. Nothing orders the nets within the bundle.
+* Open: a via between a decoupling capacitor and its pin twice as often (14 % against 6 %); short
   last stretches before a pad.
 
 ## Tried and not kept

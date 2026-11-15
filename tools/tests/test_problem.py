@@ -15,12 +15,12 @@ HOLE = ({"xy", "net"}, {"xy", "net"})
 REGION = ({"rings", "layers", "tracks", "vias"}, {"rings"})
 RULES = ({"hole_centre_mm", "pad_drill_margin_mm", "via_in_pad", "region_margin_mm", "new_clearance_mm", "quiet_clearance_mm"}, set())
 NET = ({"key", "net", "width", "via", "layers", "clearance", "terminals", "via_penalty_mm", "layer_cost", "yield", "weight", "max_mm",
-        "branch_anywhere", "regions", "last", "no_vias", "quiet"}, {"key", "net", "width", "via", "layers", "clearance", "terminals"})
+        "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus"}, {"key", "net", "width", "via", "layers", "clearance", "terminals"})
 CLEARANCE = ({"default", "nets"}, {"default"})
 TERMINAL = ({"xy", "layers"}, {"xy", "layers"})
 OPTIONS = ({"max_iterations", "present_start", "present_growth", "present_max", "history_step", "refine_passes", "variants", "negotiate",
             "own_hole_free", "bend_mm", "two_pass", "sweep_margin", "exact_after", "stall_after", "patience", "drop_conflicts",
-            "threads", "max_states"}, set())
+            "threads", "max_states", "bus_pull"}, set())
 
 
 def is_point(p):
@@ -272,6 +272,47 @@ class PadsAndHoles(Shape):
         dx, dy = bx - ax, by - ay
         t = max(0.0, min(1.0, -(ax * dx + ay * dy) / (dx * dx + dy * dy)))
         return math.hypot(ax + t * dx, ay + t * dy)
+
+
+class Buses(unittest.TestCase):
+    """Which nets are taken for a bus: neighbours on the same two parts, three or more."""
+
+    def row(self, part, nets, x, pitch=1.0):
+        return [support.land(k, net, x, i * pitch, half=0.3, part=part) for i, net in enumerate(nets)]
+
+    def test_three_nets_side_by_side_on_two_parts_are_a_bus(self):
+        pads = self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c"], 20)
+        bus = k.buses(pads)
+        self.assertEqual(set(bus), {"a", "b", "c"})
+        self.assertEqual(len(set(bus.values())), 1)
+
+    def test_two_nets_are_not_a_bus(self):
+        self.assertEqual(k.buses(self.row("U1", ["a", "b"], 0) + self.row("U2", ["a", "b"], 20)), {})
+
+    def test_nets_side_by_side_on_one_part_only_are_not_a_bus(self):
+        pads = self.row("U1", ["a", "b", "c"], 0) + [support.land(k, n, 20 + 10 * i, 0, part=f"R{i}") for i, n in enumerate("abc")]
+        self.assertEqual(k.buses(pads), {})
+
+    def test_nets_far_apart_on_a_part_are_not_neighbours(self):
+        # on U2 the three are spread among other pads: no two of them are neighbours there
+        spread = self.row("U2", ["a", "x", "b", "y", "c"], 20)
+        self.assertEqual(k.buses(self.row("U1", ["a", "b", "c"], 0) + spread), {})
+
+    def test_two_buses_between_other_parts_stay_two(self):
+        pads = (self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c"], 20)
+                + self.row("U3", ["d", "e", "f"], 40) + self.row("U4", ["d", "e", "f"], 60))
+        bus = k.buses(pads)
+        self.assertEqual(bus["a"], bus["c"])
+        self.assertEqual(bus["d"], bus["f"])
+        self.assertNotEqual(bus["a"], bus["d"])
+
+    def test_the_problem_names_the_bus_of_each_net_and_none_without_pull(self):
+        pads = self.row("U1", ["a", "b", "c"], 0, pitch=2.0) + self.row("U2", ["a", "b", "c"], 20, pitch=2.0)
+        picture = support.picture(k, pads)
+        problem = k.build_problem(picture, k.Rules.of(picture))
+        self.assertEqual(len({net["bus"] for net in problem["nets"]}), 1)
+        problem = k.build_problem(picture, k.Rules.of(picture, k.Settings(bus_pull=0.0)))
+        self.assertTrue(all("bus" not in net for net in problem["nets"]))
 
 
 if __name__ == "__main__":

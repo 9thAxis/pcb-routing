@@ -255,6 +255,10 @@ pub struct Net {
     /// instead of [`Rules::new_clearance_mm`].
     #[serde(default)]
     pub quiet: bool,
+    /// The bus this net is of, if any: nets of one bus are drawn to run beside each other (see
+    /// [`Options::bus_pull`]). Any name; nets with the same name are of the same bus.
+    #[serde(default)]
+    pub bus: Option<String>,
 }
 
 fn one() -> f64 {
@@ -309,6 +313,10 @@ pub struct Options {
     /// where the straight way misleads badly (a maze of fixed copper). With several attempts side by side,
     /// which of them works a table out first can decide between paths of equal cost.
     pub exact_after: Option<usize>,
+    /// How strongly the nets of a bus ([`Net::bus`]) are drawn together: a net of a bus pays this much more
+    /// per unit length wherever it does not run beside another net of its bus that is already laid (0.2: a
+    /// way beside the others may be a fifth longer than the shortest and is still taken). 0: not at all.
+    pub bus_pull: f64,
     /// Rounds without fewer nets in conflict before the standing cost is spread round the places of conflict
     /// (0: never).
     pub stall_after: usize,
@@ -341,6 +349,7 @@ impl Default for Options {
             two_pass: true,
             sweep_margin: 20.0,
             exact_after: None,
+            bus_pull: 0.2,
             stall_after: 3,
             patience: 20,
             drop_conflicts: true,
