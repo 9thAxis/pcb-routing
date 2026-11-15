@@ -74,6 +74,8 @@ impl Engine<'_> {
         }
         holes.sort_unstable();
         holes.dedup();
+        // (those vias, as they are now: `holes` goes on to take the net's own)
+        let lent = holes.clone();
         // the costs of the ground are drawn up as the searches come to them (see `Prices`)
         w.ground.begin();
         let mode = Mode { present, hard };
@@ -143,6 +145,15 @@ impl Engine<'_> {
             let k = left.iter().position(|t| t.cell as usize == ec && t.on(el)).unwrap();
             let reached = left.remove(k);
             let new_vias = self.account(n, &path, own_hole, w, &mut state);
+            // A layer change on the via of another entry of the net is on a via of this entry too from now
+            // on, at no cost: the other entry may be laid again without it.
+            for pair in path.windows(2) {
+                let ((la, ca), (lb, _)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
+                let cell = ca as u32;
+                if la != lb && lent.binary_search(&cell).is_ok() && !state.vias.contains(&cell) {
+                    state.vias.push(cell);
+                }
+            }
             for v in new_vias {
                 w.ground.flag_hole(&self.plan.grid, v, shut);
                 state.vias.push(v);

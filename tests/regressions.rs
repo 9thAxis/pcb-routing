@@ -379,3 +379,31 @@ fn tracks_ended_off_the_grid_keep_their_distance_and_their_vias() {
         }
     }
 }
+
+/// Two entries of one net: the second changed layer on a via of the first, and the first was then laid again
+/// with its via elsewhere, so that the result had tracks of the net ending on each other on two layers with
+/// no via there. A via one entry borrows is its own as well.
+#[test]
+fn a_layer_change_on_a_via_of_another_entry_of_the_net_keeps_its_via() {
+    let text = std::fs::read_to_string(format!("{}/tests/data/siblings-396.json", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let p: Problem = serde_json::from_str(&text).unwrap();
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    let same = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6;
+    let ends = |layer: &str, net: &str| -> Vec<[f64; 2]> {
+        let tracks = s.nets.iter().filter(|n| n.net == net).flat_map(|n| &n.tracks).filter(|t| t.layer == layer);
+        tracks.flat_map(|t| [t.points[0], *t.points.last().unwrap()]).collect()
+    };
+    for net in ["N0", "N1", "N2"] {
+        let vias: Vec<[f64; 2]> = s.nets.iter().filter(|n| n.net == net).flat_map(|n| n.vias.clone()).collect();
+        for at in ends("F", net) {
+            if ends("B", net).iter().any(|b| same(*b, at)) {
+                assert_eq!(
+                    vias.iter().filter(|v| same(**v, at)).count(),
+                    1,
+                    "{net} changes layer at {at:?}: vias {vias:?}"
+                );
+            }
+        }
+    }
+}

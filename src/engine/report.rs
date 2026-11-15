@@ -34,13 +34,16 @@ impl Engine<'_> {
                 .map(|run| Track { layer: p.layers[run.layer].clone(), points: run.points })
                 .collect();
             let length = length(&tracks);
-            // lower is better: weighted length, a via as 1 mm, and each mm over the wanted length as 100 mm
-            score += net.weight * (length + 100.0 * net.max_mm.map_or(0.0, |m| (length - m).max(0.0)))
-                + self.laid.nets[n].vias.len() as f64;
             if !split {
                 self.list_conflicts(n, &mut conflicts);
             }
-            let vias: Vec<Pt> = self.laid.nets[n].vias.iter().map(|&v| self.plan.grid.xy(v as usize)).collect();
+            // (a via that two entries of a net share is reported with the first of them)
+            let shared = |v: &u32| self.plan.siblings[n].iter().any(|&m| m < n && self.laid.nets[m].vias.contains(v));
+            let own = self.laid.nets[n].vias.iter().filter(|v| !shared(v));
+            let vias: Vec<Pt> = own.map(|&v| self.plan.grid.xy(v as usize)).collect();
+            // lower is better: weighted length, a via as 1 mm, and each mm over the wanted length as 100 mm
+            score +=
+                net.weight * (length + 100.0 * net.max_mm.map_or(0.0, |m| (length - m).max(0.0))) + vias.len() as f64;
             match part[n] {
                 Some((k, Some(leg))) => {
                     pieces[k][leg].0.extend(tracks);

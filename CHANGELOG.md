@@ -30,6 +30,8 @@ First version as a library.
   where the track may not move, and left out where it would come too near another net. On 111 public
   boards: turns of 90 degrees or more per 100 connections 75 to 11, segments shorter than twice their
   width 158 to 36.
+- An entry that changes layer on a via of another entry of the same net holds that via too: the other entry
+  could be laid again with its via elsewhere, and the result then had a layer change with no via.
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.
