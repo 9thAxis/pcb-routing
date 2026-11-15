@@ -11,7 +11,7 @@ repository = "https://github.com/9thAxis/pcb-routing"
 documentation = "https://docs.rs/pcb-routing"
 keywords = ["pcb", "routing", "autorouter", "eda", "pathfinder"]
 categories = ["science", "algorithms", "command-line-utilities"]
-include = ["src/**", "tests/**", "examples/**", "README.md", "CHANGELOG.md", "LICENSE-*", "Cargo.toml", "rustfmt.toml"]
+include = ["/src/**", "/tests/**", "/examples/**", "/README.md", "/CHANGELOG.md", "/LICENSE-*", "/Cargo.toml", "/rustfmt.toml"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -112,7 +112,7 @@ pitches of its neighbour on the same layer.
 
 Not in these tables: anything that needs to know what the circuit does.
 
-The table is computed with [`tools/quality`](tools/quality/README.md), which defines each figure and works on
+The table is computed with [`tools/quality`](https://github.com/9thAxis/pcb-routing/blob/main/tools/quality/README.md), which defines each figure and works on
 any routed KiCad board that has a reference routing to compare with:
 
     python3 tools/quality/quality.py DESIGNER.kicad_pcb mine=ROUTED.kicad_pcb
