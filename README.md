@@ -10,7 +10,7 @@ depend on the order the nets are given in, and a net that would block three othe
 **Check every result with the design rule check of your CAD program before using it.** The router's picture
 of the board is the problem it was given.
 
-Status: 0.1, not yet on crates.io. The interfaces may still change.
+Status: 0.1. The interfaces may still change.
 
 ## Routing a KiCad board
 
@@ -20,8 +20,9 @@ Status: 0.1, not yet on crates.io. The interfaces may still change.
       /Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3 \
       tools/kicad_route.py BOARD.kicad_pcb -o ROUTED.kicad_pcb
 
-The bridge (`tools/kicad_route.py`) runs under the Python that ships with KiCad (9 or 10; the path above is
-the macOS one). It reads pads, tracks, vias, holes, the outline, rule areas and the net classes, routes every
+The bridge ([`tools/kicad_route.py`](https://github.com/9thAxis/pcb-routing/blob/main/tools/kicad_route.py)) is in the
+repository, not in the crate on crates.io. It runs under the Python that ships with KiCad (9 or 10; the path
+above is the macOS one). It reads pads, tracks, vias, holes, the outline, rule areas and the net classes, routes every
 net whose pads are not yet joined, writes the tracks and vias back and refills the zones. What is already
 routed is kept and routed around. `--nets A,B` routes only those nets; `--layers F.Cu,B.Cu` restricts the
 layers; `--coarse-first` trades a little quality for about three times the speed. `--help` lists the rest.
@@ -176,7 +177,7 @@ for net in &solution.nets {
 }
 ```
 
-Until it is on crates.io: `pcb-routing = { git = "https://github.com/9thAxis/pcb-routing" }`.
+Add it with `cargo add pcb-routing`. The program alone: `cargo install pcb-routing`.
 
 `route` returns an error only when the problem cannot be run at all (a size or cost that makes no sense, a
 name that does not exist, a grid larger than `options.max_states`). A problem that was run and could not be
@@ -185,7 +186,7 @@ completed comes back as a solution: `unroutable` with the connections that could
 nets are still too close.
 
 `Router` gives more control: a callback per round of negotiation, a self-check of the search, one attempt
-alone. See `examples/route_file.rs` and the API documentation (`cargo doc --open`).
+alone. See `examples/route_file.rs` and the [API documentation](https://docs.rs/pcb-routing).
 
 ## As a program
 
@@ -251,7 +252,8 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 9. **Attempts** (`src/router.rs`). `variants` runs differently ordered attempts side by side and keeps the
    best: complete before incomplete, then least missing, then the lowest sum of weighted lengths plus vias.
 
-`docs/design-notes.md` records what each of these bought when it was added, and what was tried and dropped.
+[`docs/design-notes.md`](https://github.com/9thAxis/pcb-routing/blob/main/docs/design-notes.md) (in the
+repository) records what each of these bought when it was added, and what was tried and dropped.
 
 ## Limits
 
