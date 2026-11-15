@@ -37,8 +37,8 @@ and KiCad's design rule check reports no error that the unrouted board did not h
 | Set | Boards | Nets per board | Clean pass | Connections made | Time per board |
 |---|---|---|---|---|---|
 | D3-A (small) | 99 | 2 to 13 | 99 of 99 | 1,301 of 1,301 | 0.5 s |
-| D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.2 s |
-| D3-C (large), first 10 | 10 | 27 to 79 | 9 of 10 | 1,177 of 1,178 | 9.9 s |
+| D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.0 s |
+| D3-C (large), first 10 | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 10.9 s |
 
 Run on 15 November 2026 through the KiCad bridge with its defaults, two threads, on a laptop that was doing
 other work; the time includes loading and saving the board in KiCad.
@@ -177,8 +177,8 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 ## Limits
 
 * The grid carries part of the clearance: a `routed` result keeps the rules between new nets at cell centres,
-  and a diagonal step can come nearer by about 0.002 mm at a 0.05 mm step. The KiCad bridge adds 0.02 mm to
-  every clearance for this.
+  and a diagonal step can come nearer by about 0.002 mm at a 0.05 mm step. The KiCad bridge adds 0.002 mm to
+  every clearance for this (`--slack`).
 * The legs of a pair are not tested against fixed copper. The trunk is, at its own width, which covers the
   legs on straight runs and 45 degree corners when it is at least `pitch + leg_width + 0.04` wide.
 * Memory is about 200 bytes per (layer, cell) state for each attempt running at once. A problem beyond
@@ -189,7 +189,7 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 
 | Check | Result |
 |---|---|
-| 119 public boards through KiCad's design rule check (table above) | 118 fully connected with no new error; one connection missing on the other |
+| 119 public boards through KiCad's design rule check (table above) | All fully connected with no new error |
 | Masks against an older, independent router, cell by cell: 4 nets with different rules on 964,371 cells by 4 layers | No cell open here that the other closes |
 | Single connections against that router, each alone on the same board: 29 connections | 29 of 29 within 2 % in length |
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |

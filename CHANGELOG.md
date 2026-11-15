@@ -24,4 +24,7 @@ First version as a library.
   1.0 GB without them, the same result).
 - A track ends at the exact place of a pad or hole only if the piece that leads there from the cell keeps
   its distances; else it ends on the cell. (A track wider than its pad could come too near the next pad.)
+- KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
+  it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
+  had been covering for that. A board laid out at its minimum clearance has room again.
 - Matched pairs (`Problem::pairs`): a trunk split into two legs, joined to their pads by stubs.

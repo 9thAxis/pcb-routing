@@ -45,6 +45,7 @@ except ImportError:  # the rules and the problem are worked out without KiCad; o
 
 # The engine refuses a problem of this many entries or more; a board with more is routed in batches.
 ENGINE_NETS = 250
+ARC_ERROR = 0.002  # mm: how far the corners of a polygon drawn for a round shape lie outside it
 BATCH_NETS = 200
 
 
@@ -165,7 +166,7 @@ class Settings:
     """What the user chose for a run."""
     step: object = 0.05  # grid step in mm; None: chosen from the board's rules
     coarse_first: bool = False  # a first pass at twice the step, for speed
-    slack: float = 0.02
+    slack: float = 0.002
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
 
@@ -566,18 +567,17 @@ def rings_of(poly_set):
 
 
 def pad_polygon(pad, layer):
-    """A pad's copper on one of its layers."""
-    try:
-        return pad.GetEffectivePolygon(layer, pcbnew.ERROR_INSIDE)
-    except TypeError:
-        return pad.GetEffectivePolygon(layer)
+    """A pad's copper on one of its layers, as a polygon that holds all of it: a round edge becomes corners
+    that lie outside the true shape, by at most ARC_ERROR, so that what keeps its distance from the polygon
+    keeps it from the pad."""
+    shape = pcbnew.SHAPE_POLY_SET()
+    pad.TransformShapeToPolygon(shape, layer, 0, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
+    return shape
 
 
 def pad_outline(pad, layer):
     """A pad's outline as it would be on a layer, for where it has an opening but no copper."""
-    shape = pcbnew.SHAPE_POLY_SET()
-    pad.TransformShapeToPolygon(shape, layer, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_OUTSIDE)
-    return shape
+    return pad_polygon(pad, layer)
 
 
 def mask_opening(pad, layer):
@@ -631,7 +631,7 @@ def drawing_polygon(item, layer):
     """A drawing or text on a copper layer as polygons; its bounding box if KiCad cannot give its outline."""
     poly = pcbnew.SHAPE_POLY_SET()
     try:
-        item.TransformShapeToPolygon(poly, layer, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_OUTSIDE)
+        item.TransformShapeToPolygon(poly, layer, 0, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
     except Exception:
         poly = pcbnew.SHAPE_POLY_SET()
     if poly.OutlineCount() == 0:
@@ -746,7 +746,7 @@ def read_board(board, ignored=frozenset(), nets=None):
         elif track.Type() == pcbnew.PCB_ARC_T:
             # an arc as a few straight pieces
             poly = pcbnew.SHAPE_POLY_SET()
-            track.TransformShapeToPolygon(poly, track.GetLayer(), 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
+            track.TransformShapeToPolygon(poly, track.GetLayer(), 0, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
             picture.polygons.extend(Polygon(rings, name(track.GetLayer()), net) for rings in rings_of(poly))
         else:
             picture.tracks.append(Track(a=xy(track.GetStart()), b=xy(track.GetEnd()), width=MM(track.GetWidth()), net=net, layer=name(track.GetLayer())))
@@ -843,7 +843,7 @@ def main(argv=None):
     parser.add_argument("--layers", help="copper layers that may carry routes, comma separated (default: all)")
     parser.add_argument("--step", default="auto", help="grid step in mm, or 'auto' (the default): chosen from the track widths and clearances of the nets")
     parser.add_argument("--coarse-first", action="store_true", help="a first pass on a grid twice as coarse, then what is left on the fine one: about three times faster, a little more track and vias, and less room on a crowded board")
-    parser.add_argument("--slack", type=float, default=0.02, help="added to every clearance for the grid, in mm")
+    parser.add_argument("--slack", type=float, default=0.002, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")

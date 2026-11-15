@@ -25,7 +25,7 @@ class Clearances(unittest.TestCase):
 
     def test_least_clearance_is_the_smallest_of_any_net(self):
         self.assertAlmostEqual(rules().least_clearance, 0.17)
-        self.assertAlmostEqual(k.Rules(k.Minima(clearance=0.2), {}).least_clearance, 0.22)
+        self.assertAlmostEqual(k.Rules(k.Minima(clearance=0.2), {}, settings=k.Settings(slack=0.02)).least_clearance, 0.22)
 
     def test_clearance_to_a_stricter_class(self):
         r = rules()

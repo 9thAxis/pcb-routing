@@ -90,7 +90,8 @@ class Shape(unittest.TestCase):
         return problem
 
     def build(self, picture, settings=None, **more):
-        return self.check(k.build_problem(picture, k.Rules.of(picture, settings), **more))
+        # the distances these tests expect are worked out with a slack of 0.02 mm
+        return self.check(k.build_problem(picture, k.Rules.of(picture, settings or k.Settings(slack=0.02)), **more))
 
 
 class Structure(Shape):
@@ -157,7 +158,7 @@ class Structure(Shape):
 
     def test_restricted_layers(self):
         with redirect_stderr(io.StringIO()) as said:
-            problem = self.build(self.board(), k.Settings(layers={"F.Cu"}))
+            problem = self.build(self.board(), k.Settings(slack=0.02, layers={"F.Cu"}))
         self.assertEqual(problem["layers"], ["F.Cu"])
         # B has a pad on the bottom only: it cannot be reached and is left out, by name
         self.assertEqual([n["key"] for n in problem["nets"]], ["A"])
