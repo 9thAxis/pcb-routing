@@ -497,6 +497,21 @@ class Pours(unittest.TestCase):
         self.assertTrue(any(9.5 < at[0] < 10 for at, _ in reach[0]))  # the edge of the large one nearest the small
         self.assertTrue(any(20 < at[0] < 20.5 for at, _ in reach[1]))  # and of the small one nearest the large
 
+    def test_places_along_a_ring_are_evenly_apart_and_no_more_than_asked(self):
+        self.assertEqual(k._along(self.SQUARE, 5.0, 100), [[0, 0], [5, 0], [10, 0], [10, 5], [10, 10], [5, 10], [0, 10], [0, 5]])
+        self.assertEqual(len(k._along(self.SQUARE, 0.1, 16)), 16)  # 2.5 mm apart instead
+        self.assertEqual(k._along([[0.0, 0.0], [0.0, 0.0]], 1.0, 8), [])
+
+    def test_two_pieces_of_a_cut_pour_are_offered_along_the_cut(self):
+        upper, lower = [[0.0, 0.0], [10.0, 0.0], [10.0, 4.5], [0.0, 4.5]], [[0.0, 5.5], [10.0, 5.5], [10.0, 10.0], [0.0, 10.0]]
+        pads = [support.land(k, "GND", 2, 2), support.land(k, "GND", 8, 8)]
+        pours = {0: [k.Pour("GND", "F.Cu", [upper])], 1: [k.Pour("GND", "F.Cu", [lower])]}
+        reach = k.reach_of(pads, [[0], [1]], pours, ["F.Cu"], 0.2, step=0.05)
+        by_cut = [at for at, _ in reach[0] if at[1] == 4.3]  # 0.2 mm in from the cut
+        self.assertGreaterEqual(len(by_cut), 8)
+        self.assertTrue(all(abs(a[0] - b[0]) >= k.POUR_SPREAD - 1e-9 for a in by_cut for b in by_cut if a is not b))
+        self.assertTrue(all(abs(round(at[0] / 0.05) * 0.05 - at[0]) < 1e-9 for at in by_cut))  # on the grid
+
     def test_a_pour_on_a_layer_that_carries_no_routes_is_no_place(self):
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 14, 5, part="J1")]
         reach = k.reach_of(pads, [[0], [1]], {0: [k.Pour("GND", "In1.Cu", [self.SQUARE])]}, ["F.Cu", "B.Cu"], 0.2)

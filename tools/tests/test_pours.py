@@ -90,7 +90,7 @@ class Pours(WithEngine):
     def test_a_track_that_ends_on_a_pour_cut_away_is_taken_back_and_laid_again(self):
         board = PouredBoard(beside=True, erodes=True)
         outcome = self.route(board)
-        self.assertEqual(board.taken, [["GND"]])
+        self.assertEqual(board.taken, [["GND"]])  # (all of a piece: under the entry's own key)
         self.assertEqual(board.written, [["SIG"], ["GND"]])  # the signal stays; the net is joined again against it
         self.assertEqual([n["key"] for n in self.runs()[1]["nets"]], ["GND"])
         self.assertIn("ended on a pour that the other new tracks cut away, taken back: GND", self.said)
@@ -118,6 +118,37 @@ class Pours(WithEngine):
         self.assertEqual(board.written, [["SIG", "GND ~ 1"]])  # the first run's copper is gone
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 2, 0))
         self.assertEqual(outcome.tracks, board.segments["SIG"] + board.segments["GND ~ 1"])
+
+
+class Parts(unittest.TestCase):
+    """The copper of one entry, as the pieces that hang together."""
+
+    def laid(self, tracks, vias=()):
+        return dict(key="GND", net="GND", tracks=[dict(layer=layer, points=points) for layer, points in tracks], vias=list(vias))
+
+    def test_copper_all_of_a_piece_is_one_part_under_the_entrys_own_key(self):
+        laid = self.laid([("F.Cu", [[0, 0], [5, 0]]), ("F.Cu", [[2, 0], [2, 3]])])  # a branch from the middle of the first
+        self.assertEqual(k.parts_of(laid), [dict(laid, of="GND")])
+
+    def test_two_stubs_that_do_not_touch_are_two_parts(self):
+        laid = self.laid([("F.Cu", [[0, 0], [5, 0]]), ("F.Cu", [[0, 4], [5, 4]]), ("B.Cu", [[5, 4], [5, 9]])], vias=[[5, 4]])
+        first, second = k.parts_of(laid)
+        self.assertEqual((first["key"], first["of"], len(first["tracks"]), first["vias"]), ("GND # 1", "GND", 1, []))
+        self.assertEqual((second["key"], len(second["tracks"]), second["vias"]), ("GND # 2", 2, [[5, 4]]))  # joined by the via
+
+    def test_tracks_that_cross_on_different_layers_are_apart(self):
+        laid = self.laid([("F.Cu", [[0, 0], [5, 0]]), ("B.Cu", [[5, 0], [5, 5]])])
+        self.assertEqual(len(k.parts_of(laid)), 2)
+
+    def test_the_ends_on_a_pour_are_found_per_part(self):
+        pads = [support.land(k, "GND", 0, 0), support.land(k, "GND", 0, 4)]
+        picture = support.picture(k, pads)
+        terminals = [dict(xy=[0, 0], layers=["F.Cu"]), dict(xy=[0, 4], layers=["F.Cu"]),
+                     dict(xy=[5, 0], layers=["F.Cu"], piece=0), dict(xy=[5, 9], layers=["B.Cu"], piece=0)]
+        problem = dict(nets=[dict(key="GND", net="GND", terminals=terminals)])
+        laid = self.laid([("F.Cu", [[0, 0], [5, 0]]), ("F.Cu", [[0, 4], [5, 4]]), ("B.Cu", [[5, 4], [5, 9]])], vias=[[5, 4]])
+        ends = k.pour_ends(picture, problem, k.parts_of(laid))
+        self.assertEqual(ends, {"GND # 1": [("GND", "F.Cu", [5, 0])], "GND # 2": [("GND", "B.Cu", [5, 9])]})
 
 
 class StarvedBoard:

@@ -451,6 +451,25 @@ def _within(rings, p):
     return inside
 
 
+def _apart(a, b):
+    """How far apart two boxes [x0, y0, x1, y1] are; 0 if they touch or overlap."""
+    return math.hypot(max(a[0] - b[2], b[0] - a[2], 0.0), max(a[1] - b[3], b[1] - a[3], 0.0))
+
+
+def _along(ring, spacing, most):
+    """Places along a ring, `spacing` apart, or further apart for `most` of them at most."""
+    sides = list(zip(ring, ring[1:] + ring[:1]))
+    spacing = max(spacing, sum(math.dist(a, b) for a, b in sides) / most)
+    places, left = [], 0.0  # (how far the next place lies along the side at hand)
+    for a, b in sides:
+        length = math.dist(a, b)
+        while left < length - 1e-12:
+            places.append([a[0] + (b[0] - a[0]) * left / length, a[1] + (b[1] - a[1]) * left / length])
+            left += spacing
+        left -= length
+    return places[:most]
+
+
 def into_pour(rings, p, inset):
     """The point of a pour to take a track from `p` to: `p` itself if it is on the pour, else the nearest point
     of its edge moved `inset` further in. None if that is not on the pour (a sliver too thin to end a track on)."""
@@ -475,7 +494,9 @@ def into_pour(rings, p, inset):
 
 PIECE_PADS = 2  # pads of a group offered to each pad of another group of its net: the nearest
 POUR_AROUND = (0.0, 1.0, 2.0)  # mm from a pad, in four directions: where a pour is tried for a point to end on
+POUR_PADS = 4  # pads of another group that a pour is tried round: those nearest it
 POUR_EDGE = 60  # places along the edge of another group's pour that a pour is tried from, at most
+POUR_NEAR = 3.0  # mm: two pours further apart than this (by their boxes) are not tried along their edges
 POUR_SPREAD = 1.0  # mm at least between two points offered on one pour
 PIECE_POINTS = 64  # most points of one group
 FOUR_WAYS = ((1, 0), (0, 1), (-1, 0), (0, -1))
@@ -486,11 +507,11 @@ def reach_of(pads, groups, pours, layers, inset, step=None):
     joins a group at whichever of its points comes cheapest.
 
     A lone pad is reached at the pad. A group of several has, for each pad of every other group, its own
-    pads nearest to that pad and, if a pour joins it, points of the pour near that pad: the pad's own place
-    if the pour is there (on another layer: under the pad), places round it, and the nearest point of the
-    pour's edge moved `inset` in. Where another group has a pour too (one pour cut in two), it also has the
-    points of its pour nearest to places along the edge of the other: the two can be joined anywhere along
-    the cut. A point of a pour is moved onto the grid of `step` if one is given (a track ends on a cell; only
+    pads nearest to that pad. If a pour joins it, it also has points of the pour near the pads of each other
+    group that are nearest the pour: the pad's own place if the pour is there (on another layer: under the
+    pad), places round it, and the nearest point of the pour's edge moved `inset` in. Where the other group
+    has a pour close by (one pour cut in two), it has instead the points of its pour nearest to places along
+    the edge of the other: the two can be joined anywhere along the cut. A point of a pour is moved onto the grid of `step` if one is given (a track ends on a cell; only
     a pad is worth leaving the grid for), and two on one pour are POUR_SPREAD apart at least. The nearest
     come first, and there are PIECE_POINTS at most.
 
@@ -500,6 +521,12 @@ def reach_of(pads, groups, pours, layers, inset, step=None):
     on = lambda pad: [l for l in layers if l in pad.layers]
     round_about = [(d * dx, d * dy) for d in POUR_AROUND for dx, dy in (FOUR_WAYS if d else FOUR_WAYS[:1])]
     usable = {g: [pour for pour in own if pour.layer in layers] for g, own in pours.items()}
+    boxes = {}
+    def box(pour):
+        if id(pour) not in boxes:
+            xs, ys = [p[0] for p in pour.rings[0]], [p[1] for p in pour.rings[0]]
+            boxes[id(pour)] = (min(xs), min(ys), max(xs), max(ys))
+        return boxes[id(pour)]
     out = []
     for g, group in enumerate(groups):
         own = usable.get(g, [])
@@ -519,19 +546,22 @@ def reach_of(pads, groups, pours, layers, inset, step=None):
                 at = [_r(round(at[0] / step) * step), _r(round(at[1] / step) * step)]
             if at is not None and all(_within(pour.rings, [at[0] + 0.7 * inset * ex, at[1] + 0.7 * inset * ey]) for ex, ey in FOUR_WAYS):
                 offer(math.dist(at, near), at, [pour.layer], True)
-        others = [pads[i] for h, other in enumerate(groups) if h != g for i in other]
-        for other in others:
+        others = [(h, pads[i]) for h, other in enumerate(groups) if h != g for i in other]
+        for h, other in others:
             near = sorted((math.dist(pads[i].at, other.at), i) for i in group if on(pads[i]))[:PIECE_PADS]
             for far, i in near:
                 offer(far, pads[i].at, on(pads[i]))
-            for pour in own:
-                for dx, dy in round_about:
-                    offer_pour(pour, [other.at[0] + dx, other.at[1] + dy])
-        for h, theirs in usable.items():
-            for pour, other in itertools.product(own, theirs if h != g else []):
-                edge = other.rings[0]
-                for place in edge[::max(1, len(edge) // POUR_EDGE)]:
+        # Each pour of the group against each other group: along the edges of that group's pours where it
+        # has any near this one (one pour cut in two), else round the pads of it nearest this pour.
+        for pour, (h, other) in itertools.product(own, [(h, other) for h, other in enumerate(groups) if h != g]):
+            beside = [theirs for theirs in usable.get(h, []) if _apart(box(pour), box(theirs)) <= POUR_NEAR]
+            for theirs in beside:
+                for place in _along(theirs.rings[0], POUR_SPREAD, POUR_EDGE):
                     offer_pour(pour, place)
+            apart = lambda i: _apart(box(pour), pads[i].at + pads[i].at)
+            for i in sorted(other, key=apart)[:POUR_PADS] if not beside else []:
+                for dx, dy in round_about:
+                    offer_pour(pour, [pads[i].at[0] + dx, pads[i].at[1] + dy])
         if not others:  # (the net's only group: nothing to join it to)
             found = {(pads[i].at[0], pads[i].at[1], tuple(on(pads[i]))): (0, False) for i in group[:1] if on(pads[i])}
         chosen = []
@@ -594,17 +624,55 @@ def ties(thermal, points):
     return any((by_pad(a) and on_zone(b)) or (by_pad(b) and on_zone(a)) for a, b in zip(points, points[1:]))
 
 
-def pour_ends(picture, problem, solution):
-    """For each entry of a solution that came to end on a point of a pour (not on a pad): those points, as
-    {key: [(net, layer, point)]}. A track that ends there, or a via there, is joined to the net only as long
-    as the pour is."""
+def _on_track(p, points):
+    """True if a point lies on a line through these points."""
+    for a, b in zip(points, points[1:]):
+        vx, vy = b[0] - a[0], b[1] - a[1]
+        l2 = vx * vx + vy * vy
+        t = max(0.0, min(1.0, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2)) if l2 else 0.0
+        if math.dist(p, (a[0] + t * vx, a[1] + t * vy)) < 1e-6:
+            return True
+    return False
+
+
+def parts_of(laid):
+    """The copper laid for one entry as the pieces that hang together: each a copy of the entry with its own
+    tracks and vias, keyed `KEY # n`, with `of` the entry's key. Two tracks hang together where one ends on the
+    other on the same layer, a track and a via where the track ends on the via."""
+    tracks, vias = laid["tracks"], laid["vias"]
+    leader = list(range(len(tracks) + len(vias)))
+
+    def find(i):
+        while leader[i] != i:
+            i = leader[i]
+        return i
+
+    ends = lambda track: (track["points"][0], track["points"][-1])
+    for i, track in enumerate(tracks):
+        for j, other in enumerate(tracks[:i]):
+            if track["layer"] == other["layer"] and (any(_on_track(p, other["points"]) for p in ends(track)) or
+                                                     any(_on_track(p, track["points"]) for p in ends(other))):
+                leader[find(i)] = find(j)
+        for j, via in enumerate(vias):
+            if any(math.dist(p, via) < 1e-6 for p in ends(track)):
+                leader[find(i)] = find(len(tracks) + j)
+    heads = sorted({find(i) for i in range(len(leader))})
+    if len(heads) < 2:
+        return [dict(laid, of=laid["key"])]
+    return [dict(laid, key=f"{laid['key']} # {n + 1}", of=laid["key"],
+                 tracks=[t for i, t in enumerate(tracks) if find(i) == head],
+                 vias=[v for j, v in enumerate(vias) if find(len(tracks) + j) == head]) for n, head in enumerate(heads)]
+
+
+def pour_ends(picture, problem, nets):
+    """For each piece of laid copper (see `parts_of`) that came to end on a point of a pour (not on a pad):
+    those points, as {key: [(net, layer, point)]}. A track that ends there, or a via there, is joined to the
+    net only as long as the pour is."""
     at_pads = {(pad.net, _r(pad.at[0]), _r(pad.at[1])) for pad in picture.pads}
-    laid = {net["key"]: net for net in solution["nets"]}
+    entries = {entry["key"]: entry for entry in problem["nets"]}
     out = {}
-    for entry in problem["nets"]:
-        copper = laid.get(entry["key"])
-        if copper is None:
-            continue
+    for copper in nets:
+        entry = entries[copper["of"]]
         points = lambda layer: [p for track in copper["tracks"] if track["layer"] == layer for p in (track["points"][0], track["points"][-1])] + copper["vias"]
         for terminal in entry["terminals"]:
             at = terminal["xy"]
@@ -612,7 +680,7 @@ def pour_ends(picture, problem, solution):
                 continue
             for layer in terminal["layers"]:
                 if any(math.dist(at, p) < 1e-6 for p in points(layer)):
-                    out.setdefault(entry["key"], []).append((entry["net"], layer, at))
+                    out.setdefault(copper["key"], []).append((entry["net"], layer, at))
     return out
 
 
@@ -901,15 +969,21 @@ def route(board, settings, run, only=None, options=None, say=print):
                 continue
             first = False
             mark = board.mark() if settings.pours else None
-            added = board.write(solution, {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
+            # (an entry that has points of a pour among its terminals is written piece by piece: see below)
+            poured = {n["key"] for n in problem["nets"] if any("piece" in t for t in n["terminals"])} if settings.pours else set()
+            parts = [part for laid in solution["nets"] for part in (parts_of(laid) if laid["key"] in poured else [dict(laid, of=laid["key"])])]
+            sizes = {n["key"]: (n["width"], n["via"]) for n in problem["nets"]}
+            added = board.write(dict(solution, nets=parts), {part["key"]: sizes[part["of"]] for part in parts})
             # A track that ends on a pour is joined only while the pour is there: where the other new tracks
-            # have cut it away, the entry's copper is taken back, and its net is among those still to join.
-            ends = pour_ends(picture, problem, solution)
+            # have cut it away, the copper that hangs on that end is taken back, and its net is among those
+            # still to join.
+            ends = pour_ends(picture, problem, parts) if settings.pours else {}
             loose = sorted(key for key, places in ends.items() if not all(board.on_pour(*place) for place in places))
             if loose:
                 taken = board.take_back(loose)
                 added = (added[0] - taken[0], added[1] - taken[1])
-                say(f"ended on a pour that the other new tracks cut away, taken back: {', '.join(loose)}")
+                nets_of = {part["key"]: part["net"] for part in parts}
+                say(f"ended on a pour that the other new tracks cut away, taken back: {', '.join(sorted({nets_of[key] for key in loose}))}")
             outcome.tracks, outcome.vias = outcome.tracks + added[0], outcome.vias + added[1]
             if solution["status"] == "routed":
                 # The new tracks may have cut a pour and parted pads it joined: those nets are joined again,
@@ -1593,6 +1667,8 @@ def main(argv=None):
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
     parser.add_argument("--pours", action="store_true", help="not yet the default: fill the zones first and count pads that a filled zone joins as joined, so that a net with a zone gets tracks only from the pads its zone does not reach")
+    parser.add_argument("--pour-cost", type=float, default=2.0, help="with --pours: what a track pays for its length across another net's pour, as a factor (1: nothing more)")
+    parser.add_argument("--spoke-cost", type=float, default=4.0, help="with --pours: and across the ground where it would cut a spoke that ties a pad to its pour")
     parser.add_argument("--no-decoupling", action="store_true", help="do not join a capacitor that stands by a pin of an IC to that pin itself")
     parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
@@ -1611,7 +1687,10 @@ def main(argv=None):
         parser.error("--step takes a number of mm, or auto")
     if not 0 <= args.bus_pull <= 10:
         parser.error("--bus-pull takes a number from 0 to 10")
-    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=args.pours)
+    if not (1 <= args.pour_cost <= 100 and 1 <= args.spoke_cost <= 100):
+        parser.error("--pour-cost and --spoke-cost take a number from 1 to 100")
+    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=args.pours,
+                        pour_cost=args.pour_cost, spoke_cost=args.spoke_cost)
     options = dict(variants=args.variants, max_states=args.max_states)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
 
