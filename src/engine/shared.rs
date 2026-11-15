@@ -1,6 +1,7 @@
 //! What does not change during a run and is the same for every attempt.
 
 use super::lookahead::Table;
+use super::plan::Plan;
 use super::space::Term;
 use super::worker::Worker;
 use super::DIRS;
@@ -58,6 +59,8 @@ pub(super) struct Counters {
 }
 
 pub(crate) struct Shared {
+    /// What follows from the problem alone.
+    pub(super) plan: Plan,
     /// Per net: per cell, a bit per routing layer closed to its tracks, and VIA_BIT where no via of it may be.
     pub(super) masks: Vec<Vec<u8>>,
     /// Per net: per (layer, cell), a bit per direction in which a step is possible past the fixed copper (inside
@@ -113,6 +116,7 @@ impl Shared {
             .collect();
         drop(setup);
         Arc::new(Shared {
+            plan: Plan::new(p, grid, &masks),
             masks,
             open,
             floors: Floors::default(),

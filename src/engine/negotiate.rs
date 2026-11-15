@@ -38,28 +38,28 @@ impl Engine<'_> {
                     next.push(n);
                 }
                 for &s in &t.track {
-                    self.hist[s as usize] += o.history_step as f32;
+                    self.history.hist[s as usize] += o.history_step as f32;
                 }
                 if o.stall_after > 0 && since >= o.stall_after && !t.track.is_empty() {
-                    let disc = self.disc(self.p.nets[n].width + self.p.rules.new_clearance_mm);
+                    let disc = self.claims.disc(&self.plan.grid, self.p.nets[n].width + self.p.rules.new_clearance_mm);
                     let add = (o.history_step * (since + 1 - o.stall_after) as f64) as f32;
-                    self.mark_gen += 1;
+                    self.claims.mark_gen += 1;
                     for &s in &t.track {
-                        let (l, c) = self.space.split(s as usize);
-                        for cell in self.grid.around(c, &disc) {
-                            let k = self.space.state(l, cell);
-                            if self.mark[k] != self.mark_gen {
-                                self.mark[k] = self.mark_gen;
-                                self.hist[k] += add;
+                        let (l, c) = self.plan.space.split(s as usize);
+                        for cell in self.plan.grid.around(c, &disc) {
+                            let k = self.plan.space.state(l, cell);
+                            if self.claims.mark[k] != self.claims.mark_gen {
+                                self.claims.mark[k] = self.claims.mark_gen;
+                                self.history.hist[k] += add;
                             }
                         }
                     }
                 }
                 for &v in &t.via {
-                    self.hist_v[v as usize] += o.history_step as f32;
+                    self.history.hist_v[v as usize] += o.history_step as f32;
                 }
                 for &v in &t.own {
-                    self.hist_v[v as usize] += 4.0 * o.history_step as f32;
+                    self.history.hist_v[v as usize] += 4.0 * o.history_step as f32;
                 }
             }
             self.shared.tell(|| Event::Round {
@@ -106,7 +106,7 @@ impl Engine<'_> {
             for &n in order {
                 match self.route_net(n, 0.0, true) {
                     Ok(state) => self.place(n, state),
-                    Err(e) => self.unlaid.push(e),
+                    Err(e) => self.laid.unlaid.push(e),
                 }
             }
             return self.report(Status::Routed, 1, variant, String::new());
@@ -143,7 +143,7 @@ impl Engine<'_> {
             for n in out {
                 match self.route_net(n, 0.0, true) {
                     Ok(state) => self.place(n, state),
-                    Err(e) => self.unlaid.push(format!("no room left by the other nets: {e}")),
+                    Err(e) => self.laid.unlaid.push(format!("no room left by the other nets: {e}")),
                 }
             }
         }
@@ -151,8 +151,8 @@ impl Engine<'_> {
             let mut better = false;
             for &n in order {
                 if let Ok(state) = self.route_net(n, 0.0, true) {
-                    if state.cost < self.nets[n].cost - 1e-6 {
-                        let old = self.nets[n].clone();
+                    if state.cost < self.laid.nets[n].cost - 1e-6 {
+                        let old = self.laid.nets[n].clone();
                         self.place(n, state);
                         if self.trouble(n).any() {
                             self.place(n, old);
@@ -234,7 +234,7 @@ impl Engine<'_> {
         for n in rest {
             match self.route_net(n, 0.0, true) {
                 Ok(state) => self.place(n, state),
-                Err(e) => self.unlaid.push(format!("with the other nets settled: {e}")),
+                Err(e) => self.laid.unlaid.push(format!("with the other nets settled: {e}")),
             }
         }
         self.report(Status::Routed, rounds, variant, String::new())

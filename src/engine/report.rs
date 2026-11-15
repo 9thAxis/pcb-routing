@@ -5,7 +5,7 @@ use crate::grid::round6;
 
 impl Engine<'_> {
     pub(super) fn report(&mut self, status: Status, iterations: usize, variant: usize, message: String) -> Solution {
-        let (space, p) = (self.space, self.p);
+        let (space, p) = (self.plan.space, self.p);
         let mut nets = Vec::new();
         let mut conflicts = Vec::new();
         let mut score = 0.0;
@@ -26,8 +26,8 @@ impl Engine<'_> {
         let mut pieces: Vec<[(Vec<Track>, Vec<Pt>); 2]> =
             p.pairs.iter().map(|_| [(Vec::new(), Vec::new()), (Vec::new(), Vec::new())]).collect();
         for (n, net) in p.nets.iter().enumerate() {
-            let st = &self.nets[n];
-            let fixed = &self.fixed_free[n];
+            let st = &self.laid.nets[n];
+            let fixed = &self.plan.fixed_free[n];
             let exact = &self.exact[n];
             let point = |cell: u32| exact.get(&cell).copied();
             let mut tracks: Vec<Track> = Vec::new();
@@ -37,15 +37,15 @@ impl Engine<'_> {
                 if let Some(e) = point(first as u32) {
                     run.push(e);
                 }
-                push(&mut run, self.grid.xy(first));
+                push(&mut run, self.plan.grid.xy(first));
                 for pair in conn.windows(2) {
                     let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
                     if la != lb {
                         let cell = ca as u32;
                         let at = if fixed.contains(&cell) {
-                            point(cell).unwrap_or(self.grid.xy(ca))
+                            point(cell).unwrap_or(self.plan.grid.xy(ca))
                         } else {
-                            self.grid.xy(ca)
+                            self.plan.grid.xy(ca)
                         };
                         push(&mut run, at);
                         if run.len() > 1 {
@@ -54,7 +54,7 @@ impl Engine<'_> {
                         run = vec![at];
                         layer = lb;
                     } else {
-                        push(&mut run, self.grid.xy(cb));
+                        push(&mut run, self.plan.grid.xy(cb));
                     }
                 }
                 let last = space.split(*conn.last().unwrap() as usize).1;
@@ -78,19 +78,20 @@ impl Engine<'_> {
             score += net.weight * (length + 100.0 * net.max_mm.map_or(0.0, |m| (length - m).max(0.0)))
                 + st.vias.len() as f64;
             // a trunk that has been split has given up its claim: its legs stand for it
-            let t = if matches!(part[n], Some((k, None)) if self.legs[k].is_some()) {
+            let t = if matches!(part[n], Some((k, None)) if self.pairs.legs[k].is_some()) {
                 Trouble { track: Vec::new(), via: Vec::new(), own: Vec::new() }
             } else {
                 self.trouble(n)
             };
-            let st = &self.nets[n];
+            let st = &self.laid.nets[n];
             let others = |q_list: &dyn Fn(usize) -> bool| -> Vec<String> {
                 (0..p.nets.len()).filter(|&m| m != n && q_list(m)).map(|m| p.nets[m].key.clone()).collect()
             };
             let mut seen_with: Vec<Vec<String>> = Vec::new();
             for &s in &t.track {
-                let with =
-                    others(&|m| self.nets[m].claims_t.get(self.tclass[n]).is_some_and(|c| c.binary_search(&s).is_ok()));
+                let with = others(&|m| {
+                    self.laid.nets[m].claims_t.get(self.plan.tclass[n]).is_some_and(|c| c.binary_search(&s).is_ok())
+                });
                 if !seen_with.contains(&with) {
                     seen_with.push(with.clone());
                     conflicts.push(Conflict {
@@ -98,19 +99,20 @@ impl Engine<'_> {
                         key: net.key.clone(),
                         with,
                         layer: Some(p.layers[space.split(s as usize).0].clone()),
-                        xy: self.grid.xy(space.split(s as usize).1),
+                        xy: self.plan.grid.xy(space.split(s as usize).1),
                     });
                 }
             }
             for &v in &t.via {
-                let with =
-                    others(&|m| self.nets[m].claims_v.get(self.vclass[n]).is_some_and(|c| c.binary_search(&v).is_ok()));
+                let with = others(&|m| {
+                    self.laid.nets[m].claims_v.get(self.plan.vclass[n]).is_some_and(|c| c.binary_search(&v).is_ok())
+                });
                 conflicts.push(Conflict {
                     kind: ConflictKind::Via,
                     key: net.key.clone(),
                     with,
                     layer: None,
-                    xy: self.grid.xy(v as usize),
+                    xy: self.plan.grid.xy(v as usize),
                 });
             }
             for &v in &t.own {
@@ -119,10 +121,10 @@ impl Engine<'_> {
                     key: net.key.clone(),
                     with: Vec::new(),
                     layer: None,
-                    xy: self.grid.xy(v as usize),
+                    xy: self.plan.grid.xy(v as usize),
                 });
             }
-            let vias: Vec<Pt> = st.vias.iter().map(|&v| self.grid.xy(v as usize)).collect();
+            let vias: Vec<Pt> = st.vias.iter().map(|&v| self.plan.grid.xy(v as usize)).collect();
             match part[n] {
                 None => nets.push(NetResult {
                     key: net.key.clone(),
@@ -135,7 +137,7 @@ impl Engine<'_> {
                     pieces[k][leg].0.extend(tracks);
                     pieces[k][leg].1.extend(vias);
                 }
-                Some((k, None)) if self.legs[k].is_none() => nets.push(NetResult {
+                Some((k, None)) if self.pairs.legs[k].is_none() => nets.push(NetResult {
                     key: net.key.clone(),
                     net: net.net.clone(),
                     length_mm: round6(length),
@@ -147,7 +149,7 @@ impl Engine<'_> {
         }
         // each net of a pair: its leg and its two stubs
         for (k, pair) in p.pairs.iter().enumerate() {
-            if let Some((layer, lines)) = &self.legs[k] {
+            if let Some((layer, lines)) = &self.pairs.legs[k] {
                 for leg in 0..2 {
                     let mut tracks = vec![Track { layer: p.layers[*layer].clone(), points: lines[leg].clone() }];
                     tracks.append(&mut pieces[k][leg].0);
@@ -170,8 +172,8 @@ impl Engine<'_> {
                 }
             }
         }
-        let mut unrouted: Vec<String> = self.nets.iter().flat_map(|n| n.failed.iter().cloned()).collect();
-        unrouted.extend(self.unlaid.iter().cloned());
+        let mut unrouted: Vec<String> = self.laid.nets.iter().flat_map(|n| n.failed.iter().cloned()).collect();
+        unrouted.extend(self.laid.unlaid.iter().cloned());
         let status = if !unrouted.is_empty() {
             Status::Unroutable
         } else if conflicts.is_empty() || status == Status::Unroutable {

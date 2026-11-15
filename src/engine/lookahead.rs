@@ -11,6 +11,8 @@ use super::*;
 use crate::geom::octile;
 use crate::mask::VIA_BIT;
 use crate::queue::BucketQueue;
+use space::Space;
+use std::sync::Arc;
 
 const PAGE_BITS: usize = 8;
 const PAGE: usize = 1 << PAGE_BITS;
@@ -177,7 +179,7 @@ fn wanted(furthest: f32) -> f32 {
 impl Engine<'_> {
     /// The states of a set of terminals.
     pub(super) fn states_of(&self, terminals: &[Term]) -> Vec<u32> {
-        terminals.iter().flat_map(|t| t.states(self.space)).collect()
+        terminals.iter().flat_map(|t| t.states(self.plan.space)).collect()
     }
 
     /// What to look ahead with towards `goals`. The first times a connection is laid, the straight way: on a
@@ -187,7 +189,7 @@ impl Engine<'_> {
     pub(super) fn look(&self, n: usize, goals: &[Term], holes: &[u32], others: &[u32]) -> Look {
         let after = self.p.options.exact_after;
         let asked = {
-            let mut asked = self.asked.borrow_mut();
+            let mut asked = self.policy.asked.borrow_mut();
             let count = asked.entry((n, goals.to_vec(), holes.to_vec())).or_insert(0);
             *count += 1;
             *count
@@ -196,13 +198,13 @@ impl Engine<'_> {
         if asked as usize > after && goals.len() <= 4 {
             return Look::Exact(self.floor(n, goals, holes, others));
         }
-        let unit = self.layer_cost[n]
+        let unit = self.plan.layer_cost[n]
             .iter()
             .zip(&self.p.layers)
             .filter(|(_, l)| self.p.nets[n].layers.contains(l))
             .map(|(c, _)| *c)
             .fold(f64::INFINITY, f64::min);
-        let free = !self.fixed_free[n].is_empty() || !holes.is_empty();
+        let free = !self.plan.fixed_free[n].is_empty() || !holes.is_empty();
         let change = if free && self.p.options.own_hole_free {
             0.0
         } else {
@@ -212,19 +214,20 @@ impl Engine<'_> {
             targets: goals
                 .iter()
                 .map(|g| {
-                    let (j, i) = self.space.rc(g.cell as usize);
+                    let (j, i) = self.plan.space.rc(g.cell as usize);
                     (j as i32, i as i32, g.layers)
                 })
                 .collect(),
             unit: (unit * 0.9999) as f32,
             change: change as f32,
-            space: self.space,
+            space: self.plan.space,
         })
     }
 
     /// The cheapest layer cost of a net, a little under.
     fn unit(&self, n: usize) -> f32 {
-        let costs = self.layer_cost[n].iter().zip(&self.p.layers).filter(|(_, l)| self.p.nets[n].layers.contains(l));
+        let costs =
+            self.plan.layer_cost[n].iter().zip(&self.p.layers).filter(|(_, l)| self.p.nets[n].layers.contains(l));
         (costs.map(|(c, _)| *c).fold(f64::INFINITY, f64::min) * 0.9999) as f32
     }
 
@@ -232,7 +235,7 @@ impl Engine<'_> {
     /// straight way to the box round it. The tree changes with every connection and every round, so a table
     /// of the exact cost would be worked out anew each time, at many times the cost of the search it serves.
     pub(super) fn look_around(&self, n: usize, sources: &[u32]) -> Look {
-        let (space, w) = (self.space, self.space.w);
+        let (space, w) = (self.plan.space, self.plan.space.w);
         let (mut rows, mut columns) = ((i32::MAX, i32::MIN), (i32::MAX, i32::MIN));
         for &s in sources {
             let (j, i) = space.rc(space.split(s as usize).1);
@@ -241,7 +244,7 @@ impl Engine<'_> {
             columns = (columns.0.min(i), columns.1.max(i));
         }
         let size = 1usize << TILE_BITS;
-        let (across, down) = (w.div_ceil(size), self.grid.h.div_ceil(size));
+        let (across, down) = (w.div_ceil(size), self.plan.grid.h.div_ceil(size));
         let mut held = vec![false; across * down];
         for &s in sources {
             let (j, i) = space.rc(space.split(s as usize).1);
@@ -336,15 +339,15 @@ impl Engine<'_> {
     /// one of them cannot be reached at all).
     fn floor_to(&self, n: usize, states: &[u32], holes: &[u32], radius: Option<f32>, others: &[u32]) -> Table {
         let net = &self.p.nets[n];
-        let (hw, nl) = (self.space.hw, self.space.nl);
+        let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
         let mask = &self.shared.masks[n];
         let open = &self.shared.open[n][..];
-        let lc = &self.layer_cost[n];
+        let lc = &self.plan.layer_cost[n];
         let via_cost = (net.via_penalty_mm / self.p.step) as f32;
         let own_hole = if self.p.options.own_hole_free { 0.0 } else { via_cost };
-        let off = self.steps.off;
-        let len: [f32; 8] = self.steps.len.map(|v| v as f32);
-        let mut free: Vec<u32> = self.fixed_free[n].iter().chain(holes).copied().collect();
+        let off = self.plan.steps.off;
+        let len: [f32; 8] = self.plan.steps.len.map(|v| v as f32);
+        let mut free: Vec<u32> = self.plan.fixed_free[n].iter().chain(holes).copied().collect();
         free.sort_unstable();
         let mut waiting: Vec<u32> = others.to_vec();
         waiting.sort_unstable();

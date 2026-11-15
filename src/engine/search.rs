@@ -87,11 +87,11 @@ impl Engine<'_> {
         worker: &mut Worker,
     ) -> Option<(f64, f64)> {
         let _t = self.shared.timed(2);
-        let (hw, nl) = (self.space.hw, self.space.nl);
-        let lc = &self.layer_cost[n];
+        let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
+        let lc = &self.plan.layer_cost[n];
         let open = &self.shared.open[n][..];
         let vcost = &worker.vcost;
-        let Steps { off, len } = self.steps;
+        let Steps { off, len } = self.plan.steps;
         let bend = self.p.options.bend_mm / self.p.step;
         let mut upper = f64::INFINITY;
         worker.sweep_gen = worker.sweep_gen.wrapping_add(2);
@@ -102,7 +102,7 @@ impl Engine<'_> {
         let (open_mark, closed) = (worker.sweep_gen, worker.sweep_gen + 1);
         let (a, q) = (&mut worker.swept, &mut worker.sweep_queue);
         q.clear();
-        for at in goals.iter().flat_map(|g| g.states(self.space)) {
+        for at in goals.iter().flat_map(|g| g.states(self.plan.space)) {
             let at = at as usize;
             if back.get(at).is_finite() {
                 a[at].d = 0.0;
@@ -274,8 +274,8 @@ impl Engine<'_> {
                 _ => floor.get(at) as f64,
             }
         };
-        let (hw, nl) = (self.space.hw, self.space.nl);
-        let lc = &self.layer_cost[n];
+        let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
+        let lc = &self.plan.layer_cost[n];
         let bend = self.p.options.bend_mm / self.p.step;
         let vcost = &worker.vcost;
         let mut count = 0u64;
@@ -291,7 +291,7 @@ impl Engine<'_> {
         let cut = upper * 1.0005 + 1.0;
         let open = &self.shared.open[n][..];
         let (corner, allowed) = turns(bend);
-        let Steps { off, len } = self.steps;
+        let Steps { off, len } = self.plan.steps;
         // A state is ((layer, cell), direction of arrival), the nine directions of a cell side by side in memory.
         for &src in sources {
             let ahead = look(src as usize);

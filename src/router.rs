@@ -122,7 +122,7 @@ fn order(nets: usize, v: usize) -> Vec<usize> {
 fn attempts(p: &Problem, variants: usize, only: Option<usize>, diagnostics: Diagnostics) -> Solution {
     use rayon::prelude::*;
     let shared = Shared::new(p, diagnostics);
-    let run = |v: usize| Engine::new(p, shared.clone()).attempt(&order(p.nets.len(), v), v);
+    let run = |v: usize| Engine::new(p, &shared).attempt(&order(p.nets.len(), v), v);
     let results: Vec<Solution> = match only {
         Some(v) => vec![run(v)],
         None if variants == 1 => vec![run(0)],

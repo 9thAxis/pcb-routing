@@ -10,7 +10,7 @@ impl Engine<'_> {
     pub(super) fn line(&self, conn: &[u32]) -> Vec<Pt> {
         let mut run = Vec::new();
         for &state in conn {
-            push(&mut run, self.grid.xy(self.space.split(state as usize).1));
+            push(&mut run, self.plan.grid.xy(self.plan.space.split(state as usize).1));
         }
         run
     }
@@ -25,9 +25,9 @@ impl Engine<'_> {
             [self.index(&pair.stubs[0][0])?, self.index(&pair.stubs[0][1])?],
             [self.index(&pair.stubs[1][0])?, self.index(&pair.stubs[1][1])?],
         ];
-        let conn = self.nets[trunk].conns.first().ok_or_else(|| format!("{}: trunk not laid", pair.key))?.clone();
-        let layer = self.space.split(conn[0] as usize).0;
-        if conn.iter().any(|&c| self.space.split(c as usize).0 != layer) {
+        let conn = self.laid.nets[trunk].conns.first().ok_or_else(|| format!("{}: trunk not laid", pair.key))?.clone();
+        let layer = self.plan.space.split(conn[0] as usize).0;
+        if conn.iter().any(|&c| self.plan.space.split(c as usize).0 != layer) {
             return Err(format!("{}: the trunk changes layer", pair.key));
         }
         let centre = self.line(&conn);
@@ -78,7 +78,7 @@ impl Engine<'_> {
         for leg in 0..2 {
             let holder = stubs[0][leg];
             self.unclaim(holder);
-            self.nets[holder].shapes =
+            self.laid.nets[holder].shapes =
                 lines[leg].windows(2).map(|w| (layer, w[0], w[1], pair.leg_width / 2.0)).collect();
             self.claim(holder);
             for end in 0..2 {
@@ -100,11 +100,11 @@ impl Engine<'_> {
                 for dj in -3i32..=3 {
                     for di in -3i32..=3 {
                         let q = [at[0] + di as f64 * step, at[1] + dj as f64 * step];
-                        let Some(cell) = self.grid.cell(q) else { continue };
+                        let Some(cell) = self.plan.grid.cell(q) else { continue };
                         if self.shared.masks[n][cell] & (1 << layer) != 0 {
                             continue;
                         }
-                        let c = self.grid.xy(cell);
+                        let c = self.plan.grid.xy(cell);
                         let clear = other.windows(2).map(|w| dist_segment(c, w[0], w[1])).fold(f64::INFINITY, f64::min);
                         if clear < need + 1e-6 {
                             continue;
@@ -116,11 +116,11 @@ impl Engine<'_> {
                     }
                 }
                 let (_, cell) = best.ok_or_else(|| format!("{}: no free cell at the end of a leg at {:?} for its stub {} (the legs are closer than the rules let a stub come, or fixed copper is in the way)", pair.key, at, me.key))?;
-                self.extra_terms[n] = vec![Term { cell, layers: 1 << layer }];
+                self.pairs.extra_terms[n] = vec![Term { cell, layers: 1 << layer }];
                 self.exact[n].insert(cell, at);
             }
         }
-        self.legs[k] = Some((layer, lines));
+        self.pairs.legs[k] = Some((layer, lines));
         Ok(vec![stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]])
     }
 }
