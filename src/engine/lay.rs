@@ -6,10 +6,25 @@ use super::*;
 use crate::mask::VIA_BIT;
 
 impl Engine<'_> {
+    /// Lay one net among the others: ground they claim is dearer by `present` per claim, not closed. What
+    /// could not be joined is listed in the result.
+    pub(super) fn lay_among(&self, n: usize, present: f64) -> NetState {
+        self.lay(n, present, false)
+    }
+
+    /// Lay one net with the others fixed: ground they claim is closed. The net is laid whole or not at all.
+    pub(super) fn lay_fixed(&self, n: usize) -> Result<NetState, String> {
+        let state = self.lay(n, 0.0, true);
+        match state.failed.first() {
+            Some(why) => Err(why.clone()),
+            None => Ok(state),
+        }
+    }
+
     /// Lay one net against the claims of the others as they stand: grow a tree from its first terminal to the
     /// nearest remaining terminal until all are joined. Nothing of the engine changes; the caller puts the result
     /// in place. `hard`: cells claimed by other nets are closed instead of dearer.
-    pub(super) fn route_net(&self, n: usize, present: f64, hard: bool) -> Result<NetState, String> {
+    fn lay(&self, n: usize, present: f64, hard: bool) -> NetState {
         let mut w = Worker::take(self.shared, self.plan.space.states(), self.plan.space.hw);
         let mine: Vec<usize> = std::iter::once(n).chain(self.plan.siblings[n].iter().copied()).collect();
         for &m in &mine {
@@ -30,14 +45,10 @@ impl Engine<'_> {
             }
         }
         w.give_back(self.shared);
-        match result {
-            // with the others fixed, a net is laid whole or not at all
-            Ok(state) if hard && !state.failed.is_empty() => Err(state.failed[0].clone()),
-            other => other,
-        }
+        result
     }
 
-    pub(super) fn route_alone(&self, n: usize, present: f64, hard: bool, w: &mut Worker) -> Result<NetState, String> {
+    fn route_alone(&self, n: usize, present: f64, hard: bool, w: &mut Worker) -> NetState {
         let p = self.p;
         let net = &p.nets[n];
         let (space, hw, nl) = (self.plan.space, self.plan.space.hw, self.plan.space.nl);
@@ -106,7 +117,7 @@ impl Engine<'_> {
             if state.failed.is_empty() {
                 state.failed.push(format!("{}: fewer than two terminals", net.key));
             }
-            return Ok(state);
+            return state;
         }
         let mut tree: Vec<u32> = Vec::new();
         let add_term = |tree: &mut Vec<u32>, t: Term| tree.extend(t.states(space));
@@ -201,6 +212,6 @@ impl Engine<'_> {
             joined.push(reached);
             state.conns.push(path);
         }
-        Ok(state)
+        state
     }
 }

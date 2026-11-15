@@ -123,4 +123,63 @@ impl Engine<'_> {
         self.pairs.legs[k] = Some((layer, lines));
         Ok(vec![stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]])
     }
+
+    /// Lay the four stubs of a pair, one after the other, each fixed for the next. Which goes first can decide
+    /// whether all four fit, so the orders are tried in turn until one does; if none does, the reason the last
+    /// one failed.
+    pub(super) fn lay_stubs(&mut self, four: &[usize]) -> Result<(), String> {
+        let mut last_error = String::new();
+        for code in 0..24 {
+            let mut ok = true;
+            for n in nth_order(four, code) {
+                match self.lay_fixed(n) {
+                    Ok(state) => self.place(n, state),
+                    Err(e) => {
+                        last_error = e;
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                return Ok(());
+            }
+            for &n in four {
+                self.place(n, NetState::default()); // the leg an entry holds stays with it
+            }
+        }
+        Err(last_error)
+    }
+}
+
+/// The `code`-th order of four things (0 to 23); the 0th is the order given.
+fn nth_order(four: &[usize], mut code: usize) -> Vec<usize> {
+    let mut left: Vec<usize> = four.to_vec();
+    let mut order = Vec::new();
+    for size in (1..=4).rev() {
+        order.push(left.remove(code % size));
+        code /= size;
+    }
+    order
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nth_order;
+
+    #[test]
+    fn the_orders_of_four_are_all_there_once_and_begin_with_the_one_given() {
+        let four = [7, 3, 9, 5];
+        assert_eq!(nth_order(&four, 0), four);
+        assert_eq!(nth_order(&four, 1), [3, 7, 9, 5]);
+        let mut all: Vec<Vec<usize>> = (0..24).map(|code| nth_order(&four, code)).collect();
+        for order in &all {
+            let mut sorted = order.clone();
+            sorted.sort();
+            assert_eq!(sorted, [3, 5, 7, 9]);
+        }
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 24);
+    }
 }
