@@ -35,4 +35,7 @@ First version as a library.
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.
+- The result types (`Solution`, `NetResult`, `Track`, `Conflict`, `ConflictKind`, `Attempt`, `Stats`) and
+  `Shape` are `#[non_exhaustive]`: fields and kinds can be added without breaking callers. The tuning fields
+  of `Options` are documented as not stable.
 - Matched pairs (`Problem::pairs`): a trunk split into two legs, joined to their pads by stubs.

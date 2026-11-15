@@ -89,6 +89,7 @@ pub struct Copper {
 }
 
 /// The outline of a piece of copper. In JSON the kind is the field `t`: `"seg"`, `"circle"` or `"poly"`.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "t")]
 pub enum Shape {
@@ -265,6 +266,11 @@ fn ten() -> f64 {
 }
 
 /// How a run is conducted. Every field has a default.
+///
+/// `variants`, `threads`, `max_states`, `max_iterations`, `refine_passes`, `negotiate`, `bend_mm` and
+/// `drop_conflicts` are meant to be set. The rest
+/// tune the search and the negotiation; they are not a stable part of the interface, and a later version may
+/// rename, remove or reinterpret them. Leave them at their defaults unless you are experimenting.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct Options {
@@ -368,6 +374,7 @@ impl std::fmt::Display for Status {
 }
 
 /// What the router found.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Solution {
     /// How the run ended.
@@ -399,6 +406,7 @@ pub struct Solution {
 }
 
 /// What a run cost, all attempts together.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Stats {
     /// Processor seconds per kind of work, summed over the threads. The masks and the cost tables are drawn up
@@ -414,6 +422,7 @@ pub struct Stats {
 }
 
 /// One attempt in brief.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Attempt {
     /// Its number.
@@ -433,6 +442,7 @@ pub struct Attempt {
 }
 
 /// The copper laid for one entry.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct NetResult {
     /// The entry's key (`KEY/NET` for a net of a pair).
@@ -448,6 +458,7 @@ pub struct NetResult {
 }
 
 /// A run of track on one layer.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Track {
     /// The layer.
@@ -457,6 +468,7 @@ pub struct Track {
 }
 
 /// What kind of copper is too close.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConflictKind {
     /// A track of the net stands in ground another net claims.
@@ -471,6 +483,7 @@ pub enum ConflictKind {
 }
 
 /// A place where nets are still too close.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Conflict {
     /// What kind of copper.
