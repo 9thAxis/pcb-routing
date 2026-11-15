@@ -100,9 +100,13 @@ pub(crate) struct Engine<'a> {
     siblings: Vec<Vec<usize>>,
     /// Terminals an entry has besides those of the problem, as (cell, layers): the end of a pair's leg, for a stub.
     extra_terms: Vec<Vec<(u32, u8)>>,
+    /// How often each look-ahead has been asked for in this attempt: (net, goals, holes).
+    asked: std::cell::RefCell<HashMap<LookKey, u32>>,
     /// Per pair, once split: the layer and the two legs as lines.
     legs: Vec<Option<(usize, [Vec<Pt>; 2])>>,
 }
+
+type LookKey = (usize, Vec<(u32, u8)>, Vec<u32>);
 
 struct Trouble {
     track: Vec<u32>,
@@ -190,6 +194,7 @@ impl<'a> Engine<'a> {
                 .collect(),
             grid,
             extra_terms: vec![Vec::new(); p.nets.len()],
+            asked: Default::default(),
             legs: vec![None; p.pairs.len()],
         }
     }

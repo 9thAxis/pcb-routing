@@ -1,5 +1,6 @@
 //! The path search, in two passes.
 
+use super::lookahead::Look;
 use super::worker::{Search, Worker, SHUT_COST, START, TAKEN, VIA};
 use super::*;
 use crate::Event;
@@ -79,8 +80,9 @@ impl Engine<'_> {
     pub(super) fn sweep(
         &self,
         n: usize,
+        sources: &[u32],
         goals: &[(u32, u8)],
-        back: &[f32],
+        back: &Look,
         margin: f64,
         worker: &mut Worker,
     ) -> Option<(f64, f64)> {
@@ -104,10 +106,10 @@ impl Engine<'_> {
         for &(cell, bits) in goals {
             for l in 0..nl {
                 let at = l * hw + cell as usize;
-                if bits & (1 << l) != 0 && back[at].is_finite() {
+                if bits & (1 << l) != 0 && back.get(at).is_finite() {
                     a[at].d = 0.0;
                     a[at].seen = open_mark;
-                    q.push((back[at] as f64 * 64.0) as u64, at as u32);
+                    q.push((back.get(at) as f64 * 64.0) as u64, at as u32);
                 }
             }
         }
@@ -118,15 +120,15 @@ impl Engine<'_> {
                 continue;
             }
             let d = a[ui].d as f64;
-            if d + back[ui] as f64 > limit {
-                last = d + back[ui] as f64;
+            if d + back.get(ui) as f64 > limit {
+                last = d + back.get(ui) as f64;
                 break;
             }
             a[ui].seen = closed;
             count += 1;
             let (l, c) = (ui / hw, ui % hw);
             // the look-ahead is 0 at the sources (and where a hole of the net joins them to another layer)
-            if !reached && back[ui] == 0.0 {
+            if !reached && back.get(ui) == 0.0 && (back.exact() || sources.contains(&(ui as u32))) {
                 reached = true;
                 // Follow one cheapest path from here to the goal, keeping straight where that is as cheap, and
                 // count its corners.
@@ -194,7 +196,7 @@ impl Engine<'_> {
                     return;
                 }
                 // nothing beyond the bound is wanted (this also drops states the sources cannot reach at all)
-                let total = nd + back[v] as f64;
+                let total = nd + back.get(v) as f64;
                 if total > limit || total == f64::INFINITY {
                     return;
                 }
@@ -235,28 +237,28 @@ impl Engine<'_> {
         holes: &[u32],
         worker: &mut Worker,
     ) -> Option<(Vec<u32>, f64)> {
-        let floor = self.floor(n, goals, holes);
-        let floor = &floor[..];
+        let floor = self.look(n, goals, holes, sources);
+        let floor = &floor;
 
         // With a first pass: the look-ahead is its cost where it got to, and elsewhere the most that is certain
         // (the fixed look-ahead, or that the state lies beyond the bound the first pass stopped at).
-        let back: Option<Arc<Vec<f32>>> = from.map(|from| match from {
-            From::Terminals(from) => self.floor(n, from, holes),
+        let back: Option<Look> = from.map(|from| match from {
+            From::Terminals(from) => self.look(n, from, holes, &self.states_of(goals)),
             From::Copper => {
                 let _t = self.shared.timed(1);
-                self.floor_to_copper(n, sources, holes, floor)
+                Look::Exact(self.floor_to_copper(n, sources, holes, floor, &self.states_of(goals)))
             }
         });
         let (bound, upper) = match &back {
             Some(back) => {
                 let margin = self.p.options.sweep_margin;
-                let (bound, upper) = self.sweep(n, goals, &back[..], margin, worker)?;
+                let (bound, upper) = self.sweep(n, sources, goals, back, margin, worker)?;
                 (Some(bound), upper)
             }
             None => (None, f64::INFINITY),
         };
         let _t = self.shared.timed(3);
-        let back = back.as_ref().map(|b| &b[..]);
+        let back = back.as_ref();
         let swept = &worker.swept[..];
         let swept_closed = worker.sweep_gen + 1;
         let look = |at: usize| -> f64 {
@@ -266,10 +268,10 @@ impl Engine<'_> {
                         // kept in single precision: a little under, so that rounding can never put it above the real cost
                         swept[at].d as f64 * 0.9999
                     } else {
-                        (floor[at] as f64).max(bound - back[at] as f64)
+                        (floor.get(at) as f64).max(bound - back.get(at) as f64)
                     }
                 }
-                _ => floor[at] as f64,
+                _ => floor.get(at) as f64,
             }
         };
         let (w, hw, nl) = (self.grid.w as i32, self.hw, self.nl);

@@ -1,5 +1,6 @@
 //! What does not change during a run and is the same for every attempt.
 
+use super::lookahead::Table;
 use super::worker::Worker;
 use super::DIRS;
 use crate::grid::Grid;
@@ -11,13 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Cheapest cost from every (layer, cell) to a set of terminals of a net past the fixed copper alone, shared by all attempts.
-pub(super) type Floors = Mutex<HashMap<(usize, Vec<(u32, u8)>, Vec<u32>), Arc<Vec<f32>>>>;
+pub(super) type Floors = Mutex<HashMap<(usize, Vec<(u32, u8)>, Vec<u32>), Arc<Table>>>;
 
 /// The look-ahead towards a net's copper as it stood in a recent search.
 pub(super) struct CopperFloor {
     pub(super) sources: Vec<u32>,
     pub(super) holes: Vec<u32>,
-    pub(super) table: Arc<Vec<f32>>,
+    pub(super) table: Arc<Table>,
 }
 
 pub(super) type CopperFloors = Mutex<HashMap<usize, Vec<CopperFloor>>>;
@@ -35,13 +36,21 @@ pub(crate) struct Diagnostics {
 }
 
 /// The kinds of work whose time is kept.
-pub(super) const CLOCK_NAMES: [&str; 6] =
-    ["cost tables", "look-ahead to copper", "first pass", "second pass", "claims", "conflict test"];
+pub(super) const CLOCK_NAMES: [&str; 8] = [
+    "cost tables",
+    "look-ahead to copper",
+    "first pass",
+    "second pass",
+    "claims",
+    "conflict test",
+    "masks",
+    "fixed look-ahead",
+];
 
 /// Counters of one run, all attempts together.
 #[derive(Default)]
 pub(super) struct Counters {
-    nanos: [AtomicU64; 6],
+    nanos: [AtomicU64; 8],
     pub(super) expanded: AtomicU64,
     pub(super) swept: AtomicU64,
     pub(super) mismatches: AtomicU64,
@@ -69,6 +78,8 @@ impl Shared {
         use rayon::prelude::*;
         let grid = Grid::new(p.window, p.step);
         let (nl, hw, w, h) = (p.layers.len(), grid.cells(), grid.w as i32, grid.h as i32);
+        let counters: Arc<Counters> = Arc::default();
+        let setup = Timed(counters.clone(), 6, std::time::Instant::now());
         let masks: Vec<Vec<u8>> = p.nets.par_iter().map(|n| net_mask(p, &grid, n)).collect();
         let open = masks
             .par_iter()
@@ -99,13 +110,14 @@ impl Shared {
                 open
             })
             .collect();
+        drop(setup);
         Arc::new(Shared {
             masks,
             open,
             floors: Floors::default(),
             copper_floors: CopperFloors::default(),
             stock: Mutex::new(Vec::new()),
-            counters: Arc::default(),
+            counters,
             diagnostics,
         })
     }

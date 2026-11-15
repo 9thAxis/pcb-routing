@@ -291,6 +291,11 @@ pub struct Options {
     pub two_pass: bool,
     /// The most the first pass goes beyond the cheapest corner-free path, in 45 degree corners' worth of cost.
     pub sweep_margin: f64,
+    /// How often a connection is laid with the straight way to its goal as look-ahead before the exact cost
+    /// past the fixed copper is worked out for it (a table over much of the board, shared by all attempts).
+    /// The table repays itself on connections that are laid again and again while nets negotiate, not on those
+    /// laid once. 0: always the table.
+    pub exact_after: usize,
     /// Rounds without fewer nets in conflict before the standing cost is spread round the places of conflict
     /// (0: never).
     pub stall_after: usize,
@@ -319,6 +324,7 @@ impl Default for Options {
             bend_mm: 0.3,
             two_pass: true,
             sweep_margin: 20.0,
+            exact_after: 2,
             stall_after: 3,
             patience: 20,
             threads: 0,
