@@ -257,3 +257,25 @@ fn a_pair_that_cannot_be_laid_does_not_take_the_other_nets_with_it() {
     assert!((other.length_mm - 3.0).abs() < 1e-6, "{} mm", other.length_mm);
     assert!(s.nets.iter().all(|n| n.key == "other" || n.tracks.is_empty()), "copper of the pair is left");
 }
+
+/// A track wider than its own pad, on pads at a fine pitch: the cell nearest the pad's middle is clear of the
+/// neighbouring pad, but the last piece of track from that cell to the exact middle, off the grid, was not
+/// tested and came nearer the neighbour than the clearance. The track now ends on the cell.
+#[test]
+fn the_end_of_a_track_at_a_pad_keeps_its_distance_from_the_next_pad() {
+    let pad = |net: &str, x0: f64, x1: f64| json!({"t": "poly", "rings": [[[x0, 5.591], [x1, 5.591], [x1, 6.391], [x0, 6.391]]], "net": net, "layers": ["F"], "pad": true});
+    let mut a = net("a", [8.5555, 5.991], [8.6, 2.0], &["F"]);
+    a["width"] = json!(0.3);
+    a["clearance"] = json!({"default": 0.1724});
+    let mut v = small(vec![a]);
+    v["step"] = json!(0.1);
+    v["copper"] = json!([pad("a", 8.436, 8.675), pad("b", 8.035, 8.275)]);
+    let s = route(&problem(v)).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    for track in &s.nets[0].tracks {
+        for point in &track.points {
+            let gap = point[0] - 0.15 - 8.275;
+            assert!(point[1] < 5.591 - 0.3 || gap >= 0.1724 - 1e-9, "{point:?} is {gap:.4} mm from the next pad");
+        }
+    }
+}

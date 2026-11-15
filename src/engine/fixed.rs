@@ -187,6 +187,32 @@ impl<'p> Fixed<'p> {
         self.page(n, cell >> PAGE_BITS).mask[cell & (PAGE - 1)]
     }
 
+    /// The mask of net `n` at any point, as it would be at a cell centre there; None outside the window.
+    /// For what is laid off the grid: the end of a track at the exact place of a pad.
+    pub(super) fn mask_at(&self, n: usize, xy: Pt) -> Option<u8> {
+        let cell = self.grid.cell(xy)?;
+        let (j, i) = (cell / self.grid.w, cell % self.grid.w);
+        let rect = Rect { i0: i, j0: j, w: 1, h: 1 };
+        let p = self.p;
+        // a grid of the one point
+        let point = Grid { x0: xy[0], y0: xy[1], step: self.grid.step, w: 1, h: 1 };
+        let mut mask = [0u8];
+        stamp_fixed(
+            p,
+            &point,
+            &p.nets[n],
+            true,
+            Rect::whole(&point),
+            &mut mask,
+            Things {
+                copper: self.copper.near(rect).into_iter().map(|k| &p.copper[k as usize]),
+                regions: self.regions.near(rect).into_iter().map(|k| &p.regions[k as usize]),
+                holes: self.holes.near(rect).into_iter().map(|k| &p.holes[k as usize]),
+            },
+        );
+        Some(mask[0])
+    }
+
     /// The directions in which net `n` can take a step from a cell on a layer past the fixed copper, a bit
     /// each (see `DIRS`): inside the window, the next cell open, and for a slanted step both cells beside it open.
     #[inline]

@@ -4,7 +4,7 @@ use super::fixed::Fixed;
 use super::space::{Space, Steps, Term};
 use crate::geom::{dist, inside};
 use crate::grid::Grid;
-use crate::mask::layer_bits;
+use crate::mask::{layer_bits, VIA_BIT};
 use crate::model::*;
 use std::collections::HashMap;
 
@@ -78,6 +78,10 @@ impl Plan {
             }
             terms.push(list);
         }
+        // a track ends at the exact place only where the piece that leads there from the cell is clear
+        for (n, places) in exact.iter_mut().enumerate() {
+            places.retain(|&cell, xy| reaches_clear(fixed, &grid, n, cell as usize, *xy));
+        }
         Plan {
             steps: Steps::new(grid.w),
             shut: grid.disc(p.rules.hole_centre_mm),
@@ -96,6 +100,22 @@ impl Plan {
             exact,
         }
     }
+}
+
+/// Whether a track of net `n` may run from the centre of `cell` to the point `xy` (the exact place of a pad or
+/// hole in that cell): on every layer open to it at the cell, it must keep its distances all the way. The
+/// cells are tested at their centres only, and the last piece of a track, off the grid, can come nearer a
+/// neighbouring pad than the centre does (a track wider than its own pad, on pads at a fine pitch).
+fn reaches_clear(fixed: &Fixed, grid: &Grid, n: usize, cell: usize, xy: Pt) -> bool {
+    let from = grid.xy(cell);
+    let open = !fixed.mask(n, cell) & !VIA_BIT;
+    // tested every eighth of a step: between two tests the track comes no nearer than a hair
+    let pieces = (dist(from, xy) / (grid.step / 8.0)).ceil().max(1.0) as usize;
+    (1..=pieces).all(|k| {
+        let f = k as f64 / pieces as f64;
+        let at = [from[0] + (xy[0] - from[0]) * f, from[1] + (xy[1] - from[1]) * f];
+        fixed.mask_at(n, at).is_some_and(|mask| mask & open == 0)
+    })
 }
 
 /// Where a terminal of `net` is reached, or why it cannot be. Its own cell if a track of the net may end there
