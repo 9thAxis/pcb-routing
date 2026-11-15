@@ -412,3 +412,69 @@ fn only_nets_of_one_bus_are_drawn_together() {
     assert_eq!(run(0.5, [Some("d"), None]), plain);
     assert_eq!(run(0.5, [Some("d"), Some("e")]), plain);
 }
+
+/// Three nets of a bus with through-hole pads a millimetre apart, free to use either layer. With their lanes
+/// given, the outer two leave room for the middle one: all three run on one layer, in the order of their pads,
+/// each beside the next.
+#[test]
+fn nets_of_a_bus_keep_their_lanes() {
+    let both = ["F", "B"];
+    let nets: Vec<Value> = [("a", 2.0), ("b", 3.0), ("c", 4.0)]
+        .iter()
+        .enumerate()
+        .map(|(lane, &(key, y))| {
+            let mut n = net(key, [1.0, y], [9.0, y], &both);
+            n["terminals"] = json!([{"xy": [1.0, y], "layers": both}, {"xy": [9.0, y], "layers": both}]);
+            n["bus"] = json!("d");
+            n["bus_lane"] = json!(lane);
+            n
+        })
+        .collect();
+    let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": both, "nets": nets});
+    v["options"] = json!({"bus_pull": 0.5});
+    let p: Problem = serde_json::from_value(v).unwrap();
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    let layers: std::collections::HashSet<&str> =
+        s.nets.iter().flat_map(|n| &n.tracks).map(|t| t.layer.as_str()).collect();
+    assert_eq!(layers.len(), 1, "the bus is on {layers:?}");
+    assert!(s.nets.iter().all(|n| n.vias.is_empty()));
+    assert!(beside(&s, 1, 0, 0.7) > 4.0 && beside(&s, 1, 2, 0.7) > 4.0, "b is not beside both a and c");
+    // half way along, in the order of the pads
+    let at = |n: usize| -> f64 {
+        let cross = s.nets[n]
+            .tracks
+            .iter()
+            .flat_map(|t| t.points.windows(2))
+            .find(|w| (w[0][0] - 5.0) * (w[1][0] - 5.0) <= 0.0 && w[0][0] != w[1][0]);
+        let w = cross.expect("the track passes x = 5");
+        w[0][1] + (w[1][1] - w[0][1]) * (5.0 - w[0][0]) / (w[1][0] - w[0][0])
+    };
+    assert!(at(0) < at(1) && at(1) < at(2), "half way: a at {}, b at {}, c at {}", at(0), at(1), at(2));
+}
+
+/// A net whose shorter way passes under another net of its bus on the other layer, and whose longer way stays
+/// on its own side: with a price on running over or under the bus it takes the longer way; without, the shorter.
+#[test]
+fn a_net_of_a_bus_is_slow_to_pass_under_another() {
+    let both = ["F", "B"];
+    let run = |cross: f64| {
+        let mut a = net("a", [1.0, 3.0], [9.0, 3.0], &["F"]);
+        let mut b = net("b", [4.0, 4.0], [6.0, 4.0], &both);
+        b["terminals"] = json!([{"xy": [4.0, 4.0], "layers": both}, {"xy": [6.0, 4.0], "layers": both}]);
+        a["bus"] = json!("d");
+        b["bus"] = json!("d");
+        // A wall below a, on both layers: b gets past it above (under a, on the other layer) or below. And one
+        // above a on its own layer, so that a cannot make room beside itself.
+        let above = json!({"t": "seg", "a": [1.5, 2.6], "b": [8.5, 2.6], "w": 0.2, "net": "WALL", "layers": ["F"]});
+        let mut v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": both,
+                           "copper": [wall(5.0, 3.4, 5.0, &both), above], "nets": [a, b]});
+        v["options"] = json!({"bus_cross": cross});
+        let s = route(&serde_json::from_value::<Problem>(v).unwrap()).unwrap();
+        assert_eq!(s.status, Status::Routed, "{}", s.message);
+        s.nets[1].tracks.iter().flat_map(|t| &t.points).map(|p| p[1]).fold(f64::MAX, f64::min)
+    };
+    let (free, dear) = (run(0.0), run(6.0));
+    assert!(free < 3.3, "free to pass under, b comes no nearer a than y = {free}");
+    assert!(dear > 3.9, "with a price on passing under, b goes up to y = {dear}");
+}

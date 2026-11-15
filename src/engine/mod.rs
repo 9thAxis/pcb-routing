@@ -74,8 +74,8 @@ struct NetState {
     cost: f64,
     /// Track length in grid steps.
     steps: f64,
-    /// For a net of a bus: what of `cost` is for steps away from the laid nets of its bus, as they stood when
-    /// this was laid (see `Options::bus_pull`; `cost` itself does not hold the pull).
+    /// For a net of a bus: what its path costs more than `cost` for where it is by the laid nets of its bus,
+    /// as they stood when this was laid (see `Options::bus_pull` and `bus_cross`).
     apart: f64,
     /// Terminals that could not be joined, each with the reason.
     failed: Vec<String>,

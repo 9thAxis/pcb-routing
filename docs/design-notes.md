@@ -47,19 +47,32 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   changes layer in. With these mended, cases more than 0.0025 mm under the rule between new nets went from
   243 (before any of this, from stubs) to none.
 * Buses drawn together (`Net::bus`, `Options::bus_pull`): a net of a bus pays more per unit length wherever
-  it is not within twice the least track pitch of a laid net of its bus, on the same layer. As a surcharge
-  away from the bus and not a discount beside it, so that every look-ahead stays a lower bound. Beside its
-  neighbour: 58 to 64 % of a net's length (the designers 68 %). The strength hardly matters: pulls of 0.1,
-  0.2, 0.3, 0.4, 0.6 gave 64.2, 64.4, 65.0, 64.4, 64.7 %, with corners per connection rising from 1.58 to
-  1.70. Pairs of neighbours that cross: 30 % without, 34, 37, 32, 30, 32 % with, in no order: a few more,
-  within what one run differs from the next. Nothing orders the nets within the bundle.
+  it is not beside a laid net of its bus, on the same layer. As a surcharge away from the bus and not a
+  discount beside it, so that every look-ahead stays a lower bound. The figures, over 199 pairs of bus
+  neighbours (each pair once: counted once per two parts it is side by side on, as at first, one board with
+  two pairs on many parts made 241 of them and the crossings look half as bad again):
+
+  | | beside its neighbour | pairs that cross | pairs on one layer |
+  |---|---|---|---|
+  | the designers | 72 % | 19 % | 117 |
+  | no pull | 63 % | 22 % | 100 |
+  | pull 0.2, beside = within two pitches | 67 % | 24 % | 103 |
+  | and lanes (`Net::bus_lane`) | 71 % | 21 % | 109 |
+  | and a price on passing over or under (`Options::bus_cross` 6) | 70 % | 14 % | 111 |
+
+  Where two neighbours are on one layer they run together for 93 % of their length with or without any
+  of this; all that was missing was on pairs split over two layers. Without lanes the outer nets of a bus
+  closed up on each other as they left their pads and the net between them went to the other layer. With
+  lanes, beside a net k lanes away is from k - 1/2 to k + 1 pitches from it. The pull's strength hardly
+  matters (0.1, 0.2, 0.4 with lanes: 67, 71, 70 % beside; 23, 21, 25 % crossing, which is what one run
+  differs from the next); the price on passing over does (2 and 6: 19 and 14 % crossing), for half a
+  percent more track.
   The price: a net away from its bus looks ahead with 1/(1 + pull) of its real cost, so its first pass
   covers more ground (two bus nets far apart on an open board: 38,000 to 81,000 states at 0.2), and the
-  negotiation takes a round more now and then (18 of 251 random problems at 0.2). A review found that the
-  closing passes compared a new path, priced against the bus as it stood, with the old path's price from
-  when it was laid: the net of a bus laid first, with nothing to be beside yet, was never drawn in. Both
-  are now priced against the bus as it stands (65 % beside, 37 % crossing at 0.2: the crossings are a real
-  cost of the pull, not chance).
+  negotiation takes a round more now and then (18 of 251 random problems at 0.2); the public boards take
+  about a seventh longer. A review found that the closing passes compared a new path, priced against the
+  bus as it stood, with the old path's price from when it was laid: the net of a bus laid first, with
+  nothing to be beside yet, was never drawn in. Both are now priced against the bus as it stands.
 * Open: a via between a decoupling capacitor and its pin twice as often (14 % against 6 %); short
   last stretches before a pad.
 

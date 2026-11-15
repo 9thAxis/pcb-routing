@@ -93,6 +93,10 @@ impl Problem {
         not_negative("options.history_step".into(), o.history_step)?;
         not_negative("options.sweep_margin".into(), o.sweep_margin)?;
         not_negative("options.bus_pull".into(), o.bus_pull)?;
+        not_negative("options.bus_cross".into(), o.bus_cross)?;
+        if o.bus_cross > 100.0 {
+            return Err(invalid("options.bus_cross", format!("is {}: at most 100", o.bus_cross)));
+        }
         if o.bus_pull > 10.0 {
             return Err(invalid(
                 "options.bus_pull",

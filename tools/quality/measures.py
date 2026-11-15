@@ -393,34 +393,43 @@ def neighbour_nets(reference):
 
 
 def bus_pairs(reference):
-    """The bus pairs of a board as [(net A, net B, pitch)], and how many buses they form."""
+    """The bus pairs of a board as [(net A, net B, pitch)], each pair once with the widest pitch it has between
+    two parts, and how many buses they form (groups of nets joined by those pairs)."""
     tracked = tracked_nets(reference)
     between = collections.defaultdict(list)  # (part F, part G) -> [(A, B, pitch)]
     for (a, b), where in neighbour_nets(reference).items():
         if a in tracked and b in tracked:
             for f, g in itertools.combinations(sorted(where), 2):
                 between[(f, g)].append((a, b, max(where[f], where[g])))
-    chosen, buses = [], 0
+    pitch = {}  # (A, B) -> pitch, for the pairs of a group of three or more between the same two parts
     for pairs in between.values():
-        linked = collections.defaultdict(set)
-        for a, b, _ in pairs:
-            linked[a].add(b)
-            linked[b].add(a)
-        seen = set()
-        for net in linked:
-            if net in seen:
-                continue
-            group, stack = set(), [net]
-            while stack:
-                x = stack.pop()
-                if x not in group:
-                    group.add(x)
-                    stack.extend(linked[x])
-            seen |= group
+        for group in _groups((a, b) for a, b, _ in pairs):
             if len(group) >= 3:
-                buses += 1
-                chosen += [p for p in pairs if p[0] in group]
-    return chosen, buses
+                for a, b, d in pairs:
+                    if a in group:
+                        pitch[(a, b)] = max(d, pitch.get((a, b), d))
+    return [(a, b, d) for (a, b), d in pitch.items()], len(_groups(pitch))
+
+
+def _groups(pairs):
+    """The sets of things joined by the pairs, in the order first met."""
+    linked = collections.defaultdict(set)
+    for a, b in pairs:
+        linked[a].add(b)
+        linked[b].add(a)
+    seen, groups = set(), []
+    for net in linked:
+        if net in seen:
+            continue
+        group, stack = set(), [net]
+        while stack:
+            x = stack.pop()
+            if x not in group:
+                group.add(x)
+                stack.extend(linked[x])
+        seen |= group
+        groups.append(group)
+    return groups
 
 
 def bus_measures(dump, pairs):

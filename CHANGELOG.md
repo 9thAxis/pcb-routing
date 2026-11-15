@@ -33,10 +33,12 @@ First version as a library.
 - An entry that changes layer on a via of another entry of the same net holds that via too: the other entry
   could be laid again with its via elsewhere, and the result then had a layer change with no via.
 - Buses: nets given the same `bus` name are drawn to run beside each other. A net of a bus pays
-  `options.bus_pull` (0.2) more per unit length wherever it is not beside a laid net of its bus. The KiCad
-  bridge names as a bus three or more nets with neighbouring pads on the same two parts (`--bus-pull`, 0 for
-  none). On 241 pairs of bus neighbours on public boards: 58 to 65 % of a net's length beside its neighbour
-  (the designers: 68 %); neighbours that cross, 30 to 37 % (26 %).
+  `options.bus_pull` (0.2) more per unit length wherever it is not beside a laid net of its bus, in the lane
+  its `bus_lane` gives it, so that the nets between two others find room; and `options.bus_cross` (6) more
+  where it runs over or under one on another layer. The KiCad bridge names as a bus three or more nets with
+  neighbouring pads on the same two parts, with lanes in the order of the pads (`--bus-pull`, 0 for none).
+  On 199 pairs of bus neighbours on public boards: 63 to 70 % of a net's length beside its neighbour (the
+  designers: 72 %), and 22 to 14 % of the pairs crossing (19 %).
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.

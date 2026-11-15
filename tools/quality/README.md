@@ -112,7 +112,8 @@ Arcs are measured along their chord. A piece counts whole.
 Two pads of a part are *neighbours* when their distance is at most 1.3 times the distance from the first to
 its nearest pad. Two nets are a *pair* between parts F and G when they have neighbouring pads on F and
 neighbouring pads on G. Pairs between the same two parts that hang together form a group, and only groups of
-three nets or more count as buses. The *pitch* of a pair is the larger of its two pad distances. The first
+three nets or more count as buses. A pair that is side by side on more than two parts counts once. The
+*pitch* of a pair is the larger of its pad distances. The first
 net of a pair is the one whose name sorts first. Each figure is the mean over the pairs both of whose nets
 have tracks in the routing:
 

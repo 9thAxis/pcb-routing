@@ -2,7 +2,7 @@
 
 use super::price::Mode;
 use super::search::{From, Query};
-use super::worker::Worker;
+use super::worker::{Worker, BESIDE, NEAR, OVER};
 use super::*;
 
 impl Engine<'_> {
@@ -56,9 +56,8 @@ impl Engine<'_> {
         result
     }
 
-    /// For a net of a bus: mark in `w` the ground beside the laid nets of its bus, within twice the least
-    /// distance between their tracks' middles and on the same layer, and set what the net pays more away from
-    /// it. Nothing for a net of no bus, or with none of its bus laid.
+    /// For a net of a bus: mark in `w` the ground beside the laid nets of its bus, on the same layer and in
+    /// the lane the net has by them (see `Net::bus_lane`), and set what the net pays more away from it. Nothing for a net of no bus, or with none of its bus laid.
     fn mark_bus(&self, n: usize, w: &mut Worker) {
         let (p, plan) = (self.p, self.plan);
         let pull = p.options.bus_pull;
@@ -69,28 +68,69 @@ impl Engine<'_> {
         let (grid, space, rules) = (&plan.grid, plan.space, &p.rules);
         let ground = &mut w.ground;
         ground.apart = pull as f32;
+        ground.over = p.options.bus_cross.max(pull) as f32;
         ground.beside.resize(space.states(), 0);
         let quiet = if rules.quiet_clearance_mm > 0.0 { rules.quiet_clearance_mm } else { rules.new_clearance_mm };
         for &m in &plan.mates[n] {
             let gap = if p.nets[m].quiet != p.nets[n].quiet { quiet } else { rules.new_clearance_mm };
-            let reach = 2.0 * (p.nets[n].width / 2.0 + gap + p.nets[m].width / 2.0);
-            let disc = grid.disc(reach);
+            // The least distance between the middles of the two tracks, and how many such lie between their
+            // lanes. Beside the mate is from where the nets between them have room (for neighbours: from the
+            // mate itself) to one lane further out.
+            let pitch = p.nets[n].width / 2.0 + gap + p.nets[m].width / 2.0;
+            let lanes = (p.nets[n].bus_lane - p.nets[m].bus_lane).unsigned_abs().max(1) as f64;
+            let (near, far) = (if lanes > 1.0 { (lanes - 0.5) * pitch } else { 0.0 }, (lanes + 1.0) * pitch);
+            let (inner, outer) = (grid.disc(near), grid.disc(far));
             // Discs this wide, drawn round every few cells of a path, leave a band nine tenths as wide between
             // them at the least. The ends of every stretch on a layer get theirs whatever its length.
-            let stride = ((reach / grid.step * 2.0 / 3.0) as usize).max(1);
+            let stride = ((pitch / grid.step * 2.0 / 3.0) as usize).max(1);
+            let mut drawn: Vec<(usize, usize)> = Vec::new();
             for conn in &self.laid.nets[m].conns {
                 let layer = |k: usize| space.split(conn[k] as usize).0;
                 for (k, &s) in conn.iter().enumerate() {
                     let end = k == 0 || k + 1 == conn.len() || layer(k - 1) != layer(k) || layer(k + 1) != layer(k);
-                    if k % stride != 0 && !end {
-                        continue;
+                    if k % stride == 0 || end {
+                        drawn.push(space.split(s as usize));
                     }
-                    let (layer, cell) = space.split(s as usize);
-                    for c in grid.around(cell, &disc) {
+                }
+            }
+            // too near this mate first (unless beside another already), then beside it, then the first undone
+            let mut too_near: Vec<usize> = Vec::new();
+            if near > 0.0 {
+                for &(layer, cell) in &drawn {
+                    for c in grid.around(cell, &inner) {
                         let idx = space.state(layer, c);
                         if ground.beside[idx] == 0 {
-                            ground.beside[idx] = 1;
-                            ground.beside_set.push(idx as u32);
+                            ground.beside[idx] = NEAR;
+                            too_near.push(idx);
+                        }
+                    }
+                }
+            }
+            for &(layer, cell) in &drawn {
+                for c in grid.around(cell, &outer) {
+                    let idx = space.state(layer, c);
+                    if ground.beside[idx] == 0 {
+                        ground.beside_set.push(idx as u32);
+                    }
+                    if ground.beside[idx] != NEAR {
+                        ground.beside[idx] = BESIDE;
+                    }
+                }
+            }
+            for idx in too_near {
+                ground.beside[idx] = 0;
+            }
+            // over or under the mate on the other layers, unless beside another there
+            if ground.over > ground.apart {
+                let under = grid.disc(pitch);
+                for &(layer, cell) in &drawn {
+                    for other in (0..space.nl).filter(|&l| l != layer) {
+                        for c in grid.around(cell, &under) {
+                            let idx = space.state(other, c);
+                            if ground.beside[idx] == 0 {
+                                ground.beside[idx] = OVER;
+                                ground.beside_set.push(idx as u32);
+                            }
                         }
                     }
                 }
@@ -98,8 +138,8 @@ impl Engine<'_> {
         }
     }
 
-    /// For a net of a bus: what of the cost of its path as it lies is for steps away from the laid nets of its
-    /// bus as they stand now (see `NetState::apart`, which says the same of them as they stood). 0 for a net
+    /// For a net of a bus: what its path as it lies costs more for where it is by the laid nets of its bus
+    /// as they stand now (see `NetState::apart`, which says the same of them as they stood). 0 for a net
     /// of no bus.
     pub(super) fn apart_now(&self, n: usize) -> f64 {
         if self.p.options.bus_pull <= 0.0 || self.plan.mates[n].is_empty() {
@@ -112,9 +152,10 @@ impl Engine<'_> {
         let mut apart = 0.0;
         for pair in self.laid.nets[n].conns.iter().flat_map(|conn| conn.windows(2)) {
             let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
-            if la == lb && w.ground.apart_at(pair[1] as usize) > 1.0 {
+            if la == lb {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
-                apart += lc[lb] * if ja != jb && ia != ib { std::f64::consts::SQRT_2 } else { 1.0 };
+                let len = if ja != jb && ia != ib { std::f64::consts::SQRT_2 } else { 1.0 };
+                apart += lc[lb] * len * (w.ground.apart_at(pair[1] as usize) as f64 - 1.0);
             }
         }
         w.ground.clear_bus();
@@ -275,9 +316,7 @@ impl Engine<'_> {
                 let diag = ja != jb && ia != ib;
                 let len = if diag { std::f64::consts::SQRT_2 } else { 1.0 };
                 state.cost += lc[lb] * len;
-                if w.ground.apart_at(pair[1] as usize) > 1.0 {
-                    state.apart += lc[lb] * len;
-                }
+                state.apart += lc[lb] * len * (w.ground.apart_at(pair[1] as usize) as f64 - 1.0);
                 state.steps += len;
             }
         }

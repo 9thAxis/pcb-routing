@@ -157,8 +157,7 @@ impl Engine<'_> {
                 let now = &self.laid.nets[n];
                 let (missing, was_missing) = (state.failed.len(), now.failed.len());
                 // (for a net of a bus, both paths as they stand to its bus now: the others have moved since)
-                let pull = self.p.options.bus_pull;
-                let (cost, was_cost) = (state.cost + pull * state.apart, now.cost + pull * self.apart_now(n));
+                let (cost, was_cost) = (state.cost + state.apart, now.cost + self.apart_now(n));
                 if missing < was_missing || (missing == was_missing && cost < was_cost - 1e-6) {
                     let old = now.clone();
                     self.place(n, state);

@@ -348,7 +348,7 @@ def _grown(rings, grow, net, layers):
 
 
 def buses(pads, nets=None):
-    """Which nets run as buses: net name -> name of its bus (among `nets`, if given).
+    """Which nets run as buses: net name -> (name of its bus, its lane across it), among `nets` if given.
 
     Two nets are neighbours on a part if they have pads there no further apart than 1.3 times the distance
     from one of them to its nearest pad, whatever that pad is of. A bus is three or more nets joined by being
@@ -387,7 +387,25 @@ def buses(pads, nets=None):
         for a, b in pairs:
             if sizes[find(group, a)] >= 3:
                 bus[find(bus, a)] = find(bus, b)
-    return {net: "bus " + find(bus, net) for net in bus}
+    names = {net: "bus " + find(bus, net) for net in bus}
+    return {net: (name, lane) for name in sorted(set(names.values()))
+            for net, lane in _lanes({net for net in names if names[net] == name}, parts).items()}
+
+
+def _lanes(nets, parts):
+    """The place of each net across its bus: its rank along the row of pads on the part that has most of the
+    bus's nets (along the longer side of what those pads cover, then across). Nets not on that part come last."""
+    def on(part):
+        return [pad for pad in parts[part] if pad.net in nets]
+    part = max(sorted(parts), key=lambda part: len({pad.net for pad in on(part)}))
+    pads = on(part)
+    wide = max(p.at[0] for p in pads) - min(p.at[0] for p in pads) >= max(p.at[1] for p in pads) - min(p.at[1] for p in pads)
+    order = []
+    for pad in sorted(pads, key=lambda p: (p.at[0], p.at[1]) if wide else (p.at[1], p.at[0])):
+        if pad.net not in order:
+            order.append(pad.net)
+    order += sorted(nets - set(order))
+    return {net: lane for lane, net in enumerate(order)}
 
 
 def build_problem(picture, rules, only=None, narrow=False, options=None):
@@ -454,7 +472,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
                          clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
                          terminals=terminals, via_penalty_mm=rules.settings.via_penalty))
         if name in bus:
-            nets[-1]["bus"] = bus[name]
+            nets[-1]["bus"], nets[-1]["bus_lane"] = bus[name]
 
     # The engine keeps one distance between hole centres: enough for two holes of the widest new via's drill. A
     # wider hole asks more of a new via, and its own net's vias are not held off by its copper: the ground

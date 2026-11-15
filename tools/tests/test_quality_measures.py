@@ -292,6 +292,12 @@ class Buses(unittest.TestCase):
                 p["at"][1] *= 2
         self.assertEqual([pitch for _, _, pitch in m.bus_pairs(d)[0]], [2.0, 2.0])
 
+    def test_a_pair_that_is_side_by_side_on_three_parts_counts_once(self):
+        d = bus_board(straight())
+        d["pads"] += [pad(n, 20, i, ref="J3") for i, n in enumerate("ABC")]
+        self.assertEqual(sorted(m.bus_pairs(d)[0]), [("A", "B", 1.0), ("B", "C", 1.0)])
+        self.assertEqual(m.bus_pairs(d)[1], 1)
+
     def test_parallel_tracks_run_alongside_all_the_way(self):
         f = m.bus_figures(m.bus_measures(bus_board(straight()), [("A", "B", 1.0), ("B", "C", 1.0)]))
         self.assertEqual(f["pairs"], 2)

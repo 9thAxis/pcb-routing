@@ -259,6 +259,11 @@ pub struct Net {
     /// [`Options::bus_pull`]). Any name; nets with the same name are of the same bus.
     #[serde(default)]
     pub bus: Option<String>,
+    /// Its place across its bus, counted from one side: nets one lane apart are drawn to run next to each
+    /// other, nets `k` lanes apart to leave room for the `k - 1` between them. Where all nets of a bus have the
+    /// same lane (0 by default) they are drawn together in no order.
+    #[serde(default)]
+    pub bus_lane: i32,
 }
 
 fn one() -> f64 {
@@ -272,7 +277,7 @@ fn ten() -> f64 {
 /// How a run is conducted. Every field has a default.
 ///
 /// `variants`, `threads`, `max_states`, `max_iterations`, `refine_passes`, `negotiate`, `bend_mm`,
-/// `bus_pull` and `drop_conflicts` are meant to be set. The rest
+/// `bus_pull`, `bus_cross` and `drop_conflicts` are meant to be set. The rest
 /// tune the search and the negotiation; they are not a stable part of the interface, and a later version may
 /// rename, remove or reinterpret them. Leave them at their defaults unless you are experimenting.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -317,6 +322,10 @@ pub struct Options {
     /// per unit length wherever it does not run beside another net of its bus that is already laid (0.2: a
     /// way beside the others may be a fifth longer than the shortest and is still taken). 0: not at all.
     pub bus_pull: f64,
+    /// What a net of a bus pays more per unit length where it runs over or under another net of its bus on
+    /// another layer, within one track pitch of it: 6 makes such a step cost seven times its length, so that
+    /// the nets of a bus are slow to cross each other. Never less than `bus_pull`.
+    pub bus_cross: f64,
     /// Rounds without fewer nets in conflict before the standing cost is spread round the places of conflict
     /// (0: never).
     pub stall_after: usize,
@@ -350,6 +359,7 @@ impl Default for Options {
             sweep_margin: 20.0,
             exact_after: None,
             bus_pull: 0.2,
+            bus_cross: 6.0,
             stall_after: 3,
             patience: 20,
             drop_conflicts: true,

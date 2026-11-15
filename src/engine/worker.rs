@@ -62,12 +62,15 @@ pub(super) struct Ground {
     pub(super) priced_vias: Vec<Cell<u32>>,
     /// Counted up for each net laid.
     pub(super) lay: u32,
-    /// For a net of a bus: 1 at the states beside a laid net of its bus, where it does not pay for being apart
-    /// (see `Options::bus_pull`). Empty until a net of a bus is laid; `beside_set` lists what is set.
+    /// For a net of a bus: BESIDE at the states beside a laid net of its bus, where it does not pay for being
+    /// apart (see `Options::bus_pull`), OVER at those over or under one on another layer, where it pays more
+    /// (`Options::bus_cross`). Empty until a net of a bus is laid; `beside_set` lists what is set.
     pub(super) beside: Vec<u8>,
     pub(super) beside_set: Vec<u32>,
     /// What the net being laid pays more per unit length away from its bus; 0 for a net of none.
     pub(super) apart: f32,
+    /// And what it pays more over or under a net of its bus on another layer.
+    pub(super) over: f32,
 }
 
 /// The tables are read and filled through shared references (a page of costs is drawn up in the middle of a
@@ -89,6 +92,11 @@ pub(super) struct Swept {
     /// worked out once, where every neighbour that reaches the state would work it out again.
     pub(super) ahead: Cell<f32>,
 }
+
+/// Marks in `Ground::beside`; NEAR only while the marks of one net of the bus are drawn.
+pub(super) const BESIDE: u8 = 1;
+pub(super) const NEAR: u8 = 2;
+pub(super) const OVER: u8 = 3;
 
 pub(super) const SHUT_COST: f32 = f32::INFINITY;
 
@@ -130,6 +138,7 @@ impl Worker {
                 beside: Vec::new(),
                 beside_set: Vec::new(),
                 apart: 0.0,
+                over: 0.0,
             },
         })
     }
@@ -154,13 +163,17 @@ impl Ground {
         }
     }
 
-    /// What a step into a state costs more for being away from the bus of the net being laid, as a factor.
+    /// What a step into a state costs more for where it is by the bus of the net being laid, as a factor: 1
+    /// beside a net of the bus, more away from it, more still over or under one on another layer.
     #[inline]
     pub(super) fn apart_at(&self, state: usize) -> f32 {
-        if self.apart > 0.0 && self.beside[state] == 0 {
-            1.0 + self.apart
-        } else {
-            1.0
+        if self.apart <= 0.0 {
+            return 1.0;
+        }
+        match self.beside[state] {
+            BESIDE => 1.0,
+            OVER => 1.0 + self.over,
+            _ => 1.0 + self.apart,
         }
     }
 

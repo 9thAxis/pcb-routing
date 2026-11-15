@@ -15,12 +15,12 @@ HOLE = ({"xy", "net"}, {"xy", "net"})
 REGION = ({"rings", "layers", "tracks", "vias"}, {"rings"})
 RULES = ({"hole_centre_mm", "pad_drill_margin_mm", "via_in_pad", "region_margin_mm", "new_clearance_mm", "quiet_clearance_mm"}, set())
 NET = ({"key", "net", "width", "via", "layers", "clearance", "terminals", "via_penalty_mm", "layer_cost", "yield", "weight", "max_mm",
-        "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus"}, {"key", "net", "width", "via", "layers", "clearance", "terminals"})
+        "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus", "bus_lane"}, {"key", "net", "width", "via", "layers", "clearance", "terminals"})
 CLEARANCE = ({"default", "nets"}, {"default"})
 TERMINAL = ({"xy", "layers"}, {"xy", "layers"})
 OPTIONS = ({"max_iterations", "present_start", "present_growth", "present_max", "history_step", "refine_passes", "variants", "negotiate",
             "own_hole_free", "bend_mm", "two_pass", "sweep_margin", "exact_after", "stall_after", "patience", "drop_conflicts",
-            "threads", "max_states", "bus_pull"}, set())
+            "threads", "max_states", "bus_pull", "bus_cross"}, set())
 
 
 def is_point(p):
@@ -284,7 +284,18 @@ class Buses(unittest.TestCase):
         pads = self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c"], 20)
         bus = k.buses(pads)
         self.assertEqual(set(bus), {"a", "b", "c"})
-        self.assertEqual(len(set(bus.values())), 1)
+        self.assertEqual(len({name for name, _ in bus.values()}), 1)
+
+    def test_lanes_follow_the_row_of_pads(self):
+        pads = self.row("U1", ["c", "a", "d", "b"], 0) + self.row("U2", ["c", "a", "d", "b"], 20)
+        self.assertEqual({net: lane for net, (_, lane) in k.buses(pads).items()}, dict(c=0, a=1, d=2, b=3))
+        # a row along x, and a net of the bus that is not on the part the lanes are counted on
+        across = [support.land(k, net, i, 0, half=0.3, part="U1") for i, net in enumerate("abcd")]
+        there = [support.land(k, net, i, 9, half=0.3, part="U2") for i, net in enumerate("bcde")]
+        again = [support.land(k, net, i, 19, half=0.3, part="U3") for i, net in enumerate("bcde")]
+        lanes = {net: lane for net, (_, lane) in k.buses(across + there + again).items()}
+        self.assertEqual([lanes[n] for n in "bcd"], sorted(lanes[n] for n in "bcd"))
+        self.assertEqual(len(set(lanes.values())), len(lanes))
 
     def test_two_nets_are_not_a_bus(self):
         self.assertEqual(k.buses(self.row("U1", ["a", "b"], 0) + self.row("U2", ["a", "b"], 20)), {})
@@ -329,15 +340,16 @@ class Buses(unittest.TestCase):
         pads = (self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c"], 20)
                 + self.row("U3", ["d", "e", "f"], 40) + self.row("U4", ["d", "e", "f"], 60))
         bus = k.buses(pads)
-        self.assertEqual(bus["a"], bus["c"])
-        self.assertEqual(bus["d"], bus["f"])
-        self.assertNotEqual(bus["a"], bus["d"])
+        self.assertEqual(bus["a"][0], bus["c"][0])
+        self.assertEqual(bus["d"][0], bus["f"][0])
+        self.assertNotEqual(bus["a"][0], bus["d"][0])
 
     def test_the_problem_names_the_bus_of_each_net_and_none_without_pull(self):
         pads = self.row("U1", ["a", "b", "c"], 0, pitch=2.0) + self.row("U2", ["a", "b", "c"], 20, pitch=2.0)
         picture = support.picture(k, pads)
         problem = k.build_problem(picture, k.Rules.of(picture))
         self.assertEqual(len({net["bus"] for net in problem["nets"]}), 1)
+        self.assertEqual(sorted(net["bus_lane"] for net in problem["nets"]), [0, 1, 2])
         problem = k.build_problem(picture, k.Rules.of(picture, k.Settings(bus_pull=0.0)))
         self.assertTrue(all("bus" not in net for net in problem["nets"]))
 
