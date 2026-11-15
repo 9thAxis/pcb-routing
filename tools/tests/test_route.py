@@ -64,7 +64,7 @@ class WithEngine(unittest.TestCase):
     def route(self, board, settings=None, **more):
         run = lambda problem, first: k.run_engine(problem, ENGINE)
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, settings or k.Settings(), run, say=self.said.append, **more)
+            return k.route(board, settings or k.Settings(pours=False), run, say=self.said.append, **more)  # (boards without zones)
 
 
 class TwoTries(WithEngine):
@@ -122,7 +122,7 @@ class Steps(WithEngine):
     def coarse_first(self, board, **more):
         run = lambda problem, first: k.run_engine(problem, ENGINE)
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, k.Settings(step=None, coarse_first=True), run, say=self.said.append, **more)
+            return k.route(board, k.Settings(step=None, coarse_first=True, pours=False), run, say=self.said.append, **more)
 
     def test_the_step_follows_from_the_rules(self):
         picture = FakeBoard(1).read()
@@ -236,7 +236,7 @@ class EngineFailure(WithEngine):
         out, err = io.StringIO(), io.StringIO()
         with kicad, mock.patch.object(k, "KicadBoard", lambda b, ignored, pours=True: board), redirect_stdout(out), redirect_stderr(err):
             (self.dir / "in.kicad_pcb").write_text("")
-            status = k.main([str(self.dir / "in.kicad_pcb"), "-o", "out.kicad_pcb", "--engine", str(engine), *more])
+            status = k.main([str(self.dir / "in.kicad_pcb"), "-o", "out.kicad_pcb", "--engine", str(engine), "--no-pours", *more])
         return status, saved, out.getvalue(), err.getvalue()
 
 

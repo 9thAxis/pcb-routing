@@ -19,18 +19,26 @@ What it does:
    before left it.
 3. Adds the tracks and vias found to the board, fills the zones again, and saves it under the new name.
 
+Zones: the zones are filled first, and pads that a filled zone joins count as joined (--no-pours: only tracks,
+vias and pads that touch do, and a net meant to be joined by a zone is routed as tracks).
+
+- A net with a zone gets tracks only from the pads its zone does not reach, each to a pad of the net or to a
+  point of the zone, whichever comes cheapest.
+- A track of another net pays for its length across a zone (--pour-cost), and more where it would cut the
+  spokes that tie a pad to its zone (--spoke-cost): it goes round where that is not far.
+- After each run the zones are filled again. A track that ended on a piece of zone the other new tracks cut
+  away is taken back, and pads that the new tracks parted from their zone are joined again. Where that cannot
+  be done past the tracks that did it, the run is taken back and done again with those pads joined by a track.
+- At the end every pad that is tied to its zone by fewer spokes than the board asks for (counted as KiCad's
+  design rule check counts them) gets a straight track from its middle into the zone, which counts as a
+  spoke; one that no such track fits by is named.
+
 Run KiCad's design rule check on the result before using it.
 
 What it does not do:
 
 - It routes on a grid, with tracks at multiples of 45 degrees and through vias only (no blind, buried or micro
   vias, no arcs).
-- By default it does not follow zones or planes when deciding which pads are already joined: only tracks, vias
-  and pads that touch. A net meant to be joined by a plane is then routed as tracks, unless it is left out by
-  naming the others with --nets. With --pours (not yet the default: it leaves some boards incomplete that are
-  completed without) the zones are filled first and pads that a filled zone joins count as joined: a net with
-  a zone gets tracks only from the pads its zone does not reach, each to the nearest point of the zone; pads
-  that the new tracks part from their zone are joined again.
 - No differential pairs and no length tuning through this bridge yet (the engine can lay pairs; the bridge does
   not ask for them).
 
@@ -197,7 +205,7 @@ class Settings:
     slack: float = 0.002
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
-    pours: bool = False  # pads that a filled zone joins count as joined, and the rest of the net is taken to the zone
+    pours: bool = True  # pads that a filled zone joins count as joined, and the rest of the net is taken to the zone
     pour_cost: float = 2.0  # what a track pays for its length across another net's pour, as a factor
     spoke_cost: float = 4.0  # and across the ground where it would cut a spoke that ties a pad to its pour
     decoupling: bool = True  # a capacitor beside a pin of an IC on its net is joined to that pin itself
@@ -988,7 +996,8 @@ def route(board, settings, run, only=None, options=None, say=print):
             if solution["status"] == "routed":
                 # The new tracks may have cut a pour and parted pads it joined: those nets are joined again,
                 # against the board as it now stands.
-                cut = [n for n in board.unjoined() if n in keys or n not in open_before] if repeats < POUR_REPEATS else []
+                # (any net of this lot so far, or one that was joined before the run began)
+                cut = [n for n in board.unjoined() if n in wanted or n not in open_before] if repeats < POUR_REPEATS else []
                 if not cut:
                     break
                 if not rejoining:
@@ -1670,9 +1679,9 @@ def main(argv=None):
     parser.add_argument("--slack", type=float, default=0.002, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
-    parser.add_argument("--pours", action="store_true", help="not yet the default: fill the zones first and count pads that a filled zone joins as joined, so that a net with a zone gets tracks only from the pads its zone does not reach")
-    parser.add_argument("--pour-cost", type=float, default=2.0, help="with --pours: what a track pays for its length across another net's pour, as a factor (1: nothing more)")
-    parser.add_argument("--spoke-cost", type=float, default=4.0, help="with --pours: and across the ground where it would cut a spoke that ties a pad to its pour")
+    parser.add_argument("--no-pours", action="store_true", help="do not count pads that a filled zone joins as joined: a net with a zone is routed as tracks, as if the zone were not there")
+    parser.add_argument("--pour-cost", type=float, default=2.0, help="what a track pays for its length across another net's pour, as a factor (1: nothing more)")
+    parser.add_argument("--spoke-cost", type=float, default=4.0, help="and across the ground where it would cut a spoke that ties a pad to its pour")
     parser.add_argument("--no-decoupling", action="store_true", help="do not join a capacitor that stands by a pin of an IC to that pin itself")
     parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
@@ -1693,7 +1702,7 @@ def main(argv=None):
         parser.error("--bus-pull takes a number from 0 to 10")
     if not (1 <= args.pour_cost <= 100 and 1 <= args.spoke_cost <= 100):
         parser.error("--pour-cost and --spoke-cost take a number from 1 to 100")
-    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=args.pours,
+    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=not args.no_pours,
                         pour_cost=args.pour_cost, spoke_cost=args.spoke_cost)
     options = dict(variants=args.variants, max_states=args.max_states)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)

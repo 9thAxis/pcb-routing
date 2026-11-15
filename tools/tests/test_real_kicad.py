@@ -73,7 +73,7 @@ class RealKicad(unittest.TestCase):
         for pours in (True, False):
             out = self.dir / f"routed-{pours}.kicad_pcb"
             run = subprocess.run([PYTHON, str(HERE.parent / "kicad_route.py"), said["saved"], "-o", str(out), "--engine", ENGINE]
-                                 + (["--pours"] if pours else []), capture_output=True, text=True)
+                                 + ([] if pours else ["--no-pours"]), capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
             self.assertEqual(self.check(out), ([], 0), run.stdout)
             lengths[pours] = int(run.stdout.strip().splitlines()[-1].split(" track segments")[0].split()[-1])
