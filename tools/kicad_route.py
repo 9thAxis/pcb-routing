@@ -51,6 +51,32 @@ def pad_polygon(pad, layer):
         return pad.GetEffectivePolygon(layer)
 
 
+def mask_opening(pad, layer):
+    """How far the solder mask opening of a pad reaches beyond its copper on a copper layer, in mm (0 if covered)."""
+    mask = pcbnew.F_Mask if layer == pcbnew.F_Cu else pcbnew.B_Mask if layer == pcbnew.B_Cu else None
+    if mask is None or not pad.IsOnLayer(mask):
+        return 0.0
+    try:
+        return max(MM(pad.GetSolderMaskExpansion(layer)), 0.0)
+    except TypeError:
+        return max(MM(pad.GetSolderMaskExpansion()), 0.0)
+
+
+def drawing_polygon(item, layer):
+    """A drawing or text on a copper layer as polygons; its bounding box if KiCad cannot give its outline."""
+    poly = pcbnew.SHAPE_POLY_SET()
+    try:
+        item.TransformShapeToPolygon(poly, layer, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_OUTSIDE)
+    except Exception:
+        poly = pcbnew.SHAPE_POLY_SET()
+    if poly.OutlineCount() == 0:
+        box = item.GetBoundingBox()
+        poly.NewOutline()
+        for x, y in ((box.GetLeft(), box.GetTop()), (box.GetRight(), box.GetTop()), (box.GetRight(), box.GetBottom()), (box.GetLeft(), box.GetBottom())):
+            poly.Append(x, y)
+    return poly
+
+
 def build_problem(board, args):
     settings = board.GetDesignSettings()
     slack = args.slack
@@ -73,6 +99,9 @@ def build_problem(board, args):
     min_clear = MM(settings.m_MinClearance)
     hole_clear = MM(settings.m_HoleClearance)
     copper, holes = [], []
+    # the smallest clearance any net keeps from other copper, with the slack: what every track keeps from a pad anyway
+    classes = {pad.GetNetname(): pad.GetNet().GetNetClassSlow() for pad in board.GetPads() if pad.GetNetCode() > 0}
+    least_clear = min((max(MM(c.GetClearance()), min_clear) for c in classes.values()), default=min_clear) + slack
 
     def add_hole(at, drill, net):
         holes.append(dict(xy=xy(at), net=net or None))
@@ -86,7 +115,14 @@ def build_problem(board, args):
         on = [l for l in enabled if pad.IsOnLayer(l)]
         smd = len(on) == 1
         for l in on:
-            for rings in rings_of(pad_polygon(pad, l)):
+            # Copper of another net may not lie in the pad's solder mask opening (it would be bare beside the
+            # pad): where the opening is wider than the clearance, the pad stands as large as its opening.
+            grow = mask_opening(pad, l) - least_clear + 0.01
+            shape = pad_polygon(pad, l)
+            if grow > 0:
+                shape = pcbnew.SHAPE_POLY_SET()
+                pad.TransformShapeToPolygon(shape, l, pcbnew.FromMM(grow), pcbnew.FromMM(0.005), pcbnew.ERROR_OUTSIDE)
+            for rings in rings_of(shape):
                 copper.append(dict(t="poly", rings=rings, net=net, layers=[name(l)], pad=smd))
         drill = pad.GetDrillSize()
         if drill.x > 0:
@@ -110,6 +146,18 @@ def build_problem(board, args):
         else:
             copper.append(dict(t="seg", a=xy(track.GetStart()), b=xy(track.GetEnd()), w=round(MM(track.GetWidth()), 6),
                                net=net, layers=[name(track.GetLayer())]))
+
+    # text and drawings on copper layers, on the board and in footprints: copper of no net
+    drawn = list(board.GetDrawings())
+    for footprint in board.GetFootprints():
+        drawn.extend(footprint.GraphicalItems())
+        drawn.extend(f for f in footprint.GetFields() if f.IsVisible())
+    for item in drawn:
+        for l in enabled:
+            if not item.IsOnLayer(l):
+                continue
+            for rings in rings_of(drawing_polygon(item, l)):
+                copper.append(dict(t="poly", rings=rings, net=None, layers=[name(l)]))
 
     regions = []
     outline = pcbnew.SHAPE_POLY_SET()
@@ -153,7 +201,7 @@ def build_problem(board, args):
             groups.append(group)
         if len(groups) < 2:
             continue
-        cls = by_net[net_name][0].GetNet().GetNetClassSlow()
+        cls = classes[net_name]
         clear = max(MM(cls.GetClearance()), min_clear)
         width = max(MM(cls.GetTrackWidth()), MM(settings.m_TrackMinWidth))
         via = [max(MM(cls.GetViaDiameter()), MM(settings.m_ViasMinSize)), max(MM(cls.GetViaDrill()), MM(settings.m_MinThroughDrill))]
