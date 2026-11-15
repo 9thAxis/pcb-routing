@@ -1,0 +1,20 @@
+{
+  "window": [0, 0, 10, 6],
+  "step": 0.05,
+  "layers": ["F", "B"],
+  "copper": [
+    {"t": "seg", "a": [5, 0], "b": [5, 2.4], "w": 0.2, "net": "GND", "layers": ["F"]},
+    {"t": "seg", "a": [5, 3.6], "b": [5, 6], "w": 0.2, "net": "GND", "layers": ["F"]},
+    {"t": "circle", "c": [5, 3], "r": 0.3, "net": "GND", "layers": ["F", "B"], "pad": true}
+  ],
+  "holes": [{"xy": [5, 3], "net": "GND"}],
+  "nets": [
+    {"key": "clock", "net": "CLK", "width": 0.15, "via": [0.45, 0.2], "layers": ["F", "B"],
+     "clearance": {"default": 0.17}, "max_mm": 7.0, "weight": 3,
+     "terminals": [{"xy": [2, 2.8], "layers": ["F"]}, {"xy": [8, 2.8], "layers": ["F"]}]},
+    {"key": "data", "net": "DATA", "width": 0.15, "via": [0.45, 0.2], "layers": ["F", "B"],
+     "clearance": {"default": 0.17},
+     "terminals": [{"xy": [2, 3.2], "layers": ["F"]}, {"xy": [8, 3.2], "layers": ["F"]}]}
+  ],
+  "options": {"variants": 4}
+}

@@ -1,41 +1,88 @@
-//! pcb-routing route PROBLEM.json -o SOLUTION.json
-//! pcb-routing masks PROBLEM.json --net KEY -o MASK.bin   (one byte per cell, row by row: bit i = layer i closed, 0x80 = closed to vias)
+//! Command line: route a problem file, or write the fixed mask of one net.
 
-use pcb_routing::model::Problem;
-use pcb_routing::raster::{net_mask, Grid};
+use pcb_routing::{mask::net_mask, Event, Grid, Problem, Router, Status};
+use std::process::ExitCode;
 use std::time::Instant;
 
-fn main() {
+const USAGE: &str =
+    "usage: pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N] [--trace] [--verify] [--only ATTEMPT]
+       pcb-routing masks PROBLEM.json --net KEY -o MASK.bin
+
+route   lay the nets of the problem; exit status 0 if every net is laid and none are too close, 1 otherwise
+masks   one byte per cell, row by row: bit i set = routing layer i closed to the net's tracks, 0x80 = closed to its vias
+
+--trace   one line per round of negotiation and the time spent per kind of work (also: PCB_ROUTING_TRACE=1)
+--verify  run every search a second time in one pass and report any whose cost differs (also: PCB_ROUTING_CHECK=1)
+--only N  run attempt N of the problem's variants alone (also: PCB_ROUTING_ONLY=N)";
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("pcb-routing: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run() -> Result<ExitCode, String> {
     let args: Vec<String> = std::env::args().collect();
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    let flag = |flag: &str, env: &str| args.iter().any(|a| a == flag) || std::env::var(env).is_ok();
     if args.len() < 3 || !["route", "masks"].contains(&args[1].as_str()) {
-        eprintln!("usage: pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N]\n       pcb-routing masks PROBLEM.json --net KEY -o MASK.bin");
-        std::process::exit(2);
+        return Err(USAGE.into());
     }
     let start = Instant::now();
-    let text = std::fs::read_to_string(&args[2]).unwrap_or_else(|e| panic!("cannot read {}: {e}", args[2]));
-    let problem: Problem = serde_json::from_str(&text).unwrap_or_else(|e| panic!("bad problem file: {e}"));
-    let threads = value("--threads").map(|v| v.parse().expect("--threads N")).unwrap_or(problem.options.threads);
-    if threads > 0 {
-        rayon::ThreadPoolBuilder::new().num_threads(threads).build_global().unwrap();
+    let text = std::fs::read_to_string(&args[2]).map_err(|e| format!("cannot read {}: {e}", args[2]))?;
+    let mut problem: Problem = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", args[2]))?;
+    if let Some(n) = value("--threads") {
+        problem.options.threads = n.parse().map_err(|_| "--threads takes a number".to_string())?;
     }
-    let out = value("-o").expect("-o FILE");
+    let out = value("-o").ok_or("-o FILE is required")?;
     if args[1] == "masks" {
-        let key = value("--net").expect("--net KEY");
-        let net = problem.nets.iter().find(|n| n.key == key).expect("no net with that key");
+        problem.validate().map_err(|e| e.to_string())?;
+        let key = value("--net").ok_or("--net KEY is required")?;
+        let net = problem.nets.iter().find(|n| n.key == key).ok_or(format!("no net with the key {key}"))?;
         let grid = Grid::new(problem.window, problem.step);
-        std::fs::write(&out, net_mask(&problem, &grid, net)).unwrap();
+        std::fs::write(&out, net_mask(&problem, &grid, net)).map_err(|e| format!("cannot write {out}: {e}"))?;
         println!("{} x {} cells, {:.2} s", grid.w, grid.h, start.elapsed().as_secs_f64());
-        return;
+        return Ok(ExitCode::SUCCESS);
     }
     let read = start.elapsed().as_secs_f64();
-    let solution = pcb_routing::router::solve(&problem);
-    std::fs::write(&out, serde_json::to_string(&solution).unwrap()).unwrap();
-    println!("{} after {} rounds (attempt {}), score {:.1}, read {:.2} s, total {:.2} s", solution.status, solution.iterations, solution.variant, solution.score, read, start.elapsed().as_secs_f64());
-    if std::env::var("PCB_ROUTING_TRACE").is_ok() {
-        for (name, clock) in pcb_routing::router::CLOCK_NAMES.iter().zip(&pcb_routing::router::CLOCK) {
-            eprintln!("time, all attempts together: {name} {:.2} s", clock.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e9);
+    let trace = flag("--trace", "PCB_ROUTING_TRACE");
+    let verify = flag("--verify", "PCB_ROUTING_CHECK");
+    let mut router = Router::new(&problem).verify_search(verify);
+    if let Some(v) = value("--only").or_else(|| std::env::var("PCB_ROUTING_ONLY").ok()) {
+        router = router.only_attempt(v.parse().map_err(|_| "--only takes an attempt number".to_string())?);
+    }
+    if trace || verify {
+        router = router.on_event(move |event| match event {
+            Event::Round { attempt, round, relaid, in_conflict, present } if trace => {
+                eprintln!("attempt {attempt} round {round}: laid {relaid} nets, {in_conflict} still in conflict, present {present:.2}")
+            }
+            Event::Mismatch { net, two_pass, one_pass } => eprintln!("CHECK FAILED {net}: two passes {two_pass:?}, one pass {one_pass:?} (cost in grid steps)"),
+            _ => {}
+        });
+    }
+    let solution = router.run().map_err(|e| e.to_string())?;
+    std::fs::write(&out, serde_json::to_string(&solution).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("cannot write {out}: {e}"))?;
+    let score = solution.score.map_or("none".to_string(), |s| format!("{s:.1}"));
+    println!(
+        "{} after {} rounds (attempt {}), score {score}, read {read:.2} s, total {:.2} s",
+        solution.status,
+        solution.iterations,
+        solution.variant,
+        start.elapsed().as_secs_f64()
+    );
+    if trace {
+        for (name, seconds) in &solution.stats.seconds {
+            eprintln!("time, all attempts together: {name} {seconds:.2} s");
         }
+        eprintln!("states taken out: first pass {}, second pass {}", solution.stats.swept, solution.stats.expanded);
+    }
+    if verify {
+        eprintln!("searches whose two-pass cost differed from the one-pass cost: {}", solution.stats.mismatches);
     }
     for n in &solution.nets {
         let mut layers: Vec<&str> = n.tracks.iter().map(|t| t.layer.as_str()).collect();
@@ -44,12 +91,17 @@ fn main() {
         println!("  {:<22} {:<18} {:7.2} mm  vias {:2}  {}", n.key, n.net, n.length_mm, n.vias.len(), layers.join(" "));
     }
     for c in solution.conflicts.iter().take(30) {
-        println!("  CONFLICT {} {} with {:?} at {:?} {}", c.kind, c.key, c.with, c.xy, c.layer.clone().unwrap_or_default());
+        println!(
+            "  CONFLICT {:?} {} with {:?} at {:?} {}",
+            c.kind,
+            c.key,
+            c.with,
+            c.xy,
+            c.layer.clone().unwrap_or_default()
+        );
     }
     if !solution.message.is_empty() {
         println!("  {}", solution.message);
     }
-    if solution.status != "routed" {
-        std::process::exit(1);
-    }
+    Ok(if solution.status == Status::Routed { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }

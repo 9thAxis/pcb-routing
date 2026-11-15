@@ -6,63 +6,11 @@
 //! of any solder land, within the hole spacing of another hole, or within (via radius + margin) of a closed
 //! region. Distances are exact (to the segment, circle or polygon), not to a polygon drawn round them.
 
+use crate::grid::{Grid, EPS};
 use crate::model::*;
 
-/// A cell exactly at the limit distance is closed (as the project's older router has it); this much further still counts as at the limit.
-pub const EPS: f64 = 1e-6;
 /// Bit set in a cell of a net's mask when a via may not be placed there. Bits 0..n are the routing layers.
 pub const VIA_BIT: u8 = 0x80;
-
-#[derive(Clone, Debug)]
-pub struct Grid {
-    pub x0: f64,
-    pub y0: f64,
-    pub step: f64,
-    pub w: usize,
-    pub h: usize,
-}
-
-impl Grid {
-    pub fn new(window: [f64; 4], step: f64) -> Grid {
-        // the same count as numpy.arange(start, stop + step / 2, step)
-        let n = |a: f64, b: f64| ((b + step / 2.0 - a) / step).ceil() as usize;
-        Grid { x0: window[0], y0: window[1], step, w: n(window[0], window[2]), h: n(window[1], window[3]) }
-    }
-    pub fn cells(&self) -> usize {
-        self.w * self.h
-    }
-    pub fn xy(&self, cell: usize) -> Pt {
-        let (j, i) = (cell / self.w, cell % self.w);
-        [round6(self.x0 + i as f64 * self.step), round6(self.y0 + j as f64 * self.step)]
-    }
-    /// Nearest cell, or None outside the window. A point midway between two cells goes to the even one, as Python's round() does.
-    pub fn cell(&self, p: Pt) -> Option<usize> {
-        let i = ((p[0] - self.x0) / self.step).round_ties_even();
-        let j = ((p[1] - self.y0) / self.step).round_ties_even();
-        if i < 0.0 || j < 0.0 || i >= self.w as f64 || j >= self.h as f64 {
-            return None;
-        }
-        Some(j as usize * self.w + i as usize)
-    }
-    /// Offsets (dj, di) of the cells whose centres lie within `r` of a cell centre.
-    pub fn disc(&self, r: f64) -> Vec<(i32, i32)> {
-        let n = (r / self.step + 1e-6).floor() as i32;
-        let mut out = Vec::new();
-        for dj in -n..=n {
-            for di in -n..=n {
-                let d2 = ((di * di + dj * dj) as f64) * self.step * self.step;
-                if d2 <= (r + EPS) * (r + EPS) {
-                    out.push((dj, di));
-                }
-            }
-        }
-        out
-    }
-}
-
-pub fn round6(v: f64) -> f64 {
-    (v * 1e6).round() / 1e6
-}
 
 fn dist2_segment(p: Pt, a: Pt, b: Pt) -> f64 {
     let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
@@ -74,7 +22,7 @@ fn dist2_segment(p: Pt, a: Pt, b: Pt) -> f64 {
 }
 
 /// Set `bits` in every cell whose centre is within `r` of the segment a-b.
-pub fn stamp_capsule(g: &Grid, mask: &mut [u8], bits: u8, a: Pt, b: Pt, r: f64) {
+pub(crate) fn stamp_capsule(g: &Grid, mask: &mut [u8], bits: u8, a: Pt, b: Pt, r: f64) {
     if bits == 0 {
         return;
     }
@@ -112,7 +60,7 @@ pub fn stamp_capsule(g: &Grid, mask: &mut [u8], bits: u8, a: Pt, b: Pt, r: f64) 
 }
 
 /// Set `bits` in every cell whose centre is inside the polygon (even-odd over its rings) or within `r` of its edge.
-pub fn stamp_polygon(g: &Grid, mask: &mut [u8], bits: u8, rings: &[Vec<Pt>], r: f64) {
+pub(crate) fn stamp_polygon(g: &Grid, mask: &mut [u8], bits: u8, rings: &[Vec<Pt>], r: f64) {
     if bits == 0 {
         return;
     }
@@ -168,7 +116,8 @@ fn stamp_shape(g: &Grid, mask: &mut [u8], bits: u8, shape: &Shape, grow: f64) {
     }
 }
 
-pub fn layer_bits(layers: &[String], names: &[String]) -> u8 {
+/// A bit per routing layer (in the order of `layers`) that is among `names`.
+pub(crate) fn layer_bits(layers: &[String], names: &[String]) -> u8 {
     let mut bits = 0u8;
     for (i, l) in layers.iter().enumerate() {
         if names.iter().any(|n| n == l) {
@@ -178,9 +127,12 @@ pub fn layer_bits(layers: &[String], names: &[String]) -> u8 {
     bits
 }
 
-/// The fixed mask of one net: bit i closed to its tracks on routing layer i, VIA_BIT closed to its vias.
+/// The fixed mask of one net, one byte per cell of the grid: bit i set where routing layer i is closed to its
+/// tracks, [`VIA_BIT`] where no via of it may be. This is the router's whole picture of the board for that net;
+/// it is public so that it can be compared with another tool's.
+///
+/// The problem must be valid ([`Problem::validate`]).
 pub fn net_mask(p: &Problem, g: &Grid, net: &Net) -> Vec<u8> {
-    assert!(p.layers.len() <= 7, "at most seven routing layers");
     let all: u8 = ((1u16 << p.layers.len()) - 1) as u8;
     let allowed = layer_bits(&p.layers, &net.layers);
     let mut mask = vec![all & !allowed; g.cells()];

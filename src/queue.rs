@@ -26,7 +26,14 @@ const NEAR: usize = 1 << 14;
 
 impl BucketQueue {
     pub fn new() -> BucketQueue {
-        BucketQueue { near: (0..NEAR).map(|_| Vec::new()).collect(), filled: vec![0; NEAR / 64], base: 0, cursor: 0, far: Vec::new(), len: 0 }
+        BucketQueue {
+            near: (0..NEAR).map(|_| Vec::new()).collect(),
+            filled: vec![0; NEAR / 64],
+            base: 0,
+            cursor: 0,
+            far: Vec::new(),
+            len: 0,
+        }
     }
 
     pub fn clear(&mut self) {

@@ -1,7 +1,6 @@
 //! Small cases with known answers.
 
-use pcb_routing::model::{Problem, Solution};
-use pcb_routing::router::solve;
+use pcb_routing::{route, Problem, Solution, Status};
 use serde_json::{json, Value};
 
 fn net(key: &str, a: [f64; 2], b: [f64; 2], layers: &[&str]) -> Value {
@@ -15,7 +14,10 @@ fn wall(x: f64, y0: f64, y1: f64, layers: &[&str]) -> Value {
 }
 
 fn problem(layers: &[&str], copper: Vec<Value>, nets: Vec<Value>) -> Problem {
-    serde_json::from_value(json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": layers, "copper": copper, "nets": nets})).unwrap()
+    serde_json::from_value(
+        json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": layers, "copper": copper, "nets": nets}),
+    )
+    .unwrap()
 }
 
 /// Smallest distance between the track centre lines of two nets on a shared layer, and between any via of one
@@ -53,7 +55,11 @@ fn three_lanes() -> Problem {
     problem(
         &["F"],
         vec![wall(5.0, 1.0, 2.4, &["F"]), wall(5.0, 3.6, 5.0, &["F"])],
-        vec![net("a", [2.0, 2.6], [8.0, 2.6], &["F"]), net("b", [2.0, 3.0], [8.0, 3.0], &["F"]), net("c", [2.0, 3.4], [8.0, 3.4], &["F"])],
+        vec![
+            net("a", [2.0, 2.6], [8.0, 2.6], &["F"]),
+            net("b", [2.0, 3.0], [8.0, 3.0], &["F"]),
+            net("c", [2.0, 3.4], [8.0, 3.4], &["F"]),
+        ],
     )
 }
 
@@ -65,16 +71,16 @@ fn two_nets_share_a_gap() {
         vec![wall(5.0, 0.0, 2.4, &["F"]), wall(5.0, 3.6, 6.0, &["F"])],
         vec![net("a", [2.0, 2.8], [8.0, 2.8], &["F"]), net("b", [2.0, 3.2], [8.0, 3.2], &["F"])],
     );
-    let s = solve(&p);
-    assert_eq!(s.status, "routed", "{:?}", s.conflicts);
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Routed, "{:?}", s.conflicts);
     assert!(spacing(&s, 0, 1) >= 0.15 + 0.15 - 1e-6, "centre lines {} mm apart", spacing(&s, 0, 1));
     assert!(s.nets.iter().all(|n| n.length_mm < 6.6), "{:?}", s.nets.iter().map(|n| n.length_mm).collect::<Vec<_>>());
 }
 
 #[test]
 fn third_net_goes_round() {
-    let s = solve(&three_lanes());
-    assert_eq!(s.status, "routed", "{:?}", s.conflicts);
+    let s = route(&three_lanes()).unwrap();
+    assert_eq!(s.status, Status::Routed, "{:?}", s.conflicts);
     let mut lengths: Vec<f64> = s.nets.iter().map(|n| n.length_mm).collect();
     lengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert!(lengths[1] < 6.6 && lengths[2] > 7.5, "{lengths:?}");
@@ -85,9 +91,10 @@ fn third_net_goes_round() {
 
 #[test]
 fn a_wall_is_crossed_on_another_layer() {
-    let p = problem(&["F", "B"], vec![wall(5.0, -1.0, 7.0, &["F"])], vec![net("a", [2.0, 3.0], [8.0, 3.0], &["F", "B"])]);
-    let s = solve(&p);
-    assert_eq!(s.status, "routed");
+    let p =
+        problem(&["F", "B"], vec![wall(5.0, -1.0, 7.0, &["F"])], vec![net("a", [2.0, 3.0], [8.0, 3.0], &["F", "B"])]);
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Routed);
     assert_eq!(s.nets[0].vias.len(), 2);
     assert!(s.nets[0].tracks.iter().any(|t| t.layer == "B"));
     assert!((s.nets[0].length_mm - 6.0).abs() < 0.01);
@@ -97,8 +104,8 @@ fn a_wall_is_crossed_on_another_layer() {
 fn two_nets_cross_with_a_layer_change() {
     let mut nets = vec![net("a", [0.3, 3.0], [9.7, 3.0], &["F", "B"]), net("b", [5.0, 0.3], [5.0, 5.7], &["F", "B"])];
     nets[0]["layers"] = json!(["F"]); // the first may not leave the top layer; both span the window, so neither can go round the other: the second must go under
-    let s = solve(&problem(&["F", "B"], vec![], nets));
-    assert_eq!(s.status, "routed", "{:?}", s.conflicts);
+    let s = route(&problem(&["F", "B"], vec![], nets)).unwrap();
+    assert_eq!(s.status, Status::Routed, "{:?}", s.conflicts);
     assert_eq!(s.nets[0].vias.len(), 0);
     assert_eq!(s.nets[1].vias.len(), 2);
 }
@@ -112,8 +119,8 @@ fn too_many_nets_for_a_gap_is_reported_by_name() {
         vec![net("a", [2.0, 2.8], [8.0, 2.8], &["F"]), net("b", [2.0, 3.2], [8.0, 3.2], &["F"])],
     );
     p.options.max_iterations = 25;
-    let s = solve(&p);
-    assert_eq!(s.status, "conflicts");
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Conflicts);
     assert!(s.conflicts.iter().any(|c| c.key == "a" && c.with == vec!["b".to_string()]));
     assert!(s.conflicts.iter().any(|c| c.key == "b" && c.with == vec!["a".to_string()]));
 }
@@ -121,8 +128,8 @@ fn too_many_nets_for_a_gap_is_reported_by_name() {
 #[test]
 fn a_walled_in_terminal_is_reported() {
     let p = problem(&["F"], vec![wall(5.0, -1.0, 7.0, &["F"])], vec![net("a", [2.0, 3.0], [8.0, 3.0], &["F"])]);
-    let s = solve(&p);
-    assert_eq!(s.status, "unroutable");
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Unroutable);
     assert!(s.message.starts_with("a: no path"), "{}", s.message);
 }
 
@@ -130,17 +137,21 @@ fn a_walled_in_terminal_is_reported() {
 fn a_net_with_three_terminals_is_one_tree() {
     let mut n = net("a", [2.0, 3.0], [8.0, 3.0], &["F"]);
     n["terminals"].as_array_mut().unwrap().push(json!({"xy": [5.0, 5.0], "layers": ["F"]}));
-    let s = solve(&problem(&["F"], vec![], vec![n]));
-    assert_eq!(s.status, "routed");
+    let s = route(&problem(&["F"], vec![], vec![n])).unwrap();
+    assert_eq!(s.status, Status::Routed);
     // a straight run of 6 mm and a branch to the third terminal that leaves it at 45 degrees: 6 + 2 * sqrt(2) - 2 + ... = 7.66 mm,
     // shorter than the 8 mm of a square branch from the middle
-    assert!((s.nets[0].length_mm - (4.0 + 2.0 * 2.0f64.sqrt() + 2.0 * (2.0f64.sqrt() - 1.0))).abs() < 0.01, "{}", s.nets[0].length_mm);
+    assert!(
+        (s.nets[0].length_mm - (4.0 + 2.0 * 2.0f64.sqrt() + 2.0 * (2.0f64.sqrt() - 1.0))).abs() < 0.01,
+        "{}",
+        s.nets[0].length_mm
+    );
 }
 
 #[test]
 fn a_slanted_connection_has_one_corner() {
     // 6 mm across and 2 mm up: many staircases have the same length; with a corner cost the path is two straight pieces
-    let s = solve(&problem(&["F"], vec![], vec![net("a", [2.0, 2.0], [8.0, 4.0], &["F"])]));
+    let s = route(&problem(&["F"], vec![], vec![net("a", [2.0, 2.0], [8.0, 4.0], &["F"])])).unwrap();
     assert_eq!(s.nets[0].tracks.len(), 1);
     assert_eq!(s.nets[0].tracks[0].points.len(), 3, "{:?}", s.nets[0].tracks[0].points);
     assert!((s.nets[0].length_mm - (4.0 + 2.0 * 2.0f64.sqrt())).abs() < 0.01);
@@ -149,14 +160,19 @@ fn a_slanted_connection_has_one_corner() {
 #[test]
 fn same_problem_same_answer() {
     let mut p = three_lanes();
-    let first = solve(&p);
-    assert_eq!(first, solve(&p));
+    let strip = |mut s: Solution| {
+        s.stats = Default::default(); // times differ from run to run
+        s
+    };
+    assert_eq!(strip(route(&p).unwrap()), strip(route(&p).unwrap()));
     p.options.variants = 6;
-    let pool = |n| rayon::ThreadPoolBuilder::new().num_threads(n).build().unwrap();
-    let one = pool(1).install(|| solve(&p));
-    let many = pool(6).install(|| solve(&p));
+    p.options.threads = 1;
+    let one = route(&p).unwrap();
+    p.options.threads = 6;
+    let mut many = route(&p).unwrap();
+    many.stats = one.stats.clone(); // times differ from run to run
     assert_eq!(one, many);
-    assert_eq!(one.status, "routed");
+    assert_eq!(one.status, Status::Routed);
 }
 
 /// What a laid net costs the search: length, 3 mm a via, 0.3 mm a 45 degree corner and three times that a right angle.
@@ -168,8 +184,18 @@ fn cost(s: &Solution, n: usize) -> f64 {
         }
         for c in t.points.windows(3) {
             let (u, v) = ([c[1][0] - c[0][0], c[1][1] - c[0][1]], [c[2][0] - c[1][0], c[2][1] - c[1][1]]);
-            let turn = ((u[0] * v[0] + u[1] * v[1]) / ((u[0] * u[0] + u[1] * u[1]).sqrt() * (v[0] * v[0] + v[1] * v[1]).sqrt())).clamp(-1.0, 1.0).acos().to_degrees();
-            total += if turn < 1.0 { 0.0 } else if turn < 46.0 { 0.3 } else { 0.9 };
+            let turn = ((u[0] * v[0] + u[1] * v[1])
+                / ((u[0] * u[0] + u[1] * u[1]).sqrt() * (v[0] * v[0] + v[1] * v[1]).sqrt()))
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees();
+            total += if turn < 1.0 {
+                0.0
+            } else if turn < 46.0 {
+                0.3
+            } else {
+                0.9
+            };
         }
     }
     total
@@ -186,17 +212,28 @@ fn two_passes_find_what_one_pass_finds() {
         wall(6.0, 2.0, 6.0, &["B"]),
         wall(7.5, 1.0, 5.0, &["F", "B"]),
     ];
-    let ends = [([1.0, 1.0], [9.0, 5.0]), ([1.0, 5.0], [9.0, 1.0]), ([1.0, 3.0], [9.0, 3.0]), ([3.2, 0.5], [6.8, 5.5]), ([0.5, 0.5], [5.0, 3.0])];
+    let ends = [
+        ([1.0, 1.0], [9.0, 5.0]),
+        ([1.0, 5.0], [9.0, 1.0]),
+        ([1.0, 3.0], [9.0, 3.0]),
+        ([3.2, 0.5], [6.8, 5.5]),
+        ([0.5, 0.5], [5.0, 3.0]),
+    ];
     for (k, (a, b)) in ends.iter().enumerate() {
         let mut costs = Vec::new();
         for two_pass in [true, false] {
             let mut p = problem(&["F", "B"], copper.clone(), vec![net("n", *a, *b, &["F", "B"])]);
             p.options.two_pass = two_pass;
-            let s = solve(&p);
-            assert_eq!(s.status, "routed", "connection {k}, two_pass {two_pass}: {}", s.message);
+            let s = route(&p).unwrap();
+            assert_eq!(s.status, Status::Routed, "connection {k}, two_pass {two_pass}: {}", s.message);
             costs.push(cost(&s, 0));
         }
-        assert!((costs[0] - costs[1]).abs() < 0.02, "connection {k}: two passes {:.3} mm, one pass {:.3} mm", costs[0], costs[1]);
+        assert!(
+            (costs[0] - costs[1]).abs() < 0.02,
+            "connection {k}: two passes {:.3} mm, one pass {:.3} mm",
+            costs[0],
+            costs[1]
+        );
     }
 }
 
@@ -234,9 +271,17 @@ fn joined(s: &Solution, n: usize, a: [f64; 2], b: [f64; 2]) -> bool {
 #[test]
 fn a_pair_runs_side_by_side_and_reaches_its_pads() {
     // pads 2 mm apart at either end, a wall the pair must go round, and an ordinary net that wants the same way
-    let stub = |key: &str, net: &str, at: [f64; 2]| entry(key, net, 0.15, json!([{"xy": at, "layers": ["F"]}]), json!({"last": true, "quiet": true}));
+    let stub = |key: &str, net: &str, at: [f64; 2]| {
+        entry(key, net, 0.15, json!([{"xy": at, "layers": ["F"]}]), json!({"last": true, "quiet": true}))
+    };
     let nets = vec![
-        entry("pair", "~pair", 0.59, json!([{"xy": [2.0, 3.0], "layers": ["F", "B"]}, {"xy": [8.0, 3.0], "layers": ["F", "B"]}]), json!({"no_vias": true, "quiet": true, "yield": 0.2})),
+        entry(
+            "pair",
+            "~pair",
+            0.59,
+            json!([{"xy": [2.0, 3.0], "layers": ["F", "B"]}, {"xy": [8.0, 3.0], "layers": ["F", "B"]}]),
+            json!({"no_vias": true, "quiet": true, "yield": 0.2}),
+        ),
         stub("p0", "P", [1.0, 2.0]),
         stub("m0", "M", [1.0, 4.0]),
         stub("p1", "P", [9.0, 2.5]),
@@ -248,8 +293,8 @@ fn a_pair_runs_side_by_side_and_reaches_its_pads() {
                        "pairs": [{"key": "in1", "trunk": "pair", "legs": ["P", "M"], "leg_width": 0.15, "pitch": 0.3, "stubs": [["p0", "m0"], ["p1", "m1"]]}]});
     v["options"] = json!({"variants": 1});
     let p: Problem = serde_json::from_value(v).unwrap();
-    let s = solve(&p);
-    assert_eq!(s.status, "routed", "{} {:?}", s.message, s.conflicts);
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Routed, "{} {:?}", s.message, s.conflicts);
     let keys: Vec<&str> = s.nets.iter().map(|n| n.key.as_str()).collect();
     assert_eq!(keys, ["other", "in1/P", "in1/M"]);
     assert!(joined(&s, 1, [1.0, 2.0], [9.0, 2.5]), "P is not one piece from pad to pad");

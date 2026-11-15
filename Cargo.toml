@@ -2,7 +2,14 @@
 name = "pcb-routing"
 version = "0.1.0"
 edition = "2021"
-description = "Grid router for printed circuit boards: all nets routed together by negotiated congestion"
+rust-version = "1.80"
+authors = ["Julien Ellie"]
+description = "Grid router for printed circuit boards: all nets are laid together and settle between themselves who goes where (negotiated congestion)"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["pcb", "routing", "autorouter", "eda", "pathfinder"]
+categories = ["science", "algorithms", "command-line-utilities"]
+include = ["src/**", "tests/**", "examples/**", "README.md", "CHANGELOG.md", "LICENSE-*", "Cargo.toml", "rustfmt.toml"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
