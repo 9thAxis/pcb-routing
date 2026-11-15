@@ -100,9 +100,9 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     pad or point of the zone comes cheapest, and a point that turns out closed costs nothing.
   * Zones and spokes are dear ground, not closed ground. Closing the spokes shut the way out of a USB
     connector on one board; a price keeps tracks off them where there is another way. A factor of 2 for a
-    zone and 4 for spokes. On the ten large boards a zone factor of 1, 2 and 3 gives 183, 159 and about as
-    many pieces of fill for 298, 333 and 350 vias, all complete; at 4 signals are crowded off the zones onto
-    each other and two boards are not clean.
+    zone and 4 for spokes. On the ten large boards a zone factor of 2 leaves the fills in 159 pieces
+    where 1 leaves 183, for 333 vias where 1 takes 298; all complete at 1, 2 and 3. At 4 signals are
+    crowded off the zones onto each other and two boards are not clean.
   * A zone is only what the last fill left of it. A track that ends on a point of a zone is joined until
     another new track passes near and the fill draws back: such copper is found after each fill and taken
     back, piece by piece, and its net joined again.
