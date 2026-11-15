@@ -440,49 +440,118 @@ class Pours(unittest.TestCase):
         sliver = [[0.0, 0.0], [10.0, 0.0], [10.0, 0.1], [0.0, 0.1]]
         self.assertIsNone(k.into_pour([sliver], [5.0, -1.0], 0.2))
 
-    def test_area_is_the_outline_less_the_holes(self):
-        self.assertEqual(k._area([self.SQUARE, self.HOLE]), 96.0)
-
-    def board(self, pours=True):
+    def board(self, pours=True, **settings):
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 8, 8, part="U2"),  # on the pour
                 support.land(k, "GND", 14, 5, part="J1"),  # beside it
                 support.land(k, "GND", 5, 5, layer="B.Cu", part="C1"),  # under it, on the other side
                 support.land(k, "SIG", 2, 12, part="U1"), support.land(k, "SIG", 8, 12, part="U2")]
         picture = support.picture(k, pads, {"GND": [[0, 1], [2], [3]], "SIG": [[4], [5]]})
-        picture.pours = {"GND": {0: [k.Pour("GND", "F.Cu", [self.SQUARE])]}}
+        pour = k.Pour("GND", "F.Cu", [self.SQUARE])
+        picture.pours, picture.fills = {"GND": {0: [pour]}}, [pour]
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 4, reach=[[[[1.0, 2.6], [3.0, 2.6], [3.0, 3.4], [1.0, 3.4]]]])]
         picture.box = [-1.0, -1.0, 16.0, 14.0]
-        return k.build_problem(picture, k.Rules.of(picture, k.Settings(pours=pours)))
+        return k.build_problem(picture, k.Rules.of(picture, k.Settings(pours=pours, **settings)))
 
-    def test_each_group_off_the_pour_is_taken_to_its_nearest_point(self):
+    def test_a_net_with_a_pour_is_one_entry_and_the_pour_one_piece_with_points_near_each_pad_off_it(self):
         nets = {net["key"]: net for net in self.board()["nets"]}
-        self.assertEqual(sorted(nets), ["GND > 1", "GND > 2", "SIG"])
-        beside, under = nets["GND > 1"]["terminals"], nets["GND > 2"]["terminals"]
-        self.assertEqual(beside[0], dict(xy=[14, 5], layers=["F.Cu"]))
-        self.assertEqual(beside[1]["layers"], ["F.Cu"])
-        self.assertEqual(beside[1]["xy"][1], 5)
-        self.assertTrue(9.5 < beside[1]["xy"][0] < 10)  # just inside the pour's edge
-        # the pad on the other side goes straight up into the pour above it
-        self.assertEqual(under, [dict(xy=[5, 5], layers=["B.Cu"]), dict(xy=[5, 5], layers=["F.Cu"])])
-        self.assertTrue(all(net["net"] == "GND" for key, net in nets.items() if key != "SIG"))
+        self.assertEqual(sorted(nets), ["GND", "SIG"])
+        terminals = nets["GND"]["terminals"]
+        piece = [t for t in terminals if t.get("piece") == 0]
+        alone = [t for t in terminals if "piece" not in t]
+        self.assertEqual(alone, [dict(xy=[14, 5], layers=["F.Cu"]), dict(xy=[5, 5], layers=["B.Cu"])])
+        self.assertEqual(len(piece) + len(alone), len(terminals))
+        places = {(t["xy"][0], t["xy"][1], t["layers"][0]) for t in piece}
+        self.assertIn((5, 5, "F.Cu"), places)  # the pour over the pad on the other side
+        self.assertIn((2, 2, "F.Cu"), places)  # a pad of the group
+        self.assertTrue(any(9.5 < x < 10 and y == 5 for x, y, _ in places))  # just inside the edge, beside the pad off it
+        self.assertEqual(len(places), len(piece))  # each once
+
+    def test_a_pour_and_the_spokes_of_a_pad_are_dear_ground_but_not_to_their_own_net(self):
+        dear = self.board()["dear"]
+        self.assertEqual([(d["factor"], d["net"], d["layers"]) for d in dear], [(2.0, "GND", ["F.Cu"]), (4.0, "GND", ["F.Cu"])])
+        self.assertEqual(dear[0]["rings"], [self.SQUARE])
+        self.assertNotIn("dear", self.board(pour_cost=1.0, spoke_cost=1.0))
 
     def test_without_pours_the_net_is_joined_pad_to_pad(self):
-        nets = {net["key"]: net for net in self.board(pours=False)["nets"]}
+        problem = self.board(pours=False)
+        nets = {net["key"]: net for net in problem["nets"]}
         self.assertEqual(sorted(nets), ["GND", "SIG"])
-        self.assertEqual(len(nets["GND"]["terminals"]), 3)
+        # the two pads that copper already joins are one piece; the others stand alone
+        self.assertEqual([t.get("piece") for t in nets["GND"]["terminals"]], [0, 0, None, None])
 
-    def test_the_largest_pour_is_the_one_the_others_are_taken_to_and_a_smaller_one_is_joined_from_its_own_copper(self):
+    def test_a_group_of_one_pad_is_one_terminal_as_ever(self):
+        pads = [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2)]
+        self.assertEqual(k.reach_of(pads, [[0], [1]], {}, ["F.Cu", "B.Cu"], 0.2), [[([2, 2], ["F.Cu"])], [([8, 2], ["F.Cu"])]])
+
+    def test_a_group_of_many_pads_offers_those_nearest_the_others(self):
+        pads = [support.land(k, "A", x, 0) for x in range(0, 20, 2)] + [support.land(k, "A", 30, 0)]
+        reach = k.reach_of(pads, [list(range(10)), [10]], {}, ["F.Cu"], 0.2)
+        self.assertEqual([at for at, _ in reach[0]], [[18, 0], [16, 0]])
+        self.assertEqual(reach[1], [([30, 0], ["F.Cu"])])
+
+    def test_a_small_pour_of_another_group_is_a_place_to_reach_it(self):
         small = [[20.0, 0.0], [22.0, 0.0], [22.0, 2.0], [20.0, 2.0]]
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 21, 1, part="U2")]
-        links = k.to_pours(pads, [[0], [1]], {0: [k.Pour("GND", "F.Cu", [self.SQUARE])], 1: [k.Pour("GND", "F.Cu", [small])]}, ["F.Cu", "B.Cu"], 0.2)
-        self.assertEqual(len(links), 1)
-        start, start_layers, at, layers = links[0]
-        self.assertEqual((start_layers, layers), (["F.Cu"], ["F.Cu"]))
-        self.assertTrue(9.5 < at[0] < 10 and at[1] == 1)
-        self.assertTrue(20 < start[0] < 20.5 and start[1] == 1)  # from the small pour's edge, not from its pad
+        pours = {0: [k.Pour("GND", "F.Cu", [self.SQUARE])], 1: [k.Pour("GND", "F.Cu", [small])]}
+        reach = k.reach_of(pads, [[0], [1]], pours, ["F.Cu", "B.Cu"], 0.2)
+        self.assertTrue(any(9.5 < at[0] < 10 for at, _ in reach[0]))  # the edge of the large one nearest the small
+        self.assertTrue(any(20 < at[0] < 20.5 for at, _ in reach[1]))  # and of the small one nearest the large
 
-    def test_a_pour_on_a_layer_that_carries_no_routes_is_no_pour(self):
+    def test_a_pour_on_a_layer_that_carries_no_routes_is_no_place(self):
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 14, 5, part="J1")]
-        self.assertEqual(k.to_pours(pads, [[0], [1]], {0: [k.Pour("GND", "In1.Cu", [self.SQUARE])]}, ["F.Cu", "B.Cu"], 0.2), [])
+        reach = k.reach_of(pads, [[0], [1]], {0: [k.Pour("GND", "In1.Cu", [self.SQUARE])]}, ["F.Cu", "B.Cu"], 0.2)
+        self.assertEqual(reach, [[([2, 2], ["F.Cu"])], [([14, 5], ["F.Cu"])]])
+
+    def test_a_pad_on_no_routing_layer_leaves_its_group_without_a_place(self):
+        pads = [support.land(k, "A", 2, 2, layer="In1.Cu"), support.land(k, "A", 8, 2)]
+        self.assertEqual(k.reach_of(pads, [[0], [1]], {}, ["F.Cu"], 0.2)[0], [])
+
+
+class Spokes(unittest.TestCase):
+    """A pad tied to its zone by too few spokes, and the track that ties it."""
+
+    # a pad 1 mm square about (5, 5); the line half the gap from it; a zone that begins 0.5 mm from the pad
+    LINE = [[4.25, 4.25], [5.75, 4.25], [5.75, 5.75], [4.25, 5.75]]
+    ZONE = [[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], [[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]]]
+
+    def thermal(self, fill=None):
+        return k.Thermal("GND", 0, "F.Cu", 2, 1, outline=self.LINE, fill=[fill or self.ZONE])
+
+    def test_two_crossings_of_the_line_are_one_spoke(self):
+        spoke = [[5.6, 4.9], [8.0, 4.9], [8.0, 5.1], [5.6, 5.1]]  # from by the pad out to the right
+        self.assertEqual(k.crossings(spoke, self.LINE), {(5.75, 4.9), (5.75, 5.1)})
+        self.assertEqual(k.crossings(self.ZONE[0], self.LINE), set())  # the zone's edge is nowhere near
+
+    def test_a_crossing_at_a_corner_of_the_edge_is_counted_once(self):
+        wedge = [[5.75, 5.0], [8.0, 4.0], [8.0, 6.0]]  # its point on the line
+        self.assertEqual(k.crossings(wedge, self.LINE), {(5.75, 5.0)})
+
+    def test_the_targets_are_one_per_direction_just_inside_the_zone_the_nearest_first(self):
+        targets = k.stub_targets(self.thermal(), [5.0, 5.0], 0.2)
+        self.assertEqual(len(targets), 8)
+        # straight out first: where the zone begins, 1 mm off (or a step further), and 0.2 mm in
+        self.assertEqual(sorted((round(abs(t[0] - 5) + abs(t[1] - 5), 1), min(abs(t[0] - 5), abs(t[1] - 5))) for t in targets[:4]), [(1.2, 0)] * 4)
+        self.assertTrue(all(abs(abs(t[0] - 5) - abs(t[1] - 5)) < 1e-6 for t in targets[4:]))  # then the diagonals
+
+    def test_a_target_tried_is_not_given_again_and_a_zone_out_of_reach_gives_none(self):
+        first = k.stub_targets(self.thermal(), [5.0, 5.0], 0.2)[0]
+        targets = k.stub_targets(self.thermal(), [5.0, 5.0], 0.2, tried=[first])
+        self.assertEqual(len(targets), 7)
+        self.assertNotIn(first, targets)
+        far = [[[20.0, 0.0], [30.0, 0.0], [30.0, 10.0], [20.0, 10.0]]]
+        self.assertEqual(k.stub_targets(self.thermal(far), [5.0, 5.0], 0.2), [])
+
+    def test_a_zone_too_thin_to_end_a_track_on_is_no_target(self):
+        thin = [[[6.0, 4.0], [6.3, 4.0], [6.3, 6.0], [6.0, 6.0]]]
+        self.assertEqual(k.stub_targets(self.thermal(thin), [5.0, 5.0], 0.2), [])
+
+    def test_a_track_ties_the_pad_if_one_straight_piece_goes_from_the_pad_onto_the_zone(self):
+        ties = lambda *points: k.ties(self.thermal(), [list(p) for p in points])
+        self.assertTrue(ties((5, 5), (6.25, 5)))
+        self.assertTrue(ties((6.25, 5), (5, 5)))  # whichever way it was laid
+        self.assertTrue(ties((5, 5), (5.1, 5.1), (6.5, 5.1)))  # a jog within the pad first
+        self.assertFalse(ties((5, 5), (5.9, 5)))  # ends in the gap
+        self.assertFalse(ties((5, 5), (5.9, 5), (5.9, 6.5)))  # a corner in the gap: neither piece does both
 
 
 if __name__ == "__main__":

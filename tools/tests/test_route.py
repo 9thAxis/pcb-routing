@@ -235,7 +235,8 @@ class EngineFailure(WithEngine):
                                     SaveBoard=lambda path, b: saved.append(path), ZONE_FILLER=lambda b: mock.Mock())
         out, err = io.StringIO(), io.StringIO()
         with kicad, mock.patch.object(k, "KicadBoard", lambda b, ignored, pours=True: board), redirect_stdout(out), redirect_stderr(err):
-            status = k.main(["in.kicad_pcb", "-o", "out.kicad_pcb", "--engine", str(engine), *more])
+            (self.dir / "in.kicad_pcb").write_text("")
+            status = k.main([str(self.dir / "in.kicad_pcb"), "-o", "out.kicad_pcb", "--engine", str(engine), *more])
         return status, saved, out.getvalue(), err.getvalue()
 
 
