@@ -1,4 +1,4 @@
-//! Cases that once went wrong (found in the review of 14 November 2026), and inputs that must be refused.
+//! Cases that once went wrong, and inputs that must be refused.
 
 use pcb_routing::{route, Error, Problem, Router, Status};
 use serde_json::{json, Value};

@@ -139,30 +139,13 @@ Measured on 14 November 2026 on the static bus of a four-layer mixed-signal boar
 | Single connections against the older router, each alone on the board state the older router saw: 29 connections, negotiation off, `bend_mm` 0, `own_hole_free` false | 29 of 29 within 2 %; worst 0.4 % on connections over 5 mm |
 | Independent clearance check without the grid | 0 violations on 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes; the control (one track moved 0.12 mm) is caught with 8 violations |
 | Two-pass search against one-pass, every search of a full run on the bus (`--verify`) | 0 differ by more than 0.25 grid step |
-| Known-answer cases (`tests/`) | Two passes against one pass on five walled connections; two nets sharing a gap; a third forced round; a wall crossed on another layer; a crossing that needs a layer change; a gap too narrow for two (reported as a conflict by name); a walled-in terminal (reported); a three-terminal tree; one corner on a slanted run; same answer on repeat and with 1 or 6 threads; a pair round a wall beside an ordinary net; and the regressions below |
+| Known-answer cases (`tests/`) | Two passes against one pass on five walled connections; two nets sharing a gap; a third forced round; a wall crossed on another layer; a crossing that needs a layer change; a gap too narrow for two (reported as a conflict by name); a walled-in terminal (reported); a three-terminal tree; one corner on a slanted run; same answer on repeat and with 1 or 6 threads; a pair round a wall beside an ordinary net; a long line beside a net that hardly gives way; hole spacing between vias of different nets; invalid input refused by name |
 
 On reading the second row: laying the 29 connections in sequence with this router and comparing each with the
 older router's sequence does *not* agree (one line 91 % longer, others 5 % shorter): both routers pick among
 equal-cost paths differently, and in a fixed order every later connection inherits that. That is the order
 dependence this router exists to remove; it is why the comparison is made one connection at a time on an
 identical board.
-
-### Review before publication
-
-An independent review of the code found the following, each now fixed and kept as a test in
-`tests/regressions.rs`:
-
-* A net could be reported unroutable when a path existed. The first pass took the cost of the path it had
-  followed from its own table, accepting each step within a tolerance; over a line of 1,200 steps the
-  tolerances added up to more than the difference between real paths, the bound came out below every real
-  path, and the second pass cut them all off. The bound is now the sum of the steps actually taken.
-* New vias of different nets kept only the copper clearance from each other, not the hole spacing.
-* The legs of a pair could be put on the wrong sides when both pads lay on one side of the trunk, and its
-  stubs assumed a 0.05 mm grid.
-* A negative corner or layer cost, or a zero step, sent a search round for ever and the machine out of memory;
-  more than seven layers or 249 nets, a stub without a terminal, or an attempt number out of range, panicked.
-  All are refused by name before anything is allocated.
-* Misspelt fields were ignored; duplicate keys were accepted.
 
 ## Measured behaviour and what was tried
 
