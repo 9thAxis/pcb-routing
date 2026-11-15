@@ -32,6 +32,24 @@ Many attempts side by side on 18 cores (wall time): 18 attempts 41 s (was 199 s)
 430 s). Side by side each attempt takes about 1.8 times the processor time it takes alone: memory traffic, and
 some of the cores being slower ones. 
 
+## Route quality
+
+Measured against the designers' own routing of the PCBWorld boards (111 boards that every router compared
+connected completely; 1,105 nets the designer routed with tracks; 2,723 connections).
+
+* Ending tracks on pads off the grid by sliding the last corner (`src/engine/ends.rs`) instead of with a stub
+  from the last cell: turns of 90 degrees or more per 100 connections 75 to 11 (the designers: 25), segments
+  shorter than twice their width 158 to 36 (90), corners per connection 2.5 to 1.6 (2.5). Track length and vias
+  as before; all 119 boards still pass KiCad's rule check.
+* A review with 43,000 random small problems found that the first version laid a stub untested into room
+  another net had just moved into (22 cases, up to 0.022 mm short, only with pads narrower than their track),
+  sent a track to a pad of another layer and off its via, and dropped the piece of track in a pad a net
+  changes layer in. With these mended, cases more than 0.0025 mm under the rule between new nets went from
+  243 (before any of this, from stubs) to none.
+* Open: buses stay together less than the designers keep them (58 % of a net's length beside its neighbour
+  against 68 %); a via between a decoupling capacitor and its pin twice as often (14 % against 6 %); short
+  last stretches before a pad.
+
 ## Tried and not kept
 
 * Laying all nets of a round at once against the previous round's picture (order independent, and one net's

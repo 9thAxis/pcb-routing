@@ -314,3 +314,68 @@ fn a_track_ends_on_a_pad_off_the_grid_without_a_stub() {
         }
     }
 }
+
+/// Small problems on which ending tracks on pads off the grid once went wrong (found by a randomised check):
+/// a stub laid into room another net had just moved into, a track sent to the point of a pad on another
+/// layer and away from the via it started on, and a net that changes layer in its own pad's cell left without
+/// the piece of track to the pad's point. Tracks of different nets keep their distance (less the hair the
+/// grid allows), and every via and every terminal is a point of a track of its net.
+#[test]
+fn tracks_ended_off_the_grid_keep_their_distance_and_their_vias() {
+    let dist2 = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = vx * vx + vy * vy;
+        let t = if l2 > 0.0 { (((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        (p[0] - a[0] - t * vx).hypot(p[1] - a[1] - t * vy)
+    };
+    for seed in [11146, 13213, 3537, 3101, 38] {
+        let text =
+            std::fs::read_to_string(format!("{}/tests/data/ends-{seed}.json", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let p: Problem = serde_json::from_str(&text).unwrap();
+        let s = route(&p).unwrap();
+        assert_eq!(s.status, Status::Routed, "{seed}: {}", s.message);
+        let need = p.nets[0].width + p.rules.new_clearance_mm;
+        for (i, a) in s.nets.iter().enumerate() {
+            for b in s.nets[i + 1..].iter().filter(|b| b.net != a.net) {
+                for (ta, tb) in a.tracks.iter().flat_map(|ta| b.tracks.iter().map(move |tb| (ta, tb))) {
+                    if ta.layer != tb.layer {
+                        continue;
+                    }
+                    for sa in ta.points.windows(2) {
+                        for sb in tb.points.windows(2) {
+                            // (the ends of each against the other: the tracks do not cross)
+                            let d = [
+                                dist2(sa[0], sb[0], sb[1]),
+                                dist2(sa[1], sb[0], sb[1]),
+                                dist2(sb[0], sa[0], sa[1]),
+                                dist2(sb[1], sa[0], sa[1]),
+                            ];
+                            let d = d.into_iter().fold(f64::MAX, f64::min);
+                            assert!(
+                                d >= need - 0.004,
+                                "{seed}: {} and {} are {d:.4} mm apart, centre to centre",
+                                a.key,
+                                b.key
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let same = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6;
+        for n in &s.nets {
+            // a via is where a track of the net ends on each of the two layers
+            for via in &n.vias {
+                let layers: std::collections::HashSet<&str> = s
+                    .nets
+                    .iter()
+                    .filter(|m| m.net == n.net)
+                    .flat_map(|m| &m.tracks)
+                    .filter(|t| same(t.points[0], *via) || same(*t.points.last().unwrap(), *via))
+                    .map(|t| t.layer.as_str())
+                    .collect();
+                assert!(!layers.is_empty(), "{seed}: no track of {} ends on its via at {via:?}", n.key);
+            }
+        }
+    }
+}

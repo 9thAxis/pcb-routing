@@ -16,7 +16,8 @@ pub type Pt = [f64; 2];
 pub struct Problem {
     /// The area routed in: `[x0, y0, x1, y1]`. Cell (row j, column i) is at `(x0 + i * step, y0 + j * step)`.
     pub window: [f64; 4],
-    /// Grid step. Terminals should lie on the grid; tracks run through cell centres.
+    /// Grid step. Tracks run through cell centres; one that ends on a terminal off the grid is ended on its
+    /// exact place.
     pub step: f64,
     /// Layers that may carry routes, in the order used for every per-layer list. At most seven.
     pub layers: Vec<String>,

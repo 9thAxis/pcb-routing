@@ -89,7 +89,7 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.89 | 1.11 | 10.3 | 1.6 | 13 | 39 |
+| pcb-routing | 0.89 | 1.11 | 10.3 | 1.6 | 11 | 36 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
@@ -130,8 +130,8 @@ Things other routers have and this one does not, roughly in order of how often t
   with a narrower second try.
 * **A clean-up pass after routing** beyond laying each net once more with the others fixed: no via
   minimisation as a pass, no smoothing off the grid. FreeRouting has an optimiser.
-* **Routing off the grid, arcs, teardrops.** Tracks run through cell centres (0.025 to 0.1 mm apart), so a
-  crowded board loses a little room that a gridless router keeps.
+* **Routing off the grid, arcs, teardrops.** But for their ends on pads, tracks run through cell centres
+  (0.025 to 0.1 mm apart), so a crowded board loses a little room that a gridless router keeps.
 * **KiCad's custom rule language and planes.** The bridge reads net classes, board minima, pad clearances and
   rule areas, not custom rules; a net meant to be joined by a zone is routed as tracks unless left out.
 * **A design rule check of its own.** Use the CAD program's.
@@ -218,8 +218,9 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 7. **Pairs** (`src/engine/pairs.rs`). A pair negotiates as one wide track; once the nets have settled it is
    split into two legs a fixed pitch apart, each joined to its pads by a short stub.
 8. **Ends** (`src/engine/ends.rs`). A pad seldom stands on a cell centre. The last corner of a track slides
-   along the stretch before it so that the track ends on the pad's own point and keeps its directions; what
-   moves is tested off the grid against all other copper, and a short stub is laid where it may not move.
+   along the stretch before it so that the track ends on the pad's own point and keeps its directions. What
+   moves is tested off the grid against the fixed copper and the other nets. Where it may not move a short
+   stub is laid, and where that would come too near another net the track ends on its cell, within the pad.
 9. **Attempts** (`src/router.rs`). `variants` runs differently ordered attempts side by side and keeps the
    best: complete before incomplete, then least missing, then the lowest sum of weighted lengths plus vias.
 
@@ -246,7 +247,7 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 54 in the engine, 91 in the bridge |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 62 in the engine, 91 in the bridge |
 
 ## Sources
 

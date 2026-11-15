@@ -4,11 +4,12 @@
 //! point with a piece of track leaves a crooked stub, shorter than the track is wide. Here the track is ended
 //! on the point without one where it can be: its last corner slides along the stretch that leads to it, so
 //! that both stretches keep their directions, or a track of one stretch is turned onto the point. What moves
-//! is tested against everything the track must keep away from, as it lies and off the grid; where it may not
-//! move, or something of the net joins it where it would, the stub is laid as before.
+//! is tested against everything the track must keep away from, as it lies and off the grid. Where it may not
+//! move, or something of the net joins it where it would, the stub is laid, and where the stub would come too
+//! near another net the track ends on its cell, which is on the pad too.
 
 use super::*;
-use crate::geom::{dist, dist_segment, dist_segments, push};
+use crate::geom::{dist, dist_segment, dist_segments, inside, push};
 use crate::grid::round6;
 
 /// A stretch of track of a net on one layer, and for each of its ends the exact place it is to end at where
@@ -71,7 +72,7 @@ fn on(q: Pt, points: &[Pt]) -> bool {
 
 impl Engine<'_> {
     /// End every run on the exact places it wants: by moving it where that is allowed, with a stub where the
-    /// stub is, and on its cell where neither is and the cell is in the pad all the same. `dead`: per entry, whether its runs are no copper of the
+    /// stub is, and on its cell where neither is and the cell's centre is on the pad as well. `dead`: per entry, whether its runs are no copper of the
     /// result; those get their stubs unasked.
     pub(super) fn meet_exactly(&self, runs: &mut [Vec<Run>], dead: &[bool]) {
         let _t = self.shared.timed(8);
@@ -96,10 +97,9 @@ impl Engine<'_> {
                         .then(|| moved(&points, to, least))
                         .flatten()
                         .filter(|new| self.may_move(n, layer, was, &new[points.len() - was.len()..], mine(), &copper));
-                    // Within a pad or on a hole the track is joined on its cell as well, and the stub is left out
-                    // where it would come too near another net. The end of a pair's leg is met in any case.
-                    let grid = &self.plan.grid;
-                    let in_pad = grid.cell(cell).is_some_and(|c| self.plan.exact[n].get(&(c as u32)) == Some(&to));
+                    // Where the cell's centre is on the pad too, the track is joined there as well, and the stub
+                    // is left out if it would come too near another net. The end of a pair's leg is met in any case.
+                    let in_pad = self.in_pad(n, layer, cell, to);
                     match new {
                         Some(new) => points = new,
                         None if dead[n] || !in_pad || self.clear(n, layer, [cell, to], was, &copper) => {
@@ -114,6 +114,21 @@ impl Engine<'_> {
                 }
             }
         }
+    }
+
+    /// Whether `to` is the place of a pad or hole of net `n` and one piece of the net's copper on the layer
+    /// holds both it and the point `cell`: a track that ends on either is joined to the pad.
+    fn in_pad(&self, n: usize, layer: usize, cell: Pt, to: Pt) -> bool {
+        let (p, grid) = (self.p, &self.plan.grid);
+        let planned = grid.cell(cell).is_some_and(|c| self.plan.exact[n].get(&(c as u32)) == Some(&to));
+        let (net, name) = (p.nets[n].net.as_str(), &p.layers[layer]);
+        let holds = |piece: &crate::model::Copper| {
+            piece.net.as_deref() == Some(net)
+                && piece.layers.contains(name)
+                && inside(&piece.shape, cell)
+                && inside(&piece.shape, to)
+        };
+        planned && p.copper.iter().any(holds)
     }
 
     /// Where copper of net entry `n` begins or ends: the ends of its runs and its vias.
@@ -236,6 +251,12 @@ mod tests {
     fn a_stretch_is_not_slid_away() {
         assert!(moved(&[[0.0, 0.0], [2.0, 0.0], [2.0, 0.05]], [2.0, 0.02], 0.05).is_none());
         assert!(moved(&[[1.99, 0.0], [2.0, 0.0], [2.0, 1.0]], [1.97, 1.0], 0.05).is_none());
+    }
+
+    #[test]
+    fn a_corner_between_stretches_nearly_in_line_does_not_slide() {
+        // (the stretch before is a stub laid at the other end, at any angle: the corner would slide far)
+        assert!(moved(&[[0.0, 0.02], [0.05, 0.0], [2.0, 0.0]], [2.03, 0.02], 0.05).is_none());
     }
 
     #[test]
