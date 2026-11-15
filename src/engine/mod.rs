@@ -10,6 +10,7 @@
 //! the cells where the centre of such a track or via would be too close to it. A net is in conflict where the
 //! centre of its own track or via stands in a cell claimed by another net.
 
+mod bus;
 mod claims;
 mod ends;
 mod fixed;
@@ -77,6 +78,9 @@ struct NetState {
     /// For a net of a bus: what its path costs more than `cost` for where it is by the laid nets of its bus,
     /// as they stood when this was laid (see `Options::bus_pull` and `bus_cross`).
     apart: f64,
+    /// And what the path this one was laid to replace pays in the same way, as the bus stood then: the two
+    /// are compared in the closing passes.
+    was_apart: f64,
     /// Terminals that could not be joined, each with the reason.
     failed: Vec<String>,
     /// Copper the entry holds besides its paths, as real shapes: (layer, from, to, half width). The leg of a

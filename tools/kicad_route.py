@@ -34,7 +34,7 @@ What it does not do:
 Exit status: 0 every net joined, 1 some nets left unjoined, 2 the engine failed (what it had laid before that
 is saved all the same).
 """
-import argparse, collections, itertools, json, math, os, subprocess, sys, tempfile
+import argparse, collections, itertools, json, math, os, re, subprocess, sys, tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -170,6 +170,7 @@ class Settings:
     slack: float = 0.002
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
+    decoupling: bool = True  # a capacitor beside a pin of an IC on its net is joined to that pin itself
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
 
 
@@ -394,18 +395,45 @@ def buses(pads, nets=None):
 
 def _lanes(nets, parts):
     """The place of each net across its bus: its rank along the row of pads on the part that has most of the
-    bus's nets (along the longer side of what those pads cover, then across). Nets not on that part come last."""
+    bus's nets (along the longer side of what those pads cover, then across). All 0, which is no order, unless
+    that part has all of the bus's nets, each once, in one row or two: an array of pads has no order across it.
+    """
     def on(part):
         return [pad for pad in parts[part] if pad.net in nets]
     part = max(sorted(parts), key=lambda part: len({pad.net for pad in on(part)}))
     pads = on(part)
     wide = max(p.at[0] for p in pads) - min(p.at[0] for p in pads) >= max(p.at[1] for p in pads) - min(p.at[1] for p in pads)
-    order = []
-    for pad in sorted(pads, key=lambda p: (p.at[0], p.at[1]) if wide else (p.at[1], p.at[0])):
-        if pad.net not in order:
-            order.append(pad.net)
-    order += sorted(nets - set(order))
+    along, across = (0, 1) if wide else (1, 0)
+    rows = {round(p.at[across], 3) for p in pads}
+    if len(pads) != len(nets) or {p.net for p in pads} != set(nets) or len(rows) > 2:
+        return {net: 0 for net in nets}
+    order = [pad.net for pad in sorted(pads, key=lambda p: (p.at[along], p.at[across]))]
     return {net: lane for lane, net in enumerate(order)}
+
+
+DECOUPLING_REACH = 5.0  # mm from a capacitor's pad to the pin it is taken to stand by
+DECOUPLING_VIA_PENALTY = 5.0  # times the usual: the detour accepted before the link to the pin changes layer
+
+
+def decoupling(pads, groups):
+    """The capacitors of a net that stand by a pin of an IC on it: [(group of the capacitor's pad, pad index of
+    the pin)], for `groups`, the net's groups of joined pads as indices into `pads`.
+
+    A capacitor is a part C.. of two pads whose pad on the net is joined to nothing yet; the pin is the nearest
+    pad of a part U.. or IC.. on the net, in another group, within DECOUPLING_REACH.
+    """
+    size = collections.Counter(pad.part for pad in pads if pad.part)
+    is_cap = lambda pad: bool(pad.part) and re.match(r"C\d", pad.part) and size[pad.part] == 2
+    is_pin = lambda pad: bool(pad.part) and re.match(r"(U|IC)\d", pad.part)
+    links = []
+    for g, group in enumerate(groups):
+        if len(group) != 1 or not is_cap(pads[group[0]]):
+            continue
+        cap = pads[group[0]]
+        pins = [(math.dist(cap.at, pads[i].at), i) for h, other in enumerate(groups) if h != g for i in other if is_pin(pads[i])]
+        if pins and min(pins)[0] <= DECOUPLING_REACH:
+            links.append((g, min(pins)[1]))
+    return links
 
 
 def build_problem(picture, rules, only=None, narrow=False, options=None):
@@ -458,19 +486,30 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
     nets = []
     for name in unjoined:
         # one terminal per group of pads that existing copper already joins
-        terminals = []
-        for group in picture.groups[name]:
-            pad = picture.pads[group[0]]
-            on = [l for l in layers if l in pad.layers]
-            if on:
-                terminals.append(dict(xy=pad.at, layers=on))
-        if len(terminals) < len(picture.groups[name]):
+        on = lambda pad: [l for l in layers if l in pad.layers]
+        groups = picture.groups[name]
+        if not all(on(picture.pads[group[0]]) for group in groups):
             print(f"skipped {name}: a pad of it is on no routing layer", file=sys.stderr)
             continue
+        terminal = lambda pad: dict(xy=pad.at, layers=on(pad))
         width = rules.narrow_width(name, smallest.get(name)) if narrow else rules.track_width(name)
-        nets.append(dict(key=name, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=layers,
-                         clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
-                         terminals=terminals, via_penalty_mm=rules.settings.via_penalty))
+        entry = lambda key, terminals, via_penalty: dict(
+            key=key, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=layers,
+            clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
+            terminals=terminals, via_penalty_mm=via_penalty)
+        # A capacitor beside a pin of an IC is joined to that pin, in an entry of its own that is slow to
+        # change layer; the rest of the net is joined as it would be without the capacitor.
+        links = decoupling(picture.pads, groups) if rules.settings.decoupling else []
+        links = [(g, pin) for g, pin in links if on(picture.pads[pin])][:max(0, ENGINE_NETS - 1 - len(nets) - len(unjoined))]
+        taken = {g for g, _ in links}
+        rest = [terminal(picture.pads[group[0]]) for g, group in enumerate(groups) if g not in taken]
+        for g, pin in links:
+            cap = picture.pads[groups[g][0]]
+            nets.append(entry(f"{name} | {cap.part}", [terminal(cap), terminal(picture.pads[pin])],
+                              rules.settings.via_penalty * DECOUPLING_VIA_PENALTY))
+        if len(rest) < 2:
+            continue
+        nets.append(entry(name, rest, rules.settings.via_penalty))
         if name in bus:
             nets[-1]["bus"], nets[-1]["bus_lane"] = bus[name]
 
@@ -486,7 +525,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
             regions.append(dict(rings=[_disc(hole.at, max(radius, 0.001))], layers=[], tracks=False, vias=True))
 
     problem_rules = dict(hole_centre_mm=_r(rules.hole_spacing(via_drill, via_drill)), pad_drill_margin_mm=0.0,
-                         region_margin_mm=_r(margin), new_clearance_mm=_r(rules.new_clearance(n["key"] for n in nets)))
+                         region_margin_mm=_r(margin), new_clearance_mm=_r(rules.new_clearance(n["net"] for n in nets)))
     if narrow:
         problem_rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
     return dict(window=window, step=rules.settings.step, layers=layers, copper=copper, holes=holes, regions=regions,
@@ -568,24 +607,28 @@ def route(board, settings, run, only=None, options=None, say=print):
         if number:
             picture = board.read(lot)
             say(f"batch {number + 1} of {len(lots)}")
-        tries = Rules.of(picture, settings).tries(lot)
-        for number_of_try, (step, narrow) in enumerate(tries):
-            at_step = replace(settings, step=step)
-            if number_of_try:
+        # each try: the grid step, whether narrower, whether capacitors get their own link to the pin they stand by
+        tries = [(step, narrow, settings.decoupling) for step, narrow in Rules.of(picture, settings).tries(lot)]
+        number_of_try, again = 0, False
+        while number_of_try < len(tries):
+            step, narrow, links = tries[number_of_try]
+            at_step = replace(settings, step=step, decoupling=links)
+            if number_of_try and not again:
                 # what could not be joined is tried once more against the board as it now stands
                 picture = board.read(lot)
             rules = Rules.of(picture, at_step)
             most = (options or {}).get("max_states")
             if number_of_try and most and rules.states(picture.box, picture.layers) > most:
                 say(f"no try at a {step:g} mm step: the grid would be larger than --max-states")
+                number_of_try += 1
                 continue
             problem = build_problem(picture, rules, only=set(lot), narrow=narrow, options=options)
-            keys = [n["key"] for n in problem["nets"]]
-            if not number_of_try:
+            keys = list(dict.fromkeys(n["net"] for n in problem["nets"]))  # (a net may have several entries)
+            if not number_of_try and not again:
                 wanted += keys
             if not keys:
                 break
-            if number_of_try:
+            if number_of_try and not again:
                 finer = step != tries[number_of_try - 1][0]
                 say(f"{'next try, at a %g mm step' % step if finer else 'second try, narrower'}: {', '.join(keys)}")
             try:
@@ -594,12 +637,22 @@ def route(board, settings, run, only=None, options=None, say=print):
                 outcome.failure = str(failure)
                 break
             first = False
+            # A link from a capacitor to its pin is a wish, not a need. Where a run with such links leaves
+            # anything unjoined, nothing of it is kept: the same nets are routed again without the links, and
+            # there are none in the tries that follow.
+            if links and solution["status"] != "routed" and any(n["key"] != n["net"] for n in problem["nets"]):
+                say("not all joined with the capacitors linked to their pins: routed again without those links")
+                tries = tries[:number_of_try] + [(s, n, False) for s, n, _ in tries[number_of_try:]]
+                again = True
+                continue
+            again = False
             added = board.write(solution, {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
             outcome.tracks, outcome.vias = outcome.tracks + added[0], outcome.vias + added[1]
             if solution["status"] == "routed":
                 break
             last = solution["status"]
             lot = keys
+            number_of_try += 1
         if outcome.failure:
             break
     outcome.wanted = len(wanted)
@@ -914,6 +967,7 @@ def main(argv=None):
     parser.add_argument("--slack", type=float, default=0.002, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
+    parser.add_argument("--no-decoupling", action="store_true", help="do not join a capacitor that stands by a pin of an IC to that pin itself")
     parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
     parser.add_argument("--problem", help="keep the problem file here (of the first run of the engine)")
@@ -931,7 +985,7 @@ def main(argv=None):
         parser.error("--step takes a number of mm, or auto")
     if not 0 <= args.bus_pull <= 10:
         parser.error("--bus-pull takes a number from 0 to 10")
-    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull)
+    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling)
     options = dict(variants=args.variants, max_states=args.max_states)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
 

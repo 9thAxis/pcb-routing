@@ -10,7 +10,7 @@ depend on the order the nets are given in, and a net that would block three othe
 **Check every result with the design rule check of your CAD program before using it.** The router's picture
 of the board is the problem it was given.
 
-Status: 0.1. The interfaces may still change.
+Status: 0.1, not yet on crates.io. The interfaces may still change.
 
 ## Routing a KiCad board
 
@@ -38,8 +38,8 @@ and KiCad's design rule check reports no error that the unrouted board did not h
 | Set | Boards | Nets per board | Clean pass | Connections made | Time per board |
 |---|---|---|---|---|---|
 | D3-A (small) | 99 | 2 to 13 | 99 of 99 | 1,301 of 1,301 | 0.6 s |
-| D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.3 s |
-| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 12.6 s |
+| D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.5 s |
+| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 15 s |
 
 Run on 15 November 2026 through the KiCad bridge with its defaults, on an idle Apple M5 Max laptop; the time
 is the whole run, including loading and saving the board in KiCad. A single attempt uses one core, so the
@@ -57,10 +57,10 @@ board's project file. Times are each tool's whole run.
 | D3-A (99) | pcb-routing | 99 | 99 | 100% | 0.60 s |
 | | KiCadRoutingTools | 94 | 95 | 100% | 0.69 s |
 | | FreeRouting | 46 | 92 | 99.5% | 2.8 s |
-| D3-B (10) | pcb-routing | 10 | 10 | 100% | 2.3 s |
+| D3-B (10) | pcb-routing | 10 | 10 | 100% | 2.5 s |
 | | KiCadRoutingTools | 8 | 8 | 100% | 2.0 s |
 | | FreeRouting | 4 | 8 | 99.3% | 3.7 s |
-| D3-C (10) | pcb-routing | 10 | 10 | 100% | 12.6 s |
+| D3-C (10) | pcb-routing | 10 | 10 | 100% | 15 s |
 | | KiCadRoutingTools | 6 | 6 | 99.5% | 8.2 s |
 | | FreeRouting | 0 | 7 | 96.5% | 12.4 s |
 
@@ -71,8 +71,9 @@ How to read it:
   which KiCad reports as an error. The fourth column counts a board as clean when those are its only errors.
   With FreeRouting's `automatic_neckdown` turned off it leaves more connections open and does worse in both
   columns (69, 2 and 1 clean), so the table shows it as shipped.
-- **Speed on large boards.** KiCadRoutingTools is the faster router there: on the six D3-C boards both made
-  clean it took 20 s in all where pcb-routing took 66 s.
+- **Speed on large boards.** KiCadRoutingTools is the faster router there, by about half again. The times of
+  pcb-routing include what keeps buses together and links capacitors to their pins, which added about a
+  seventh; one crowded board is routed twice, the second time without those links.
 - **Front-ends.** KiCadRoutingTools' `autoroute.py` front-end, run with no arguments, routed every board with
   0.1 mm tracks and clearances instead of the board's own and made no board clean; the table uses `route.py`.
 - **Not the paper's protocol.** The benchmark's authors prepare the boards with a KiCad 9 pipeline, pin older
@@ -90,7 +91,7 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.89 | 1.11 | 10.0 | 1.7 | 11 | 39 |
+| pcb-routing | 0.90 | 1.13 | 10.0 | 1.7 | 12 | 39 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
@@ -105,12 +106,16 @@ pitches of its neighbour on the same layer.
 | | Alongside its neighbour | Same number of vias | The two cross | Difference in length |
 |---|---|---|---|---|
 | The designer | 72% | 80% | 19% | 25% |
-| pcb-routing | 70% | 79% | 14% | 24% |
+| pcb-routing | 72% | 80% | 14% | 24% |
 | pcb-routing, buses left alone (`--bus-pull 0`) | 63% | 80% | 22% | 23% |
 | KiCadRoutingTools | 71% | 61% | 26% | 25% |
 | FreeRouting | 64% | 77% | 29% | 24% |
 
-Not in these tables: anything that needs to know what the circuit does.
+Decoupling: a capacitor with a pin of an IC of the same net within 5 mm (51 on these boards). The designers
+have a via between the capacitor and that pin for 6% of them; pcb-routing 6% (14% with `--no-decoupling`),
+KiCadRoutingTools 7% of those it joins directly, FreeRouting 8%.
+
+Not in these tables: what needs to know what the circuit does (which nets are quiet and which are noisy).
 
 The table is computed with [`tools/quality`](https://github.com/9thAxis/pcb-routing/blob/main/tools/quality/README.md), which defines each figure and works on
 any routed KiCad board that has a reference routing to compare with:
@@ -136,6 +141,8 @@ here.
   way, "no vias", "lay last without disturbing the others".
 * Deterministic: the same problem gives the same answer, whatever the thread count.
 * A self-check of the search (`--verify`), a mask export for comparing with another tool, a trace per round.
+* Decoupling capacitors joined to the pin they stand by, in the KiCad bridge: a link of its own that is slow
+  to change layer, given up if the board cannot be completed with it.
 * Buses kept together: nets marked as one bus (`bus` and `bus_lane` on a net; the KiCad bridge marks nets
   that leave one part and arrive at another side by side) are drawn to run beside each other on one layer,
   in the order of their pads, and are slow to cross each other.
@@ -178,7 +185,7 @@ for net in &solution.nets {
 }
 ```
 
-Add it with `cargo add pcb-routing`. The program alone: `cargo install pcb-routing`.
+Until it is on crates.io: `pcb-routing = { git = "https://github.com/9thAxis/pcb-routing" }`.
 
 `route` returns an error only when the problem cannot be run at all (a size or cost that makes no sense, a
 name that does not exist, a grid larger than `options.max_states`). A problem that was run and could not be
@@ -187,7 +194,7 @@ completed comes back as a solution: `unroutable` with the connections that could
 nets are still too close.
 
 `Router` gives more control: a callback per round of negotiation, a self-check of the search, one attempt
-alone. See `examples/route_file.rs` and the [API documentation](https://docs.rs/pcb-routing).
+alone. See `examples/route_file.rs` and the API documentation (`cargo doc --open`).
 
 ## As a program
 
@@ -279,7 +286,7 @@ repository) records what each of these bought when it was added, and what was tr
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 68 in the engine, 102 in the bridge, 141 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 69 in the engine, 110 in the bridge, 141 in the quality tools |
 
 ## Sources
 

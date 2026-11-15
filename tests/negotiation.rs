@@ -478,3 +478,17 @@ fn a_net_of_a_bus_is_slow_to_pass_under_another() {
     assert!(free < 3.3, "free to pass under, b comes no nearer a than y = {free}");
     assert!(dear > 3.9, "with a price on passing under, b goes up to y = {dear}");
 }
+
+/// Lanes may be any numbers: nets far apart in lanes are simply not drawn to each other.
+#[test]
+fn lanes_of_any_size_are_taken() {
+    let mut nets = vec![net("a", [1.0, 1.0], [9.0, 1.0], &["F"]), net("b", [1.0, 2.4], [9.0, 3.4], &["F"])];
+    for (n, lane) in nets.iter_mut().zip([i32::MIN, i32::MAX]) {
+        n["bus"] = json!("d");
+        n["bus_lane"] = json!(lane);
+    }
+    let v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": nets, "options": {"bus_pull": 0.5}});
+    let s = route(&serde_json::from_value::<Problem>(v).unwrap()).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    assert!(beside(&s, 1, 0, 0.7) < 1.0, "nets lanes apart were drawn together");
+}

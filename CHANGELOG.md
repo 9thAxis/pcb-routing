@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (2026-11-15)
+## 0.1.0 (unreleased)
 
 First version as a library.
 
@@ -37,8 +37,13 @@ First version as a library.
   its `bus_lane` gives it, so that the nets between two others find room; and `options.bus_cross` (6) more
   where it runs over or under one on another layer. The KiCad bridge names as a bus three or more nets with
   neighbouring pads on the same two parts, with lanes in the order of the pads (`--bus-pull`, 0 for none).
-  On 199 pairs of bus neighbours on public boards: 63 to 70 % of a net's length beside its neighbour (the
+  On 199 pairs of bus neighbours on public boards: 63 to 72 % of a net's length beside its neighbour (the
   designers: 72 %), and 22 to 14 % of the pairs crossing (19 %).
+- KiCad bridge: a capacitor with a pin of an IC of its net within 5 mm is joined to that pin by an entry of
+  its own with five times the via penalty, and the rest of the net is joined without it (`--no-decoupling`
+  for none). If a run with such links leaves anything unjoined, nothing of it is kept and the nets are routed
+  again without them. On 51 such capacitors on public boards: a via between capacitor and pin for 14 to 6 %
+  (the designers: 6 %), for 1.4 % more track.
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.

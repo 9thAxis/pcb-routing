@@ -260,8 +260,9 @@ pub struct Net {
     #[serde(default)]
     pub bus: Option<String>,
     /// Its place across its bus, counted from one side: nets one lane apart are drawn to run next to each
-    /// other, nets `k` lanes apart to leave room for the `k - 1` between them. Where all nets of a bus have the
-    /// same lane (0 by default) they are drawn together in no order.
+    /// other, nets `k` lanes apart to leave room for the `k - 1` between them, and nets more than three
+    /// lanes apart are not drawn to each other at all. Where all nets of a bus have the same lane (0 by
+    /// default) they are drawn together in no order. The lanes say how far apart, not on which side.
     #[serde(default)]
     pub bus_lane: i32,
 }

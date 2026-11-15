@@ -59,6 +59,7 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   | pull 0.2, beside = within two pitches | 67 % | 24 % | 103 |
   | and lanes (`Net::bus_lane`) | 71 % | 21 % | 109 |
   | and a price on passing over or under (`Options::bus_cross` 6) | 70 % | 14 % | 111 |
+  | and the capacitors linked to their pins | 72 % | 14 % | |
 
   Where two neighbours are on one layer they run together for 93 % of their length with or without any
   of this; all that was missing was on pairs split over two layers. Without lanes the outer nets of a bus
@@ -73,8 +74,20 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   about a seventh longer. A review found that the closing passes compared a new path, priced against the
   bus as it stood, with the old path's price from when it was laid: the net of a bus laid first, with
   nothing to be beside yet, was never drawn in. Both are now priced against the bus as it stands.
-* Open: a via between a decoupling capacitor and its pin twice as often (14 % against 6 %); short
-  last stretches before a pad.
+  A second review: marking grew with the square of the lane distance (a bus of 32 nets with lanes 82 s,
+  7 s without), so nets more than three lanes apart are not drawn to each other; a state over one net and
+  too near another was beside or over by the order of the nets, so over is now drawn after beside for all;
+  the closing passes of a bus could chase each other until they ran out (41 of 3,400 random runs), so a
+  move must gain a hundredth. A wrong order of lanes is worse than none (six nets, lanes three apart as a
+  grid of pads would give: 6 % more track), so the bridge gives lanes only where a bus is in one row or
+  two on one part.
+* Decoupling (bridge): a capacitor by a pin of an IC as an entry of its own, slow to change layer. A via
+  between capacitor and pin 14 to 6 % of 51 (the designers 6 %), the copper between them as short as the
+  straight line; 1.4 % more track, since the capacitor no longer taps the nearest copper of its net. On
+  one crowded board the link found no way and, tried again by itself afterwards, the net found none
+  either: a run that leaves anything unjoined with links is now thrown away and done again without.
+* Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,
+  the designers 27 %, on seven pairs); short last stretches before a pad; copper pours.
 
 ## Tried and not kept
 

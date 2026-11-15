@@ -183,6 +183,7 @@ impl Ground {
             self.beside[idx as usize] = 0;
         }
         self.apart = 0.0;
+        self.over = 0.0;
     }
 
     /// Note a hole of the net being laid at `cell`: a layer change there is free, and no other via may be

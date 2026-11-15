@@ -289,13 +289,24 @@ class Buses(unittest.TestCase):
     def test_lanes_follow_the_row_of_pads(self):
         pads = self.row("U1", ["c", "a", "d", "b"], 0) + self.row("U2", ["c", "a", "d", "b"], 20)
         self.assertEqual({net: lane for net, (_, lane) in k.buses(pads).items()}, dict(c=0, a=1, d=2, b=3))
-        # a row along x, and a net of the bus that is not on the part the lanes are counted on
+        # a row along x
         across = [support.land(k, net, i, 0, half=0.3, part="U1") for i, net in enumerate("abcd")]
-        there = [support.land(k, net, i, 9, half=0.3, part="U2") for i, net in enumerate("bcde")]
-        again = [support.land(k, net, i, 19, half=0.3, part="U3") for i, net in enumerate("bcde")]
-        lanes = {net: lane for net, (_, lane) in k.buses(across + there + again).items()}
-        self.assertEqual([lanes[n] for n in "bcd"], sorted(lanes[n] for n in "bcd"))
-        self.assertEqual(len(set(lanes.values())), len(lanes))
+        there = [support.land(k, net, i, 9, half=0.3, part="U2") for i, net in enumerate("abcd")]
+        self.assertEqual({net: lane for net, (_, lane) in k.buses(across + there).items()}, dict(a=0, b=1, c=2, d=3))
+
+    def test_two_rows_take_their_lanes_column_by_column(self):
+        header = lambda part, x: [support.land(k, net, x + i % 2, i // 2, half=0.3, part=part) for i, net in enumerate("abcdef")]
+        lanes = {net: lane for net, (_, lane) in k.buses(header("J1", 0) + header("J2", 20)).items()}
+        self.assertEqual(lanes, dict(a=0, b=1, c=2, d=3, e=4, f=5))
+
+    def test_an_array_of_pads_and_a_bus_not_all_on_one_part_have_no_lanes(self):
+        grid = lambda part, x: [support.land(k, net, x + i % 3, i // 3, half=0.3, part=part) for i, net in enumerate("abcdefghi")]
+        self.assertEqual({lane for _, lane in k.buses(grid("U1", 0) + grid("U2", 20)).values()}, {0})
+        # b, c, d run between U2 and U3 as well as a, b, c between U1 and U2: one bus, no part with all of it
+        pads = self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c", "d"], 20) + self.row("U3", ["b", "c", "d", "e"], 40) + self.row("U4", ["c", "d", "e"], 60)
+        bus = k.buses(pads)
+        self.assertEqual(len({name for name, _ in bus.values()}), 1)
+        self.assertEqual({lane for _, lane in bus.values()}, {0})
 
     def test_two_nets_are_not_a_bus(self):
         self.assertEqual(k.buses(self.row("U1", ["a", "b"], 0) + self.row("U2", ["a", "b"], 20)), {})
@@ -352,6 +363,42 @@ class Buses(unittest.TestCase):
         self.assertEqual(sorted(net["bus_lane"] for net in problem["nets"]), [0, 1, 2])
         problem = k.build_problem(picture, k.Rules.of(picture, k.Settings(bus_pull=0.0)))
         self.assertTrue(all("bus" not in net for net in problem["nets"]))
+
+
+class Decoupling(unittest.TestCase):
+    """A capacitor beside a pin of an IC on its net is joined to that pin in an entry of its own."""
+
+    def board(self, far=False, **settings):
+        pads = [support.land(k, "VCC", 0, 0, part="U1"), support.land(k, "VCC", 30 if far else 2, 0, part="C1"),
+                support.land(k, "GND", 30 if far else 2, 2, part="C1"), support.land(k, "VCC", 20, 0, part="J1"),
+                support.land(k, "GND", 20, 2, part="J1"), support.land(k, "GND", 0, 2, part="U1")]
+        picture = support.picture(k, pads)
+        return k.build_problem(picture, k.Rules.of(picture, k.Settings(**settings)))
+
+    def test_the_capacitor_goes_to_the_pin_and_the_rest_is_joined_without_it(self):
+        nets = {net["key"]: net for net in self.board()["nets"]}
+        self.assertEqual(sorted(nets), ["GND", "GND | C1", "VCC", "VCC | C1"])
+        link, rest = nets["VCC | C1"], nets["VCC"]
+        self.assertEqual(link["net"], "VCC")
+        self.assertEqual([t["xy"] for t in link["terminals"]], [[2, 0], [0, 0]])
+        self.assertEqual(sorted(t["xy"] for t in rest["terminals"]), [[0, 0], [20, 0]])
+        self.assertGreater(link["via_penalty_mm"], rest["via_penalty_mm"])
+
+    def test_a_capacitor_far_from_any_pin_and_a_board_asked_not_to_are_left_as_they_are(self):
+        self.assertEqual(sorted(net["key"] for net in self.board(far=True)["nets"]), ["GND", "VCC"])
+        self.assertEqual(sorted(net["key"] for net in self.board(decoupling=False)["nets"]), ["GND", "VCC"])
+
+    def test_a_net_of_only_the_capacitor_and_the_pin_is_one_entry(self):
+        pads = [support.land(k, "VREF", 0, 0, part="U1"), support.land(k, "VREF", 2, 0, part="C1"), support.land(k, "GND", 2, 2, part="C1")]
+        picture = support.picture(k, pads)
+        nets = k.build_problem(picture, k.Rules.of(picture))["nets"]
+        self.assertEqual([net["key"] for net in nets], ["VREF | C1"])
+
+    def test_a_resistor_or_a_capacitor_already_joined_is_no_decoupling(self):
+        pads = [support.land(k, "VCC", 0, 0, part="U1"), support.land(k, "VCC", 2, 0, part="R1"), support.land(k, "X", 2, 2, part="R1"),
+                support.land(k, "VCC", 4, 0, part="C1"), support.land(k, "GND", 4, 2, part="C1"), support.land(k, "VCC", 20, 0, part="J1")]
+        self.assertEqual(k.decoupling(pads, [[0], [1], [3, 5]]), [])
+        self.assertEqual(k.decoupling(pads, [[0], [1], [3], [5]]), [(2, 0)])
 
 
 if __name__ == "__main__":

@@ -314,5 +314,51 @@ class RunEngine(WithEngine):
             k.run_engine(self.problem, [sys.executable, "-c", "import sys; sys.exit(0)"])
 
 
+class CapacitorBoard(FakeBoard):
+    """One net of three pads: a pin of U1, a capacitor beside it, a connector far off."""
+
+    def __init__(self):
+        super().__init__(0)
+        self.names = ["VCC"]
+
+    def read(self, nets=None):
+        self.reads.append(None if nets is None else set(nets))
+        pads = [support.land(k, "VCC", 2.0, 2.0, part="U1"), support.land(k, "VCC", 4.0, 2.0, part="C1"),
+                support.land(k, "GND", 4.0, 4.0, part="C1"), support.land(k, "VCC", 18.0, 2.0, part="J1")]
+        groups = {"VCC": [[0, 1, 3]] if "VCC" in self.joined else [[0], [1], [3]], "GND": [[2]]}
+        picture = support.picture(k, pads, groups)
+        picture.box = [0.0, 0.0, 20.0, 6.0]
+        return picture
+
+    def write(self, solution, sizes):
+        added = super().write(solution, sizes)
+        self.joined.discard("VCC")
+        if all(n["tracks"] for n in solution["nets"]):
+            self.joined.add("VCC")
+        return added
+
+
+class Decoupling(WithEngine):
+    def test_the_capacitor_is_linked_to_its_pin(self):
+        board = CapacitorBoard()
+        outcome = self.route(board)
+        self.assertEqual([n["key"] for n in self.runs()[0]["nets"]], ["VCC | C1", "VCC"])
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 1, 0))
+        self.assertEqual(self.said, [])
+
+    def test_a_link_that_cannot_be_laid_costs_nothing(self):
+        board = CapacitorBoard()
+        self.stubborn(["VCC | C1"])
+        outcome = self.route(board)
+        first, second = self.runs()
+        self.assertEqual([n["key"] for n in first["nets"]], ["VCC | C1", "VCC"])
+        self.assertEqual([n["key"] for n in second["nets"]], ["VCC"])  # the same net again, whole and unlinked
+        self.assertEqual(len(second["nets"][0]["terminals"]), 3)
+        self.assertEqual(board.writes, [["VCC"]])  # nothing of the first run was kept
+        self.assertEqual(len(board.reads), 1)
+        self.assertEqual(self.said, ["not all joined with the capacitors linked to their pins: routed again without those links"])
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 1, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
