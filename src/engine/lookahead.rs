@@ -251,7 +251,7 @@ impl Engine<'_> {
         let mut held = vec![false; across * down];
         for &s in sources {
             let cell = s as usize % self.hw;
-            held[(cell / w >> TILE_BITS) * across + (cell % w >> TILE_BITS)] = true;
+            held[((cell / w) >> TILE_BITS) * across + ((cell % w) >> TILE_BITS)] = true;
         }
         let boxes: Vec<[i32; 4]> = (0..across * down)
             .filter(|&t| held[t])

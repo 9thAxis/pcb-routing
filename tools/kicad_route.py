@@ -92,8 +92,19 @@ def drawing_polygon(item, layer):
     return poly
 
 
+def ignored_checks(board_path):
+    """The design rule checks the board's project sets to 'ignore' (KiCad keeps them in the .kicad_pro)."""
+    try:
+        project = json.loads(Path(board_path).with_suffix(".kicad_pro").read_text())
+        severities = project["board"]["design_settings"]["rule_severities"]
+    except Exception:
+        return set()
+    return {name for name, level in severities.items() if level == "ignore"}
+
+
 def build_problem(board, args):
     settings = board.GetDesignSettings()
+    ignored = ignored_checks(args.board)
     slack = args.slack
     enabled = [l for l in board.GetEnabledLayers().CuStack()]
     name = board.GetLayerName
@@ -112,7 +123,8 @@ def build_problem(board, args):
     window = [low(box.GetLeft()), low(box.GetTop()), high(box.GetRight()), high(box.GetBottom())]
 
     min_clear = MM(settings.m_MinClearance)
-    hole_clear = MM(settings.m_HoleClearance)
+    hole_clear = 0.0 if "hole_clearance" in ignored else MM(settings.m_HoleClearance)
+    edge_clear = 0.0 if "copper_edge_clearance" in ignored else MM(settings.m_CopperEdgeClearance)
     copper, holes = [], []
     # the smallest clearance any net keeps from other copper, with the slack: what every track keeps from a pad anyway
     classes = {pad.GetNetname(): pad.GetNet().GetNetClassSlow() for pad in board.GetPads() if pad.GetNetCode() > 0}
@@ -135,7 +147,8 @@ def build_problem(board, args):
         local = local_clearance(pad)
         own = (local + slack - least_clear) if local is not None else 0.0
         for l in enabled:
-            grow = max(own if l in on else -1.0, mask_opening(pad, l) - least_clear + 0.01)
+            opening = -10.0 if "solder_mask_bridge" in ignored else mask_opening(pad, l)
+            grow = max(own if l in on else -1.0, opening - least_clear + 0.01)
             if l not in on and grow <= -1.0:
                 continue  # no copper and no opening on this layer
             if l in on and grow <= 0:
@@ -244,7 +257,7 @@ def build_problem(board, args):
 
     via_drill = max((n["via"][1] for n in nets), default=0.3)
     rules = dict(hole_centre_mm=round(via_drill + MM(settings.m_HoleToHoleMin) + slack, 6), pad_drill_margin_mm=0.0,
-                 region_margin_mm=round(MM(settings.m_CopperEdgeClearance) + slack, 6), new_clearance_mm=round(max(worst_clear, min_clear) + slack, 6))
+                 region_margin_mm=round(edge_clear + (slack if edge_clear > 0 else 0.0), 6), new_clearance_mm=round(max(worst_clear, min_clear) + slack, 6))
     options = dict(variants=args.variants)
     return dict(window=window, step=args.step, layers=layers, copper=copper, holes=holes, regions=regions, rules=rules, nets=nets, options=options)
 
