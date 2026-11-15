@@ -79,6 +79,9 @@ pub(super) struct Swept {
     pub(super) mult: Cell<f32>,
     /// The directions in which a step can be taken from here past the fixed copper (see `Fixed::open`).
     pub(super) open: Cell<u8>,
+    /// The first pass's look-ahead from here towards the sources, for a state the present search has touched:
+    /// worked out once, where every neighbour that reaches the state would work it out again.
+    pub(super) ahead: Cell<f32>,
 }
 
 pub(super) const SHUT_COST: f32 = f32::INFINITY;
@@ -106,7 +109,13 @@ impl Worker {
                 flagged: Vec::new(),
                 vcost: vec![Cell::new(0.0); cells],
                 swept: vec![
-                    Swept { d: Cell::new(0.0), seen: Cell::new(0), mult: Cell::new(1.0), open: Cell::new(0) };
+                    Swept {
+                        d: Cell::new(0.0),
+                        seen: Cell::new(0),
+                        mult: Cell::new(1.0),
+                        open: Cell::new(0),
+                        ahead: Cell::new(0.0)
+                    };
                     states
                 ],
                 priced: vec![Cell::new(0); states.div_ceil(PAGE)],

@@ -108,10 +108,12 @@ impl Engine<'_> {
         q.clear();
         for at in goals.iter().flat_map(|g| g.states(self.plan.space)) {
             let at = at as usize;
-            if back.get(at).is_finite() {
+            let ahead = back.get(at);
+            if ahead.is_finite() {
                 a[at].d.set(0.0);
                 a[at].seen.set(open_mark);
-                q.push((back.get(at) as f64 * 64.0) as u64, at as u32);
+                a[at].ahead.set(ahead);
+                q.push((ahead as f64 * 64.0) as u64, at as u32);
             }
         }
         let (mut limit, mut reached, mut last, mut count) = (f64::INFINITY, false, f64::INFINITY, 0u64);
@@ -120,16 +122,16 @@ impl Engine<'_> {
             if a[ui].seen.get() == closed {
                 continue;
             }
-            let d = a[ui].d.get() as f64;
-            if d + back.get(ui) as f64 > limit {
-                last = d + back.get(ui) as f64;
+            let (d, ahead) = (a[ui].d.get() as f64, a[ui].ahead.get());
+            if d + ahead as f64 > limit {
+                last = d + ahead as f64;
                 break;
             }
             a[ui].seen.set(closed);
             count += 1;
             let (l, c) = (ui / hw, ui % hw);
             // the look-ahead is 0 at the sources (and where a hole of the net joins them to another layer)
-            if !reached && back.get(ui) == 0.0 && (back.exact() || sources.binary_search(&(ui as u32)).is_ok()) {
+            if !reached && ahead == 0.0 && (back.exact() || sources.binary_search(&(ui as u32)).is_ok()) {
                 reached = true;
                 let (units, real) = self.follow(n, prices, closed, ui);
                 // The path followed is a real one, so what it costs with its corners is a cost the cheapest path
@@ -149,16 +151,19 @@ impl Engine<'_> {
             }
             let mut relax = |v: usize, nd: f64| {
                 let node = &a[v];
-                if node.seen.get() == closed || (node.seen.get() == open_mark && nd >= node.d.get() as f64) {
+                let seen = node.seen.get();
+                if seen == closed || (seen == open_mark && nd >= node.d.get() as f64) {
                     return;
                 }
+                let ahead = if seen == open_mark { node.ahead.get() } else { back.get(v) };
                 // nothing beyond the bound is wanted (this also drops states the sources cannot reach at all)
-                let total = nd + back.get(v) as f64;
+                let total = nd + ahead as f64;
                 if total > limit || total == f64::INFINITY {
                     return;
                 }
                 node.d.set(nd as f32);
                 node.seen.set(open_mark);
+                node.ahead.set(ahead);
                 q.push((total * 64.0) as u64, v as u32);
             };
             let step = lc[l] * m as f64;
@@ -279,7 +284,7 @@ impl Engine<'_> {
         let _t = self.shared.timed(3);
         let back = back.as_ref();
         let swept = prices.swept();
-        let swept_closed = sweep.gen + 1;
+        let (swept_open, swept_closed) = (sweep.gen, sweep.gen + 1);
         let look = |at: usize| -> f64 {
             match (bound, back) {
                 (Some(bound), Some(back)) => {
@@ -287,7 +292,10 @@ impl Engine<'_> {
                         // kept in single precision: a little under, so that rounding can never put it above the real cost
                         swept[at].d.get() as f64 * 0.9999
                     } else {
-                        (floor.get(at) as f64).max(bound - back.get(at) as f64)
+                        // (a state the first pass reached but did not finish has its look-ahead kept)
+                        let behind =
+                            if swept[at].seen.get() == swept_open { swept[at].ahead.get() } else { back.get(at) };
+                        (floor.get(at) as f64).max(bound - behind as f64)
                     }
                 }
                 _ => floor.get(at) as f64,
