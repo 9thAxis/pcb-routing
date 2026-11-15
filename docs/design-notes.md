@@ -77,6 +77,9 @@ matter late in a long negotiation; via positions as a resource of their own; len
 * Exact look-ahead tables (the cost to the goal past the fixed copper alone, by a search of its own, kept and
   shared by the attempts): once the first pass existed they cost more than they saved on every board measured.
   They are still there behind `options.exact_after`.
+* Ending a track on its pad without the last one or two points of its path, where those make a tail no
+  longer than the track is wide, and sliding the stretch before: short segments 36.2 to 35.9 per 100
+  connections, nothing else changed. Not worth the code.
 * A first pass on a grid twice as coarse, with the fine grid only for what is left: about three times faster,
   1.7 % more track, 5 % more vias, and four more connections left on a crowded board. Offered by the KiCad
   bridge as `--coarse-first`, not the default.
