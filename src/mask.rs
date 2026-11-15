@@ -159,10 +159,11 @@ pub fn net_mask(p: &Problem, g: &Grid, net: &Net) -> Vec<u8> {
     let mut mask = vec![all & !allowed; g.cells()];
     let (half, via_r, drill_r) = (net.width / 2.0, net.via[0] / 2.0, net.via[1] / 2.0);
     for c in &p.copper {
-        if c.pad {
+        let own = c.net.as_deref() == Some(net.net.as_str());
+        if c.pad && !(own && p.rules.via_in_pad) {
             stamp_shape(g, &mut mask, VIA_BIT, &c.shape, drill_r + p.rules.pad_drill_margin_mm);
         }
-        if c.net.as_deref() == Some(net.net.as_str()) {
+        if own {
             continue;
         }
         let clear = c.net.as_ref().and_then(|n| net.clearance.nets.get(n)).copied().unwrap_or(net.clearance.default);

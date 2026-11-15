@@ -154,8 +154,11 @@ fn yes() -> bool {
 pub struct Rules {
     /// Smallest distance between two hole centres.
     pub hole_centre_mm: f64,
-    /// A via drill edge keeps this far from any solder land.
+    /// A via drill edge keeps this far from any solder land (unless `via_in_pad` lets it into one of its own net).
     pub pad_drill_margin_mm: f64,
+    /// A net may put a via in a solder land of its own net. Off by default: a hole in a land draws solder away
+    /// unless it is filled, so it is for lands that cannot be left any other way (one enclosed by another pad).
+    pub via_in_pad: bool,
     /// A track or via edge keeps this far from a closed region.
     pub region_margin_mm: f64,
     /// Edge-to-edge distance between copper of two nets routed in the same run.
@@ -169,6 +172,7 @@ impl Default for Rules {
         Rules {
             hole_centre_mm: 0.56,
             pad_drill_margin_mm: 0.11,
+            via_in_pad: false,
             region_margin_mm: 0.025,
             new_clearance_mm: 0.17,
             quiet_clearance_mm: 0.0,

@@ -102,7 +102,7 @@ def ignored_checks(board_path):
     return {name for name, level in severities.items() if level == "ignore"}
 
 
-def build_problem(board, args):
+def build_problem(board, args, only=None, narrow=False):
     settings = board.GetDesignSettings()
     ignored = ignored_checks(args.board)
     slack = args.slack
@@ -216,7 +216,8 @@ def build_problem(board, args):
 
     # one terminal per group of pads that existing copper already joins
     connectivity = board.GetConnectivity()
-    only = set(args.nets.split(",")) if args.nets else None
+    if only is None:
+        only = set(args.nets.split(",")) if args.nets else None
     by_net = {}
     for pad in board.GetPads():
         if pad.GetNetname() and pad.GetNetCode() > 0 and any(pad.IsOnLayer(l) for l in enabled):
@@ -238,6 +239,11 @@ def build_problem(board, args):
         cls = classes[net_name]
         clear = max(MM(cls.GetClearance()), min_clear)
         width = max(MM(cls.GetTrackWidth()), MM(settings.m_TrackMinWidth))
+        if narrow:
+            # a second try for a net that could not be laid at its class width: as narrow as its narrowest
+            # pad (a track wider than a fine-pitch pad cannot enter it), never under the board's minimum
+            slim = min(min(MM(pad.GetSize(l).x), MM(pad.GetSize(l).y)) for pad in pads for l in enabled if pad.IsOnLayer(l))
+            width = max(min(width, slim), MM(settings.m_TrackMinWidth), 0.1)
         via = [max(MM(cls.GetViaDiameter()), MM(settings.m_ViasMinSize)), max(MM(cls.GetViaDrill()), MM(settings.m_MinThroughDrill))]
         via[0] = max(via[0], via[1] + 2 * MM(settings.m_ViasMinAnnularWidth))
         worst_clear = max(worst_clear, clear)
@@ -258,6 +264,8 @@ def build_problem(board, args):
     via_drill = max((n["via"][1] for n in nets), default=0.3)
     rules = dict(hole_centre_mm=round(via_drill + MM(settings.m_HoleToHoleMin) + slack, 6), pad_drill_margin_mm=0.0,
                  region_margin_mm=round(edge_clear + (slack if edge_clear > 0 else 0.0), 6), new_clearance_mm=round(max(worst_clear, min_clear) + slack, 6))
+    if narrow:
+        rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
     options = dict(variants=args.variants)
     return dict(window=window, step=args.step, layers=layers, copper=copper, holes=holes, regions=regions, rules=rules, nets=nets, options=options)
 
@@ -310,24 +318,43 @@ def main():
         print("nothing to route: every net's pads are joined")
         pcbnew.SaveBoard(args.output, board)
         return 0
-    with tempfile.TemporaryDirectory() as tmp:
-        problem_path = Path(args.problem or Path(tmp) / "problem.json")
-        solution_path = Path(args.solution or Path(tmp) / "solution.json")
-        problem_path.write_text(json.dumps(problem))
-        command = [args.engine, "route", str(problem_path), "-o", str(solution_path)] + (["--threads", str(args.threads)] if args.threads else [])
-        run = subprocess.run(command, capture_output=True, text=True)
-        print(run.stdout, end="")
-        if run.returncode == 2 or not solution_path.exists():
-            print(run.stderr, file=sys.stderr, end="")
-            return 2
-        solution = json.loads(solution_path.read_text())
-    solution["_nets"] = problem["nets"]
-    tracks, vias = add_solution(board, solution)
+    wanted = len(problem["nets"])
+    first_keys = {n["key"] for n in problem["nets"]}
+    tracks = vias = 0
+    status = "routed"
+    for attempt in ("at the class widths", "narrower, for the nets not joined"):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = attempt.startswith("at")
+            problem_path = Path((args.problem if first else None) or Path(tmp) / "problem.json")
+            solution_path = Path((args.solution if first else None) or Path(tmp) / "solution.json")
+            problem_path.write_text(json.dumps(problem))
+            command = [args.engine, "route", str(problem_path), "-o", str(solution_path)] + (["--threads", str(args.threads)] if args.threads else [])
+            run = subprocess.run(command, capture_output=True, text=True)
+            print(run.stdout, end="")
+            if run.returncode == 2 or not solution_path.exists():
+                print(run.stderr, file=sys.stderr, end="")
+                return 2
+            solution = json.loads(solution_path.read_text())
+        solution["_nets"] = problem["nets"]
+        added = add_solution(board, solution)
+        tracks, vias = tracks + added[0], vias + added[1]
+        status = solution["status"]
+        if status == "routed" or not first:
+            break
+        # what could not be joined is tried once more against the board as it now stands
+        board.BuildConnectivity()
+        problem = build_problem(board, args, only={n["key"] for n in problem["nets"]}, narrow=True)
+        if not problem["nets"]:
+            status = "routed"
+            break
+        print(f"second try, narrower: {', '.join(n['key'] for n in problem['nets'])}")
     filler = pcbnew.ZONE_FILLER(board)
     filler.Fill(board.Zones())
     pcbnew.SaveBoard(args.output, board)
-    print(f"{solution['status']}: {len(solution['nets'])} of {len(problem['nets'])} nets laid, {tracks} track segments and {vias} vias added; saved {args.output}")
-    return 0 if solution["status"] == "routed" else 1
+    board.BuildConnectivity()
+    left = len(build_problem(board, args, only=first_keys)["nets"]) if status != "routed" else 0
+    print(f"{status}: {wanted - left} of {wanted} nets joined, {tracks} track segments and {vias} vias added; saved {args.output}")
+    return 0 if status == "routed" else 1
 
 
 if __name__ == "__main__":
