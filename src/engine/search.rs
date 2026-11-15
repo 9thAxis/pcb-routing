@@ -128,7 +128,7 @@ impl Engine<'_> {
             count += 1;
             let (l, c) = (ui / hw, ui % hw);
             // the look-ahead is 0 at the sources (and where a hole of the net joins them to another layer)
-            if !reached && back.get(ui) == 0.0 && (back.exact() || sources.contains(&(ui as u32))) {
+            if !reached && back.get(ui) == 0.0 && (back.exact() || sources.binary_search(&(ui as u32)).is_ok()) {
                 reached = true;
                 // Follow one cheapest path from here to the goal, keeping straight where that is as cheap, and
                 // count its corners.
@@ -244,15 +244,18 @@ impl Engine<'_> {
         // (the fixed look-ahead, or that the state lies beyond the bound the first pass stopped at).
         let back: Option<Look> = from.map(|from| match from {
             From::Terminals(from) => self.look(n, from, holes, &self.states_of(goals)),
-            From::Copper => {
+            From::Copper if self.p.options.exact_after == 0 => {
                 let _t = self.shared.timed(1);
                 Look::Exact(self.floor_to_copper(n, sources, holes, floor, &self.states_of(goals)))
             }
+            From::Copper => self.look_around(n, sources),
         });
         let (bound, upper) = match &back {
             Some(back) => {
                 let margin = self.p.options.sweep_margin;
-                let (bound, upper) = self.sweep(n, sources, goals, back, margin, worker)?;
+                let mut sorted = sources.to_vec();
+                sorted.sort_unstable();
+                let (bound, upper) = self.sweep(n, &sorted, goals, back, margin, worker)?;
                 (Some(bound), upper)
             }
             None => (None, f64::INFINITY),

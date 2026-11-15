@@ -89,10 +89,68 @@ impl Straight {
     }
 }
 
-/// What a search looks ahead with past the fixed copper: the exact cost from a table, or the straight way.
+/// A lower bound on the cost from a state to copper of any shape: the straight way to the box round it (0 inside).
+pub(crate) struct Around {
+    rows: (i32, i32),
+    columns: (i32, i32),
+    unit: f32,
+    hw: usize,
+    w: usize,
+}
+
+impl Around {
+    #[inline]
+    fn get(&self, at: usize) -> f32 {
+        let cell = at % self.hw;
+        let (j, i) = ((cell / self.w) as i32, (cell % self.w) as i32);
+        let a = (self.rows.0 - j).max(j - self.rows.1).max(0) as f32;
+        let b = (self.columns.0 - i).max(i - self.columns.1).max(0) as f32;
+        (a.max(b) + (std::f32::consts::SQRT_2 - 1.0) * a.min(b)) * self.unit
+    }
+}
+
+/// A closer lower bound on the cost from a state to copper of any shape: the straight way to the nearest of
+/// the tiles (squares of 16 cells) that hold some of it. Each tile of the board keeps the few copper tiles
+/// that can be the nearest one for a cell in it, so a look-up tries a handful of boxes.
+pub(crate) struct Tiles {
+    /// Per tile of the board: the copper tiles that may be nearest, as (first row, last row, first column, last column).
+    near: Vec<Vec<[i32; 4]>>,
+    across: usize,
+    unit: f32,
+    hw: usize,
+    w: usize,
+}
+
+const TILE_BITS: usize = 4;
+
+#[inline]
+fn to_box(j: i32, i: i32, b: &[i32; 4]) -> f32 {
+    let a = (b[0] - j).max(j - b[1]).max(0) as f32;
+    let c = (b[2] - i).max(i - b[3]).max(0) as f32;
+    a.max(c) + (std::f32::consts::SQRT_2 - 1.0) * a.min(c)
+}
+
+impl Tiles {
+    #[inline]
+    fn get(&self, at: usize) -> f32 {
+        let cell = at % self.hw;
+        let (j, i) = (cell / self.w, cell % self.w);
+        let tile = (j >> TILE_BITS) * self.across + (i >> TILE_BITS);
+        let mut best = f32::INFINITY;
+        for b in &self.near[tile] {
+            best = best.min(to_box(j as i32, i as i32, b));
+        }
+        best * self.unit
+    }
+}
+
+/// What a search looks ahead with past the fixed copper: the exact cost from a table, or the straight way to a
+/// few cells, or to the box round a net's copper.
 pub(crate) enum Look {
     Exact(Arc<Table>),
     Straight(Straight),
+    Around(Around),
+    Tiles(Tiles),
 }
 
 impl Look {
@@ -101,6 +159,8 @@ impl Look {
         match self {
             Look::Exact(table) => table.get(at),
             Look::Straight(straight) => straight.get(at),
+            Look::Around(around) => around.get(at),
+            Look::Tiles(tiles) => tiles.get(at),
         }
     }
 
@@ -142,7 +202,8 @@ impl Engine<'_> {
             *count += 1;
             *count
         };
-        if asked as usize > after {
+        // (a table towards many terminals at once covers most of the board and changes as they are joined)
+        if asked as usize > after && goals.len() <= 4 {
             return Look::Exact(self.floor(n, goals, holes, others));
         }
         let w = self.grid.w;
@@ -165,6 +226,63 @@ impl Engine<'_> {
             hw: self.hw,
             w,
         })
+    }
+
+    /// The cheapest layer cost of a net, a little under.
+    fn unit(&self, n: usize) -> f32 {
+        let costs = self.layer_cost[n].iter().zip(&self.p.layers).filter(|(_, l)| self.p.nets[n].layers.contains(l));
+        (costs.map(|(c, _)| *c).fold(f64::INFINITY, f64::min) * 0.9999) as f32
+    }
+
+    /// The look-ahead towards copper of the net that is more than terminals (the tree laid so far): the
+    /// straight way to the box round it. The tree changes with every connection and every round, so a table
+    /// of the exact cost would be worked out anew each time, at many times the cost of the search it serves.
+    pub(super) fn look_around(&self, n: usize, sources: &[u32]) -> Look {
+        let w = self.grid.w;
+        let (mut rows, mut columns) = ((i32::MAX, i32::MIN), (i32::MAX, i32::MIN));
+        for &s in sources {
+            let cell = s as usize % self.hw;
+            let (j, i) = ((cell / w) as i32, (cell % w) as i32);
+            rows = (rows.0.min(j), rows.1.max(j));
+            columns = (columns.0.min(i), columns.1.max(i));
+        }
+        let size = 1usize << TILE_BITS;
+        let (across, down) = (w.div_ceil(size), self.grid.h.div_ceil(size));
+        let mut held = vec![false; across * down];
+        for &s in sources {
+            let cell = s as usize % self.hw;
+            held[(cell / w >> TILE_BITS) * across + (cell % w >> TILE_BITS)] = true;
+        }
+        let boxes: Vec<[i32; 4]> = (0..across * down)
+            .filter(|&t| held[t])
+            .map(|t| {
+                let (tj, ti) = ((t / across) as i32, (t % across) as i32);
+                [tj << TILE_BITS, ((tj + 1) << TILE_BITS) - 1, ti << TILE_BITS, ((ti + 1) << TILE_BITS) - 1]
+            })
+            .collect();
+        if boxes.len() * across * down > 4_000_000 {
+            // too much copper on too large a board to sort the tiles for: the one box round it all
+            return Look::Around(Around { rows, columns, unit: self.unit(n), hw: self.hw, w });
+        }
+        // A copper tile can be the nearest for some cell of a tile only if its nearest corner is no further
+        // than the furthest corner of the copper tile that is nearest overall.
+        let across_tile = (size as f32 - 1.0) * std::f32::consts::SQRT_2;
+        let mut near = Vec::with_capacity(across * down);
+        for t in 0..across * down {
+            let (j0, i0) = (((t / across) << TILE_BITS) as i32, ((t % across) << TILE_BITS) as i32);
+            let (j1, i1) = (j0 + size as i32 - 1, i0 + size as i32 - 1);
+            // the least distance between this tile and a copper tile, both as boxes
+            let apart = |b: &[i32; 4]| {
+                let a = (b[0] - j1).max(j0 - b[1]).max(0) as f32;
+                let c = (b[2] - i1).max(i0 - b[3]).max(0) as f32;
+                a.max(c) + (std::f32::consts::SQRT_2 - 1.0) * a.min(c)
+            };
+            let least = boxes.iter().map(apart).fold(f32::INFINITY, f32::min);
+            near.push(
+                boxes.iter().filter(|b| apart(b) <= least + 2.0 * across_tile + 1.0).copied().collect::<Vec<_>>(),
+            );
+        }
+        Look::Tiles(Tiles { near, across, unit: self.unit(n), hw: self.hw, w })
     }
 
     /// The cost from every (layer, cell) to the nearest of `goals` when only the fixed copper is in the way: no
