@@ -151,7 +151,9 @@ pub struct Region {
 
 /// Ground that is open to routing but costs more: a filled zone that a track would cut, the spokes that
 /// tie a pad to it. A track pays `factor` times its length there, and a via as a track of its own diameter
-/// would on the dearest layer it passes. Where several overlap, the dearest counts.
+/// would on the dearest layer it passes. Where several overlap, a net pays for the dearest that is not its
+/// own. The middle of a track or via is what is tested: a polygon that is to keep their edges off as well is
+/// given grown by that much.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Dear {

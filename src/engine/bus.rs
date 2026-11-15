@@ -122,14 +122,13 @@ impl Engine<'_> {
             return 0.0;
         }
         let space = self.plan.space;
-        let lc = &self.plan.layer_cost[n];
         let mut apart = 0.0;
         for pair in self.laid.nets[n].conns.iter().flat_map(|conn| conn.windows(2)) {
             let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
             if la == lb {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
                 let len = if ja != jb && ia != ib { std::f64::consts::SQRT_2 } else { 1.0 };
-                let step = lc[lb] * len * self.plan.dear.track(n, pair[1] as usize) as f64;
+                let step = self.step_cost(n, pair[1] as usize, len);
                 apart += step * (ground.apart_at(pair[1] as usize) as f64 - 1.0);
             }
         }

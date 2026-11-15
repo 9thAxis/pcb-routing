@@ -150,11 +150,6 @@ impl Problem {
                 return Err(invalid(format!("dear[{k}].factor"), format!("is {}: from 1 to {MOST_DEAR}", d.factor)));
             }
         }
-        let kinds = crate::engine::dear::kinds(self).len();
-        if kinds > crate::engine::dear::MOST_KINDS {
-            let most = crate::engine::dear::MOST_KINDS;
-            return Err(invalid("dear", format!("at most {most} different pairs of factor and net, {kinds} given")));
-        }
 
         if self.nets.len() >= MOST_NETS {
             return Err(invalid(

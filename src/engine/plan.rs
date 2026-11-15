@@ -30,6 +30,9 @@ pub(crate) struct Plan {
     pub(super) mates: Vec<Vec<usize>>,
     /// Per net and terminal: its cell and layers, or why it cannot be reached at all.
     pub(super) terms: Vec<Vec<Result<Term, String>>>,
+    /// Per net and terminal: the piece of copper it stands on (see `Terminal::piece`), a number of its own
+    /// for a terminal that stands alone.
+    pub(super) pieces: Vec<Vec<u64>>,
     /// Per net: the exact place of what stands in a cell (a hole, a terminal), where a track ending in that
     /// cell is to end. As it is before any pair is split: each attempt works on a copy.
     pub(super) exact: Vec<HashMap<u32, Pt>>,
@@ -109,9 +112,17 @@ impl Plan {
             layer_cost,
             fixed_free,
             terms,
+            pieces: p.nets.iter().map(|n| (0..n.terminals.len()).map(|t| piece_of(n, t)).collect()).collect(),
             exact,
         }
     }
+}
+
+/// The piece of copper terminal `t` of a net stands on: the number it is given, or one of its own (beyond
+/// any that can be given) for a terminal that stands alone. `t` may count on past the net's terminals, for
+/// those an attempt adds.
+pub(super) fn piece_of(net: &Net, t: usize) -> u64 {
+    net.terminals.get(t).and_then(|terminal| terminal.piece).map_or((1u64 << 32) + t as u64, u64::from)
 }
 
 /// Whether a track of net `n` may run from the centre of `cell` to the point `xy` (the exact place of a pad or

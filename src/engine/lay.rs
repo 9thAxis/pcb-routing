@@ -27,8 +27,8 @@ impl Engine<'_> {
         }
     }
 
-    /// Lay one net against the claims of the others as they stand: grow a tree from its first terminal to the
-    /// nearest remaining terminal until all are joined. Nothing of the engine changes; the caller puts the result
+    /// Lay one net against the claims of the others as they stand: grow a tree from its first piece (a
+    /// terminal, or those that stand on one piece of copper) to the nearest remaining one until all are joined. Nothing of the engine changes; the caller puts the result
     /// in place. `hard`: cells claimed by other nets are closed instead of dearer.
     fn lay(&self, n: usize, present: f64, hard: bool) -> NetState {
         let mut w = Worker::take(self.shared, self.plan.space.states(), self.plan.space.hw);
@@ -87,11 +87,10 @@ impl Engine<'_> {
         // The terminals that can be reached, each with its piece of copper (see `Terminal::piece`): the pieces
         // are what is joined, each at whichever of its terminals comes cheapest. A terminal that cannot be
         // reached is a failure only where its piece has no other.
-        let own_piece = |t: usize| (1u64 << 32) + t as u64;
         let mut terms: Vec<(Term, u64)> = Vec::new();
         let mut closed: Vec<(usize, u64, &String)> = Vec::new();
         for (t, at) in self.plan.terms[n].iter().enumerate() {
-            let piece = net.terminals[t].piece.map_or(own_piece(t), u64::from);
+            let piece = self.plan.pieces[n][t];
             match at {
                 Ok(term) => terms.push((*term, piece)),
                 Err(why) => closed.push((t, piece, why)),
@@ -103,7 +102,7 @@ impl Engine<'_> {
             }
         }
         let extra = self.pairs.extra_terms[n].iter().enumerate();
-        terms.extend(extra.map(|(k, &term)| (term, own_piece(net.terminals.len() + k))));
+        terms.extend(extra.map(|(k, &term)| (term, super::plan::piece_of(net, net.terminals.len() + k))));
         let mut left: Vec<Term> = terms.iter().map(|t| t.0).collect();
         let mut left_piece: Vec<u64> = terms.iter().map(|t| t.1).collect();
         // (take every terminal of a piece out of what is left)
@@ -211,11 +210,17 @@ impl Engine<'_> {
         state
     }
 
+    /// What a step of length `len` (in grid steps) into a state costs net `n`, free of the other nets: by its
+    /// layer and by the ground it is in. The search pays the same (see `Prices`).
+    pub(super) fn step_cost(&self, n: usize, state: usize, len: f64) -> f64 {
+        let layer = self.plan.space.split(state).0;
+        self.plan.layer_cost[n][layer] * len * self.plan.dear.track(n, state) as f64
+    }
+
     /// Add what the connection `path` of net `n` costs, free of the other nets (its steps by layer, its
     /// corners, its layer changes), its length, and what of the cost is away from its bus, to `state`. Returns the cells where it needs a new via.
     fn account(&self, n: usize, path: &[u32], own_hole: f32, w: &Worker, state: &mut NetState) -> Vec<u32> {
         let (p, net, space) = (self.p, &self.p.nets[n], self.plan.space);
-        let lc = &self.plan.layer_cost[n];
         let mut new_vias = Vec::new();
         let mut dir = NO_DIR;
         let bend = p.options.bend_mm / p.step;
@@ -236,7 +241,7 @@ impl Engine<'_> {
                 let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
                 let diag = ja != jb && ia != ib;
                 let len = if diag { std::f64::consts::SQRT_2 } else { 1.0 };
-                let step = lc[lb] * len * self.plan.dear.track(n, pair[1] as usize) as f64;
+                let step = self.step_cost(n, pair[1] as usize, len);
                 state.cost += step;
                 state.apart += step * (w.ground.apart_at(pair[1] as usize) as f64 - 1.0);
                 state.steps += len;
