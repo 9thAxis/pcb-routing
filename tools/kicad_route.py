@@ -701,7 +701,8 @@ def pour_ends(picture, problem, nets):
 # The problem itself.
 
 TIE_ROUNDS = 3  # how often pads with too few spokes are given a track of their own to their zone
-POUR_REPEATS = 3  # how often nets that new tracks have parted from their pour are joined again
+POUR_REPEATS = 8  # how often nets that new tracks have parted from their pour are joined again, for one lot of nets
+POUR_AGAINS = 3  # and how often the lot is taken back and laid again to hold a cut pour together
 DECOUPLING_REACH = 5.0  # mm from a capacitor's pad to the pin it is taken to stand by
 DECOUPLING_VIA_PENALTY = 5.0  # times the usual: the detour accepted before the link to the pin changes layer
 
@@ -944,7 +945,7 @@ def route(board, settings, run, only=None, options=None, say=print):
         # For pours that new tracks cut: the last run of the lot's own nets, as (its problem, where the board's
         # record stood before it, its picture); whether the present run is one that joins a cut pour again;
         # the entries that hold cut pours together; and whether the lot's run is to be done again with those.
-        base, rejoining, bridges, again = None, False, [], False
+        base, rejoining, bridges, again, agains = None, False, [], False, 0
         while number_of_try < len(tries):
             step, narrow = tries[number_of_try]
             at_step = replace(settings, step=step)
@@ -1016,7 +1017,7 @@ def route(board, settings, run, only=None, options=None, say=print):
                 wanted += [n for n in cut if n not in wanted]
                 lot, reread, repeats, rejoining, again = cut, True, repeats + 1, True, False
                 continue
-            if rejoining and base is not None and settings.pours and len(base[0]["nets"]) + len(bridges) + len(problem["nets"]) < ENGINE_NETS:
+            if rejoining and base is not None and settings.pours and agains < POUR_AGAINS and len(base[0]["nets"]) + len(bridges) + len(problem["nets"]) < ENGINE_NETS:
                 # A cut pour could not be joined again past the tracks that cut it (they may have shut a piece
                 # of it in). Everything laid since is taken back, and the lot is laid again with the pads of
                 # the pieces as they were cut to be joined by a track, pad to pad: the others then leave the
@@ -1028,7 +1029,7 @@ def route(board, settings, run, only=None, options=None, say=print):
                                         options=options, unlinked=set(keys))
                 bridges += [dict(entry, key=f"{entry['net']} ~ {len(bridges) + k + 1}") for k, entry in enumerate(by_pads["nets"])]
                 say(f"no way to join them past the new tracks: those are laid again, with the pieces of the pour held together: {', '.join(keys)}")
-                lot, reread, rejoining, again = list(dict.fromkeys(n["net"] for n in base[0]["nets"])), False, False, True
+                lot, reread, rejoining, again, agains = list(dict.fromkeys(n["net"] for n in base[0]["nets"])), False, False, True, agains + 1
                 continue
             # (the next try is for what is left, against the board as it stands: nothing of this one is laid again)
             base, rejoining, bridges, again = None, False, [], False
