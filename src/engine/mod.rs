@@ -11,11 +11,13 @@
 //! centre of its own track or via stands in a cell claimed by another net.
 
 mod claims;
+mod fixed;
 mod lay;
 mod lookahead;
 mod negotiate;
 mod pairs;
 pub(crate) mod plan;
+mod price;
 mod report;
 mod search;
 pub(crate) mod shared;
@@ -81,7 +83,7 @@ struct NetState {
 /// One attempt at a problem.
 pub(crate) struct Engine<'a> {
     p: &'a Problem,
-    shared: &'a Shared,
+    shared: &'a Shared<'a>,
     /// What follows from the problem alone; the same for every attempt.
     plan: &'a Plan,
     /// Per net: the exact place of what stands in a cell. The plan's, and the leg ends of the pairs split in this attempt.
@@ -157,7 +159,7 @@ impl Claims {
 }
 
 impl<'a> Engine<'a> {
-    pub(crate) fn new(p: &'a Problem, shared: &'a Shared) -> Engine<'a> {
+    pub(crate) fn new(p: &'a Problem, shared: &'a Shared<'a>) -> Engine<'a> {
         let plan = &shared.plan;
         let (states, cells) = (plan.space.states(), plan.space.hw);
         Engine {

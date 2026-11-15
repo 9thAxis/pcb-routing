@@ -1,12 +1,11 @@
 //! What does not change during a run and is the same for every attempt.
 
+use super::fixed::Fixed;
 use super::lookahead::Table;
 use super::plan::Plan;
 use super::space::Term;
 use super::worker::Worker;
-use super::DIRS;
 use crate::grid::Grid;
-use crate::mask::net_mask;
 use crate::model::*;
 use crate::Event;
 use std::collections::HashMap;
@@ -58,14 +57,19 @@ pub(super) struct Counters {
     pub(super) mismatches: AtomicU64,
 }
 
-pub(crate) struct Shared {
+impl Counters {
+    /// Time the work of one kind (see `CLOCK_NAMES`) until the returned value is dropped. Work of one kind done
+    /// within work of another is counted under both.
+    pub(super) fn timed(self: &Arc<Self>, kind: usize) -> Timed {
+        Timed(self.clone(), kind, std::time::Instant::now())
+    }
+}
+
+pub(crate) struct Shared<'p> {
     /// What follows from the problem alone.
     pub(super) plan: Plan,
-    /// Per net: per cell, a bit per routing layer closed to its tracks, and VIA_BIT where no via of it may be.
-    pub(super) masks: Vec<Vec<u8>>,
-    /// Per net: per (layer, cell), a bit per direction in which a step is possible past the fixed copper (inside
-    /// the window, the next cell open, and for a slanted step both cells beside it open).
-    pub(super) open: Vec<Vec<u8>>,
+    /// The fixed things of the board as each net sees them.
+    pub(super) fixed: Fixed<'p>,
     pub(super) floors: Floors,
     /// A few per net: the first connection of a net with several terminals is often the same from round to
     /// round and from attempt to attempt.
@@ -77,59 +81,25 @@ pub(crate) struct Shared {
     pub(super) diagnostics: Diagnostics,
 }
 
-impl Shared {
-    pub(crate) fn new(p: &Problem, diagnostics: Diagnostics) -> Arc<Shared> {
-        use rayon::prelude::*;
+impl<'p> Shared<'p> {
+    pub(crate) fn new(p: &'p Problem, diagnostics: Diagnostics) -> Shared<'p> {
         let grid = Grid::new(p.window, p.step);
-        let (nl, hw, w, h) = (p.layers.len(), grid.cells(), grid.w as i32, grid.h as i32);
         let counters: Arc<Counters> = Arc::default();
-        let setup = Timed(counters.clone(), 6, std::time::Instant::now());
-        let masks: Vec<Vec<u8>> = p.nets.par_iter().map(|n| net_mask(p, &grid, n)).collect();
-        let open = masks
-            .par_iter()
-            .map(|mask| {
-                let mut open = vec![0u8; nl * hw];
-                for l in 0..nl {
-                    let lbit = 1u8 << l;
-                    for j in 0..h {
-                        for i in 0..w {
-                            let mut bits = 0u8;
-                            for (d, &(dj, di)) in DIRS.iter().enumerate() {
-                                let (nj, ni) = (j + dj, i + di);
-                                if nj < 0 || ni < 0 || nj >= h || ni >= w || mask[(nj * w + ni) as usize] & lbit != 0 {
-                                    continue;
-                                }
-                                if dj != 0
-                                    && di != 0
-                                    && (mask[(j * w + ni) as usize] | mask[(nj * w + i) as usize]) & lbit != 0
-                                {
-                                    continue;
-                                }
-                                bits |= 1 << d;
-                            }
-                            open[l * hw + (j * w + i) as usize] = bits;
-                        }
-                    }
-                }
-                open
-            })
-            .collect();
-        drop(setup);
-        Arc::new(Shared {
-            plan: Plan::new(p, grid, &masks),
-            masks,
-            open,
+        let fixed = Fixed::new(p, &grid, counters.clone());
+        Shared {
+            plan: Plan::new(p, grid, &fixed),
+            fixed,
             floors: Floors::default(),
             copper_floors: CopperFloors::default(),
             stock: Mutex::new(Vec::new()),
             counters,
             diagnostics,
-        })
+        }
     }
 
     /// Time the work until the returned value is dropped.
     pub(super) fn timed(&self, kind: usize) -> Timed {
-        Timed(self.counters.clone(), kind, std::time::Instant::now())
+        self.counters.timed(kind)
     }
 
     pub(super) fn tell(&self, event: impl FnOnce() -> Event) {

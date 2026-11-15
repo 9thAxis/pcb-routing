@@ -1,9 +1,11 @@
 //! What one search keeps for itself.
 
+use super::fixed::{PAGE, PAGE_BITS};
 use super::shared::Shared;
 use super::{FREE, SHUT};
 use crate::grid::Grid;
 use crate::queue::BucketQueue;
+use std::cell::Cell;
 
 /// What the search keeps per state, together so that one state costs one memory fetch.
 #[derive(Clone, Copy)]
@@ -26,38 +28,57 @@ pub(super) struct Search {
     pub(super) heap: BucketQueue,
 }
 
+/// The first pass of a search (see `sweep`): its mark and its queue. What it finds is kept in `Ground::swept`.
+pub(super) struct Sweep {
+    pub(super) gen: u32,
+    pub(super) queue: BucketQueue,
+}
+
 /// What one search needs for itself. The nets of an attempt are laid one after the other, each taking a
 /// worker from the common stock and returning it clean; attempts running side by side each hold one at a time.
 pub(super) struct Worker {
     pub(super) search: Search,
+    pub(super) sweep: Sweep,
+    pub(super) ground: Ground,
+}
+
+/// The board as the net being laid finds it: where it stands itself, where its holes are, and what a step and
+/// a layer change cost it. The costs are drawn up page by page as the searches of the net come to them (see
+/// `Prices`), so a net that stays in one corner of the board costs nothing for the rest of it.
+pub(super) struct Ground {
     /// 1 where the net being laid (or another entry of the same electrical net) holds a claim itself: taken off
     /// the common count, so that a net is never in its own way.
     pub(super) own_t: Vec<u8>,
     pub(super) own_v: Vec<u8>,
     pub(super) via_flag: Vec<u8>,
     pub(super) flagged: Vec<u32>,
-    /// What a layer change at each cell costs the net being laid, SHUT_COST where no via may be. Drawn up
-    /// once per net.
-    pub(super) vcost: Vec<f32>,
+    /// What a layer change at each cell costs the net being laid, SHUT_COST where no via may be.
+    pub(super) vcost: Vec<Cell<f32>>,
     /// Per (layer, cell): what the first pass of a search finds (see `sweep`), and beside it what a step into
-    /// the state costs.
+    /// the state costs and where a step from it can go.
     pub(super) swept: Vec<Swept>,
-    pub(super) sweep_gen: u32,
-    pub(super) sweep_queue: BucketQueue,
+    /// Per page of states, and per page of cells: the lay (see `lay`) whose costs it holds.
+    pub(super) priced: Vec<Cell<u32>>,
+    pub(super) priced_vias: Vec<Cell<u32>>,
+    /// Counted up for each net laid.
+    pub(super) lay: u32,
 }
 
-#[derive(Clone, Copy)]
+/// The tables are read and filled through shared references (a page of costs is drawn up in the middle of a
+/// search that is reading its neighbours), so every field is a cell.
+#[derive(Clone)]
 pub(super) struct Swept {
     /// The cost from here to the goal, as far as the first pass of the present search has got.
-    pub(super) d: f32,
+    pub(super) d: Cell<f32>,
     /// The mark of the search that last touched the state, and whether its cost is final.
-    pub(super) seen: u32,
+    pub(super) seen: Cell<u32>,
     /// What one step into this state costs the net being laid, as a factor on its length: 1 in free ground,
     /// more where others claim it or conflicts have been, TAKEN where another net stands and may not be
-    /// crossed (with the others fixed), SHUT_COST where fixed copper closes it. Drawn up once per net (see
-    /// `price`), so that the search reads one table instead of four; kept here so that it comes with the same
-    /// memory fetch as the first pass's cost.
-    pub(super) mult: f32,
+    /// crossed (with the others fixed), SHUT_COST where fixed copper closes it. Kept here so that it comes
+    /// with the same memory fetch as the first pass's cost.
+    pub(super) mult: Cell<f32>,
+    /// The directions in which a step can be taken from here past the fixed copper (see `Fixed::open`).
+    pub(super) open: Cell<u8>,
 }
 
 pub(super) const SHUT_COST: f32 = f32::INFINITY;
@@ -68,7 +89,7 @@ impl Worker {
     pub(super) fn take(shared: &Shared, states: usize, cells: usize) -> Worker {
         let found = {
             let mut stock = shared.stock.lock().unwrap();
-            let at = stock.iter().position(|w| w.own_t.len() == states && w.own_v.len() == cells);
+            let at = stock.iter().position(|w| w.ground.own_t.len() == states && w.ground.own_v.len() == cells);
             at.map(|i| stock.swap_remove(i))
         };
         found.unwrap_or_else(|| Worker {
@@ -77,23 +98,42 @@ impl Worker {
                 gen: 0,
                 heap: BucketQueue::new(),
             },
-            own_t: vec![0; states],
-            own_v: vec![0; cells],
-            via_flag: vec![0; cells],
-            flagged: Vec::new(),
-            vcost: vec![0.0; cells],
-            swept: vec![Swept { d: 0.0, seen: 0, mult: 1.0 }; states],
-            sweep_gen: 0,
-            sweep_queue: BucketQueue::new(),
+            sweep: Sweep { gen: 0, queue: BucketQueue::new() },
+            ground: Ground {
+                own_t: vec![0; states],
+                own_v: vec![0; cells],
+                via_flag: vec![0; cells],
+                flagged: Vec::new(),
+                vcost: vec![Cell::new(0.0); cells],
+                swept: vec![
+                    Swept { d: Cell::new(0.0), seen: Cell::new(0), mult: Cell::new(1.0), open: Cell::new(0) };
+                    states
+                ],
+                priced: vec![Cell::new(0); states.div_ceil(PAGE)],
+                priced_vias: vec![Cell::new(0); cells.div_ceil(PAGE)],
+                lay: 0,
+            },
         })
     }
 
     pub(super) fn give_back(mut self, shared: &Shared) {
-        for &c in &self.flagged {
-            self.via_flag[c as usize] = 0;
+        let ground = &mut self.ground;
+        for &c in &ground.flagged {
+            ground.via_flag[c as usize] = 0;
         }
-        self.flagged.clear();
+        ground.flagged.clear();
         shared.stock.lock().unwrap().push(self);
+    }
+}
+
+impl Ground {
+    /// Begin a new net: no page holds its costs yet.
+    pub(super) fn begin(&mut self) {
+        self.lay = self.lay.wrapping_add(1);
+        if self.lay == 0 {
+            self.priced.iter().chain(&self.priced_vias).for_each(|page| page.set(0));
+            self.lay = 1;
+        }
     }
 
     /// Note a hole of the net being laid at `cell`: a layer change there is free, and no other via may be
@@ -111,10 +151,25 @@ impl Worker {
         self.via_flag[cell as usize] = FREE;
     }
 
-    /// Bring the layer-change costs in line with the holes flagged so far.
+    /// What a layer change costs at a cell that a hole of the net has been noted at or near (see `flag_hole`),
+    /// None at any other cell.
+    #[inline]
+    pub(super) fn hole_price(&self, cell: usize, own_hole: f32, no_vias: bool) -> Option<f32> {
+        match self.via_flag[cell] {
+            0 => None,
+            FREE if !no_vias => Some(own_hole),
+            _ => Some(SHUT_COST),
+        }
+    }
+
+    /// Bring the layer-change costs already drawn up in line with the holes noted so far. (A page drawn up
+    /// later looks at the holes itself.)
     pub(super) fn price_holes(&mut self, own_hole: f32, no_vias: bool) {
         for &c in &self.flagged {
-            self.vcost[c as usize] = if self.via_flag[c as usize] == FREE && !no_vias { own_hole } else { SHUT_COST };
+            if self.priced_vias[c as usize >> PAGE_BITS].get() == self.lay {
+                let price = self.hole_price(c as usize, own_hole, no_vias).unwrap_or(SHUT_COST);
+                self.vcost[c as usize].set(price);
+            }
         }
     }
 }

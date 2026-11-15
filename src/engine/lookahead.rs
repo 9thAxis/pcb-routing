@@ -344,8 +344,7 @@ impl Engine<'_> {
     fn floor_to(&self, n: usize, states: &[u32], holes: &[u32], radius: Option<f32>, others: &[u32]) -> Table {
         let net = &self.p.nets[n];
         let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
-        let mask = &self.shared.masks[n];
-        let open = &self.shared.open[n][..];
+        let fixed = &self.shared.fixed;
         let lc = &self.plan.layer_cost[n];
         let via_cost = (net.via_penalty_mm / self.p.step) as f32;
         let own_hole = if self.p.options.own_hole_free { 0.0 } else { via_cost };
@@ -387,7 +386,7 @@ impl Engine<'_> {
             }
             let (l, c) = (ui / hw, ui % hw);
             let step = lc[l] as f32;
-            let mut bits = open[ui];
+            let mut bits = fixed.open(n, l, c);
             while bits != 0 {
                 let d2 = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
@@ -398,7 +397,7 @@ impl Engine<'_> {
                     queue.push((nd * 64.0) as u64, v as u32);
                 }
             }
-            let m = mask[c];
+            let m = fixed.mask(n, c);
             let cost = if free.binary_search(&(c as u32)).is_ok() {
                 own_hole
             } else if m & VIA_BIT == 0 {

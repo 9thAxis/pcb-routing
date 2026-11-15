@@ -16,4 +16,7 @@ First version as a library.
   longer ends the attempt; a net left out for want of room is tried again after the closing passes have moved
   the others. Incomplete attempts are ranked by how much is missing. A failure names both sides of the
   connection that could not be made.
+- The fixed masks of the nets and the costs of the ground are drawn up page by page, only where a search
+  goes, and nets with the same sizes and clearances hold one page wherever none of their own copper is near.
+  Nothing is drawn up for the whole board before the first net is laid.
 - Matched pairs (`Problem::pairs`): a trunk split into two legs, joined to their pads by stubs.

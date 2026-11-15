@@ -1,5 +1,6 @@
 //! What follows from the problem alone and does not change during a run: worked out once, used by every attempt.
 
+use super::fixed::Fixed;
 use super::space::{Space, Steps, Term};
 use crate::geom::{dist, inside};
 use crate::grid::Grid;
@@ -44,8 +45,7 @@ fn class_of(list: &mut Vec<(f64, bool)>, v: (f64, bool)) -> usize {
 }
 
 impl Plan {
-    /// `masks`: the fixed mask of each net (see `net_mask`).
-    pub(super) fn new(p: &Problem, grid: Grid, masks: &[Vec<u8>]) -> Plan {
+    pub(super) fn new(p: &Problem, grid: Grid, fixed: &Fixed) -> Plan {
         let space = Space::new(&grid, p.layers.len());
         let (mut tr, mut vr) = (Vec::new(), Vec::new());
         let tclass: Vec<usize> = p.nets.iter().map(|n| class_of(&mut tr, (n.width / 2.0, n.quiet))).collect();
@@ -55,37 +55,19 @@ impl Plan {
             .iter()
             .map(|n| p.layers.iter().map(|l| n.layer_cost.get(l).copied().unwrap_or(1.0)).collect())
             .collect();
-        let mut exact = Vec::new();
-        let mut fixed_free = Vec::new();
+        // the exact place of every hole and terminal of a net
+        let mut exact: Vec<HashMap<u32, Pt>> = Vec::new();
         for n in &p.nets {
-            let mut ex: HashMap<u32, Pt> = HashMap::new();
-            let mut free = Vec::new();
-            for hole in &p.holes {
-                if hole.net.as_deref() == Some(n.net.as_str()) {
-                    if let Some(c) = grid.cell(hole.xy) {
-                        ex.insert(c as u32, hole.xy);
-                        free.push(c as u32);
-                    }
-                }
-            }
-            for t in &n.terminals {
-                if let Some(c) = grid.cell(t.xy) {
-                    ex.insert(c as u32, t.xy);
-                    if t.layers.len() > 1 {
-                        free.push(c as u32);
-                    }
-                }
-            }
-            free.sort();
-            free.dedup();
-            exact.push(ex);
-            fixed_free.push(free);
+            let holes = p.holes.iter().filter(|h| h.net.as_deref() == Some(n.net.as_str())).map(|h| h.xy);
+            let terminals = n.terminals.iter().map(|t| t.xy);
+            exact.push(holes.chain(terminals).filter_map(|xy| Some((grid.cell(xy)? as u32, xy))).collect());
         }
+        let fixed_free: Vec<Vec<u32>> = (0..p.nets.len()).map(|n| fixed.free(n).to_vec()).collect();
         let mut terms = Vec::new();
         for (n, net) in p.nets.iter().enumerate() {
             let mut list = Vec::new();
             for t in &net.terminals {
-                let at = relocate(p, &grid, &masks[n], net, t);
+                let at = relocate(p, &grid, &|cell| fixed.mask(n, cell), net, t);
                 // a track that ends on another cell than the terminal's own does not end at the terminal's point
                 if let (Ok(term), Some(own)) = (&at, grid.cell(t.xy)) {
                     if term.cell != own as u32 {
@@ -117,22 +99,28 @@ impl Plan {
 }
 
 /// Where a terminal of `net` is reached, or why it cannot be. Its own cell if a track of the net may end there
-/// (`mask` is the net's fixed mask); else the nearest open cell on the same piece of the net's copper (a pad
+/// (`mask` gives the net's fixed mask at a cell); else the nearest open cell on the same piece of the net's copper (a pad
 /// too near the board edge or another pad is entered where there is room), and the track then ends on that
 /// cell, not at the terminal's own point.
-pub(super) fn relocate(p: &Problem, grid: &Grid, mask: &[u8], net: &Net, t: &Terminal) -> Result<Term, String> {
+pub(super) fn relocate(
+    p: &Problem,
+    grid: &Grid,
+    mask: &dyn Fn(usize) -> u8,
+    net: &Net,
+    t: &Terminal,
+) -> Result<Term, String> {
     let wanted = layer_bits(&p.layers, &t.layers);
     let Some(cell) = grid.cell(t.xy) else {
         return Err("is outside the window".to_string());
     };
-    let bits = wanted & !mask[cell];
+    let bits = wanted & !mask(cell);
     if bits != 0 {
         return Ok(Term { cell: cell as u32, layers: bits });
     }
     let mut best: Option<(f64, Term)> = None;
     let reach = (2.0 / p.step).ceil() as i32;
     for c in grid.around(cell, &Grid::square(reach)) {
-        let open = wanted & !mask[c];
+        let open = wanted & !mask(c);
         if open == 0 {
             continue;
         }
@@ -191,7 +179,7 @@ mod tests {
 
     fn first(p: &Problem, mask: &[u8]) -> Result<Term, String> {
         let grid = Grid::new(p.window, p.step);
-        relocate(p, &grid, mask, &p.nets[0], &p.nets[0].terminals[0])
+        relocate(p, &grid, &|cell| mask[cell], &p.nets[0], &p.nets[0].terminals[0])
     }
 
     #[test]
@@ -243,8 +231,14 @@ mod tests {
     fn the_plan_forgets_the_point_of_a_terminal_that_is_reached_elsewhere() {
         let p = problem(&["F"], vec![pad("A", [1.0, 1.0], [1.0, 1.8])]);
         let grid = Grid::new(p.window, p.step);
-        let mask = closed_round_the_terminal(&grid);
-        let plan = Plan::new(&p, grid, &[mask]);
+        // closed to every net up to column 11 and row 13, as in `closed_round_the_terminal`
+        let mut p = p;
+        p.regions = vec![serde_json::from_value(
+            json!({"rings": [[[-1.0, -1.0], [1.04, -1.0], [1.04, 1.24], [-1.0, 1.24]]], "layers": ["F"], "vias": false}),
+        )
+        .unwrap()];
+        let fixed = Fixed::new(&p, &grid, Default::default());
+        let plan = Plan::new(&p, grid, &fixed);
         assert_eq!(plan.terms[0][0], Ok(Term { cell: 584, layers: 1 }));
         assert_eq!(plan.terms[0][1], Ok(Term { cell: 440, layers: 1 }));
         assert!(!plan.exact[0].contains_key(&420));

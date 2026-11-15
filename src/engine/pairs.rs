@@ -101,7 +101,7 @@ impl Engine<'_> {
                     for di in -3i32..=3 {
                         let q = [at[0] + di as f64 * step, at[1] + dj as f64 * step];
                         let Some(cell) = self.plan.grid.cell(q) else { continue };
-                        if self.shared.masks[n][cell] & (1 << layer) != 0 {
+                        if self.shared.fixed.mask(n, cell) & (1 << layer) != 0 {
                             continue;
                         }
                         let c = self.plan.grid.xy(cell);

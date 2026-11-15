@@ -1,7 +1,8 @@
 //! The path search, in two passes.
 
 use super::lookahead::Look;
-use super::worker::{Search, Swept, Worker, SHUT_COST, START, TAKEN, VIA};
+use super::price::{Mode, Prices};
+use super::worker::{Search, Sweep, Worker, SHUT_COST, START, TAKEN, VIA};
 use super::*;
 use crate::Event;
 use std::sync::atomic::Ordering;
@@ -42,6 +43,8 @@ fn turns(bend: f64) -> ([[f64; 8]; 9], [u8; 9]) {
 #[derive(Clone, Copy)]
 pub(super) struct Query<'q> {
     pub(super) net: usize,
+    /// How the net is being laid: what its ground costs it.
+    pub(super) mode: Mode,
     /// The states to start from.
     pub(super) sources: &'q [u32],
     pub(super) goals: &'q [Term],
@@ -86,50 +89,49 @@ impl Engine<'_> {
     /// Returns None if no path exists; else the bound below which every state has its cost, and if known a
     /// cost the cheapest path with corners cannot exceed.
     /// `q.sources` must be sorted; `q.from` is not looked at.
-    fn sweep(&self, q: Query, back: &Look, margin: f64, worker: &mut Worker) -> Option<(f64, f64)> {
+    fn sweep(&self, q: Query, back: &Look, margin: f64, sweep: &mut Sweep, prices: &Prices) -> Option<(f64, f64)> {
         let _t = self.shared.timed(2);
         let Query { net: n, sources, goals, .. } = q;
         let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
         let lc = &self.plan.layer_cost[n];
-        let open = &self.shared.open[n][..];
-        let vcost = &worker.vcost;
         let Steps { off, len } = self.plan.steps;
         let bend = self.p.options.bend_mm / self.p.step;
         let mut upper = f64::INFINITY;
-        worker.sweep_gen = worker.sweep_gen.wrapping_add(2);
-        if worker.sweep_gen < 2 {
-            worker.swept.iter_mut().for_each(|v| v.seen = 0);
-            worker.sweep_gen = 2;
+        let a = prices.swept();
+        sweep.gen = sweep.gen.wrapping_add(2);
+        if sweep.gen < 2 {
+            a.iter().for_each(|v| v.seen.set(0));
+            sweep.gen = 2;
         }
-        let (open_mark, closed) = (worker.sweep_gen, worker.sweep_gen + 1);
-        let (a, q) = (&mut worker.swept, &mut worker.sweep_queue);
+        let (open_mark, closed) = (sweep.gen, sweep.gen + 1);
+        let q = &mut sweep.queue;
         q.clear();
         for at in goals.iter().flat_map(|g| g.states(self.plan.space)) {
             let at = at as usize;
             if back.get(at).is_finite() {
-                a[at].d = 0.0;
-                a[at].seen = open_mark;
+                a[at].d.set(0.0);
+                a[at].seen.set(open_mark);
                 q.push((back.get(at) as f64 * 64.0) as u64, at as u32);
             }
         }
         let (mut limit, mut reached, mut last, mut count) = (f64::INFINITY, false, f64::INFINITY, 0u64);
         while let Some((_, u)) = q.pop() {
             let ui = u as usize;
-            if a[ui].seen == closed {
+            if a[ui].seen.get() == closed {
                 continue;
             }
-            let d = a[ui].d as f64;
+            let d = a[ui].d.get() as f64;
             if d + back.get(ui) as f64 > limit {
                 last = d + back.get(ui) as f64;
                 break;
             }
-            a[ui].seen = closed;
+            a[ui].seen.set(closed);
             count += 1;
             let (l, c) = (ui / hw, ui % hw);
             // the look-ahead is 0 at the sources (and where a hole of the net joins them to another layer)
             if !reached && back.get(ui) == 0.0 && (back.exact() || sources.binary_search(&(ui as u32)).is_ok()) {
                 reached = true;
-                let (units, real) = self.follow(n, a, vcost, closed, ui);
+                let (units, real) = self.follow(n, prices, closed, ui);
                 // The path followed is a real one, so what it costs with its corners is a cost the cheapest path
                 // cannot exceed. Its steps are summed as taken, not read off `d`: a step is accepted within a
                 // tolerance (the costs are kept in single precision), and over a long line those tolerances add
@@ -140,13 +142,14 @@ impl Engine<'_> {
                 }
                 limit = base + (units + 0.5).min(margin) * bend;
             }
-            let m = a[ui].mult;
+            let here = prices.at(ui);
+            let m = here.mult.get();
             if m >= TAKEN {
                 continue; // no step can end here, so none is taken back from here
             }
             let mut relax = |v: usize, nd: f64| {
-                let node = &mut a[v];
-                if node.seen == closed || (node.seen == open_mark && nd >= node.d as f64) {
+                let node = &a[v];
+                if node.seen.get() == closed || (node.seen.get() == open_mark && nd >= node.d.get() as f64) {
                     return;
                 }
                 // nothing beyond the bound is wanted (this also drops states the sources cannot reach at all)
@@ -154,18 +157,18 @@ impl Engine<'_> {
                 if total > limit || total == f64::INFINITY {
                     return;
                 }
-                node.d = nd as f32;
-                node.seen = open_mark;
+                node.d.set(nd as f32);
+                node.seen.set(open_mark);
                 q.push((total * 64.0) as u64, v as u32);
             };
             let step = lc[l] * m as f64;
-            let mut bits = open[ui];
+            let mut bits = here.open.get();
             while bits != 0 {
                 let d2 = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
                 relax((ui as isize + off[d2]) as usize, d + len[d2] * step);
             }
-            let cost = vcost[c];
+            let cost = prices.via(c);
             if cost != SHUT_COST {
                 for ll in 0..nl {
                     if ll != l {
@@ -186,25 +189,34 @@ impl Engine<'_> {
     /// that is as cheap. `a`: what the first pass has found, with `closed` the mark of the states whose cost
     /// is final. Returns its corners (in units of the 45 degree corner cost; infinite if the path could not be
     /// followed to the end, and then nothing is known) and what its steps really cost.
-    fn follow(&self, n: usize, a: &[Swept], vcost: &[f32], closed: u32, from: usize) -> (f64, f64) {
+    fn follow(&self, n: usize, prices: &Prices, closed: u32, from: usize) -> (f64, f64) {
         let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
         let lc = &self.plan.layer_cost[n];
-        let open = &self.shared.open[n][..];
         let Steps { off, len } = self.plan.steps;
+        let a = prices.swept();
+        // a state the first pass has finished with that a step can end in: its factor, else None
+        let done = |v: usize| -> Option<f64> {
+            if a[v].seen.get() != closed {
+                return None;
+            }
+            let mult = prices.at(v).mult.get();
+            (mult < TAKEN).then_some(mult as f64)
+        };
         let (mut at, mut dir, mut units, mut steps, mut real) = (from, NO_DIR, 0.0f64, 0usize, 0.0f64);
-        while a[at].d > 0.0 && units.is_finite() {
-            let here = a[at].d as f64;
+        while a[at].d.get() > 0.0 && units.is_finite() {
+            let here = a[at].d.get() as f64;
             let near = 1e-4 * here + 1e-3;
             let (la, ca) = (at / hw, at % hw);
             // (corners, next state, direction, what the step really costs)
             let mut best: Option<(f64, usize, usize, f64)> = None;
-            let mut bits = open[at];
+            let mut bits = prices.at(at).open.get();
             while bits != 0 {
                 let d2 = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
                 let v = (at as isize + off[d2]) as usize;
-                let step = len[d2] * lc[la] * a[v].mult as f64;
-                if a[v].seen == closed && a[v].mult < TAKEN && (a[v].d as f64 + step - here).abs() <= near {
+                let Some(mult) = done(v) else { continue };
+                let step = len[d2] * lc[la] * mult;
+                if (a[v].d.get() as f64 + step - here).abs() <= near {
                     if let Some(t) = turn(dir, d2) {
                         if best.map_or(true, |b| t < b.0) {
                             best = Some((t, v, d2, step));
@@ -212,15 +224,12 @@ impl Engine<'_> {
                     }
                 }
             }
-            if best.is_none() && vcost[ca] != SHUT_COST && vcost[ca] > 0.0 {
+            let change = prices.via(ca);
+            if best.is_none() && change != SHUT_COST && change > 0.0 {
                 for ll in 0..nl {
                     let v = ll * hw + ca;
-                    if ll != la
-                        && a[v].seen == closed
-                        && a[v].mult < TAKEN
-                        && (a[v].d as f64 + vcost[ca] as f64 - here).abs() <= near
-                    {
-                        best = Some((0.0, v, NO_DIR, vcost[ca] as f64));
+                    if ll != la && done(v).is_some() && (a[v].d.get() as f64 + change as f64 - here).abs() <= near {
+                        best = Some((0.0, v, NO_DIR, change as f64));
                     }
                 }
             }
@@ -241,7 +250,9 @@ impl Engine<'_> {
     /// The search proper: the cheapest path with its corners and what it costs, after a first pass if
     /// `q.from` is given.
     fn search(&self, q: Query, worker: &mut Worker) -> Option<(Vec<u32>, f64)> {
-        let Query { net: n, sources, goals, from, holes } = q;
+        let Query { net: n, mode, sources, goals, from, holes } = q;
+        let Worker { search: s, sweep, ground } = worker;
+        let prices = Prices::new(self, ground, n, mode);
         let floor = self.look(n, goals, holes, sources);
         let floor = &floor;
 
@@ -260,21 +271,21 @@ impl Engine<'_> {
                 let margin = self.p.options.sweep_margin;
                 let mut sorted = sources.to_vec();
                 sorted.sort_unstable();
-                let (bound, upper) = self.sweep(Query { sources: &sorted, ..q }, back, margin, worker)?;
+                let (bound, upper) = self.sweep(Query { sources: &sorted, ..q }, back, margin, sweep, &prices)?;
                 (Some(bound), upper)
             }
             None => (None, f64::INFINITY),
         };
         let _t = self.shared.timed(3);
         let back = back.as_ref();
-        let swept = &worker.swept[..];
-        let swept_closed = worker.sweep_gen + 1;
+        let swept = prices.swept();
+        let swept_closed = sweep.gen + 1;
         let look = |at: usize| -> f64 {
             match (bound, back) {
                 (Some(bound), Some(back)) => {
-                    if swept[at].seen == swept_closed {
+                    if swept[at].seen.get() == swept_closed {
                         // kept in single precision: a little under, so that rounding can never put it above the real cost
-                        swept[at].d as f64 * 0.9999
+                        swept[at].d.get() as f64 * 0.9999
                     } else {
                         (floor.get(at) as f64).max(bound - back.get(at) as f64)
                     }
@@ -285,9 +296,7 @@ impl Engine<'_> {
         let (hw, nl) = (self.plan.space.hw, self.plan.space.nl);
         let lc = &self.plan.layer_cost[n];
         let bend = self.p.options.bend_mm / self.p.step;
-        let vcost = &worker.vcost;
         let mut count = 0u64;
-        let s = &mut worker.search;
         s.gen = s.gen.wrapping_add(2);
         if s.gen < 2 {
             s.node.iter_mut().for_each(|v| v.seen = 0);
@@ -297,7 +306,6 @@ impl Engine<'_> {
         s.heap.clear();
         // no state is wanted that cannot be on a path as cheap as one already known (with room for rounding)
         let cut = upper * 1.0005 + 1.0;
-        let open = &self.shared.open[n][..];
         let (corner, allowed) = turns(bend);
         let Steps { off, len } = self.plan.steps;
         // A state is ((layer, cell), direction of arrival), the nine directions of a cell side by side in memory.
@@ -350,23 +358,23 @@ impl Engine<'_> {
                     }
                 }
             };
-            let mut bits = open[at] & allowed[dir];
+            let mut bits = prices.at(at).open.get() & allowed[dir];
             while bits != 0 {
                 let d2 = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
                 let v = (at as isize + off[d2]) as usize;
-                let m2 = swept[v].mult;
+                let m2 = prices.at(v).mult.get();
                 if m2 >= TAKEN {
                     continue;
                 }
                 relax(v * 9 + d2, corner[dir][d2] + len[d2] * step_cost * m2 as f64, dir as u8, s);
             }
-            let cost = vcost[c];
+            let cost = prices.via(c);
             if cost == SHUT_COST {
                 continue;
             }
             for ll in 0..nl {
-                if ll != l && swept[ll * hw + c].mult < TAKEN {
+                if ll != l && prices.at(ll * hw + c).mult.get() < TAKEN {
                     relax((ll * hw + c) * 9 + NO_DIR, cost as f64, VIA + (9 * l + dir) as u8, s);
                 }
             }
