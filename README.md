@@ -98,6 +98,13 @@ than twice its width. pcb-routing has the least track, the fewest vias and the f
 KiCadRoutingTools has fewer sharp turns. Not measured: how buses are kept together, how tracks leave pads,
 and anything that needs to know what the circuit does.
 
+The table is computed with [`tools/quality`](tools/quality/README.md), which defines each figure and works on
+any routed KiCad board that has a reference routing to compare with:
+
+    python3 tools/quality/quality.py DESIGNER.kicad_pcb mine=ROUTED.kicad_pcb
+
+It also has first measures of buses, pad exits and decoupling paths, which are not reported here.
+
 ### What it has
 
 * All nets negotiated together; no dependence on net order; several differently ordered attempts side by
@@ -247,7 +254,7 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 63 in the engine, 91 in the bridge |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 63 in the engine, 91 in the bridge, 140 in the quality tools |
 
 ## Sources
 
