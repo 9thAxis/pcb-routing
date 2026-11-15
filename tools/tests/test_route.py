@@ -7,7 +7,7 @@ from unittest import mock
 import support
 
 k = support.bridge()
-ENGINE = [sys.executable, str(support.FAKE_ENGINE)]
+ENGINE = support.ENGINE
 
 
 class FakeBoard:
@@ -62,9 +62,8 @@ class WithEngine(unittest.TestCase):
         return [json.loads(f.read_text()) for f in files]
 
     def route(self, board, settings=None, **more):
-        run = lambda problem, first: k.run_engine(problem, ENGINE)
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, settings or k.Settings(pours=False), run, say=self.said.append, **more)  # (boards without zones)
+            return k.route(board, settings or k.Settings(pours=False), k.Engine(ENGINE), say=self.said.append, **more)  # (boards without zones)
 
 
 class TwoTries(WithEngine):
@@ -120,9 +119,8 @@ class TwoTries(WithEngine):
 
 class Steps(WithEngine):
     def coarse_first(self, board, **more):
-        run = lambda problem, first: k.run_engine(problem, ENGINE)
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, k.Settings(step=None, coarse_first=True, pours=False), run, say=self.said.append, **more)
+            return k.route(board, k.Settings(step=None, coarse_first=True, pours=False), k.Engine(ENGINE), say=self.said.append, **more)
 
     def test_the_step_follows_from_the_rules(self):
         picture = FakeBoard(1).read()
@@ -234,7 +232,7 @@ class EngineFailure(WithEngine):
         kicad = mock.patch.multiple(support.stub_pcbnew(), create=True, LoadBoard=lambda path: mock.Mock(),
                                     SaveBoard=lambda path, b: saved.append(path), ZONE_FILLER=lambda b: mock.Mock())
         out, err = io.StringIO(), io.StringIO()
-        with kicad, mock.patch.object(k, "KicadBoard", lambda b, ignored, pours=True: board), redirect_stdout(out), redirect_stderr(err):
+        with kicad, mock.patch.object(k, "KicadBoard", lambda b, ignored, ask=None: board), redirect_stdout(out), redirect_stderr(err):
             (self.dir / "in.kicad_pcb").write_text("")
             status = k.main([str(self.dir / "in.kicad_pcb"), "-o", "out.kicad_pcb", "--engine", str(engine), "--no-pours", *more])
         return status, saved, out.getvalue(), err.getvalue()

@@ -119,6 +119,15 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   side is taken down to a zone on the other), 326 s for 213 s on the 119 boards. On the nets the designers
   routed as tracks, the tracks keep a little less distance from other copper on the large boards (a median
   gap of 3.9 clearances for 4.8), and turn sharply less often (7 per 100 connections for 12).
+  Where it is done: all of the above was first written in the bridge, in Python, where the zones are
+  read. None of it needs KiCad once the fills are polygons, a board from another program has the same
+  questions, and on the largest board choosing the points of the zones alone took 10 s of Python: it is
+  now a module of the crate (`src/pours`), which the bridge asks through `pcb-routing pours`. The port
+  gives the same groups, pieces, spoke counts and points on all 119 boards. One thing is made differently:
+  the ground of a spoke was cut out with KiCad's polygon operations (the zone within a band round the pad,
+  grown by the gap); it is now everything within that distance of where the half-gap line runs on the
+  zone, which needs no polygon clipping and covers the same ground to within a few per cent. Filling a
+  zone stays KiCad's: its fill is what the board is checked against.
   Still open: a custom rule for the thermal gap or the number of spokes is not read; a pad no straight
   track fits by is only named; the time a cut zone costs when a run is done again.
 * Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,

@@ -2,7 +2,7 @@
 """Small boards made with KiCad itself, for the tests of the code that reads zones (test_real_kicad.py runs
 this with KiCad's Python, one scene per process, and reads what it prints).
 
-    kicad_scenes.py SCENE DIRECTORY
+    kicad_scenes.py SCENE DIRECTORY ENGINE
 
 Prints one line of JSON: what the bridge reads from the scene, and where it saved the board.
 """
@@ -86,7 +86,7 @@ class Scene:
     def read(self):
         pcbnew.ZONE_FILLER(self.board).Fill(self.board.Zones())
         self.board.BuildConnectivity()
-        return k.read_board(self.board)
+        return k.read_board(self.board, ask=ASK)
 
 
 def spokes(scene, tie=True):
@@ -102,7 +102,7 @@ def spokes(scene, tie=True):
     picture = scene.read()
     cut = count(picture)
     starved = [t for t in picture.thermals if t.spokes < t.least]
-    targets = k.stub_targets(starved[0], picture.pads[starved[0].pad].at, 0.25) if starved else []
+    targets = k.tie_targets([(starved[0], picture.pads[starved[0].pad].at, 0.25, [])], ASK)[0] if starved else []
     if targets and tie:
         scene.track("GND", pcbnew.F_Cu, (2.2, 2.2), tuple(targets[0]))
     return dict(whole=whole, cut=cut, targets=targets, tied=count(scene.read()),
@@ -122,7 +122,7 @@ def groups(scene):
     cut = scene.read()
     return dict(whole=names(whole), cut=names(cut), fills=[len(whole.fills), len(cut.fills)],
                 pours=[sorted(len(own) for own in picture.pours["GND"].values()) for picture in (whole, cut)],
-                unjoined=k.unjoined_nets(scene.board), without=names(k.read_board(scene.board, pours=False)))
+                unjoined=cut.unjoined(), without=names(k.read_board(scene.board)))
 
 
 def to_route(scene):
@@ -139,6 +139,7 @@ SCENES = dict(spokes=spokes, starved=lambda scene: spokes(scene, tie=False), gro
 
 if __name__ == "__main__":
     name, directory = sys.argv[1], Path(sys.argv[2])
+    ASK = lambda question: k.ask_engine(question, sys.argv[3])
     scene = Scene()
     said = SCENES[name](scene)
     pcbnew.ZONE_FILLER(scene.board).Fill(scene.board.Zones())

@@ -6,7 +6,7 @@ First version as a library.
 
 - `route(&Problem) -> Result<Solution, Error>` and `Router` (events per round, verification of the two-pass
   search against the one-pass search, one attempt alone). The command line is unchanged in its two commands,
-  `route` and `masks`, and gains `--trace`, `--verify` and `--only`.
+  `route` and `masks`, and gains `--trace`, `--verify` and `--only`, and a third command, `pours` (below).
 - A problem is checked before it is run (`Problem::validate`): sizes and costs that make sense, names that
   exist, a grid that fits `options.max_states`. Misspelt fields in a problem file are an error.
 - `Solution::status` is an enum (written as `routed`, `conflicts`, `unroutable`, as before); an incomplete
@@ -57,6 +57,14 @@ First version as a library.
   that no such track fits by is named. On the 119 public boards with their designers' zones put back: all
   complete with no new error in KiCad's check, 26,000 mm of track and 464 vias where ignoring the zones
   takes 33,000 mm and 388 (the vias: pads taken down to a zone on the other side).
+- Zones, in the crate (`pcb_routing::pours`, and the command `pcb-routing pours`, which answers the same
+  questions as JSON): from the pieces of the filled zones as polygons and the pads, which groups of pads
+  the zones join (`survey`), the spokes of every pad the zones tie, counted as KiCad counts them, with the
+  ground where a track would cut them; the places a net may be joined to its zone (`reach`); the copper of
+  a run that hangs on a piece of zone (`parts`); and the straight track that ties a pad left with too few
+  spokes (`tie_targets`, `ties`). The bridge did all of this in Python; it now reads the board, fills the
+  zones and asks. On the largest of the public boards that takes the time spent outside the router's own
+  runs from 12 s to under 2 s.
 - Engine: terminals of an entry may name the piece of copper they stand on (`piece`). Those of one piece are
   joined already, and the entry is joined to the piece at whichever of them comes cheapest. The bridge
   gives every group of pads that copper already joins as one piece, with its nearest pads to choose from,

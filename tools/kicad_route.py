@@ -149,6 +149,7 @@ class Pour:
     net: object
     layer: str
     rings: list  # its outline, then its holes
+    zone: int = 0  # the zone it is a piece of: a number, the same for all pieces of one zone
 
 
 @dataclass
@@ -159,7 +160,7 @@ class Thermal:
     layer: str
     least: int  # the spokes the board asks of it
     spokes: int  # those it has, counted as KiCad's design rule check counts them
-    reach: list = field(default_factory=list)  # each spoke with the ground a track would cut it from: polygons
+    reach: list = field(default_factory=list)  # the ground where a track would cut its spokes: polygons
     outline: list = field(default_factory=list)  # for a pad with too few: the ring a spoke crosses, half the gap from the pad
     fill: list = field(default_factory=list)  # and the pieces of the zone it is tied to, as polygons
 
@@ -179,7 +180,7 @@ class Picture:
     minima: Minima = field(default_factory=Minima)
     ignored: frozenset = frozenset()  # the design rule checks the project sets to 'ignore'
     groups: dict = field(default_factory=dict)  # net -> its groups of pads already joined, as indices into pads
-    pours: dict = field(default_factory=dict)  # net -> {index of a group: the pours that join it}
+    pours: dict = field(default_factory=dict)  # net -> {index of a group: the pours that join it, as indices into fills}
     fills: list = field(default_factory=list)  # every piece of every filled zone, whatever it joins: [Pour]
     thermals: list = field(default_factory=list)  # every pad tied to a filled zone by spokes: [Thermal]
 
@@ -449,252 +450,53 @@ def _lanes(nets, parts):
     return {net: lane for lane, net in enumerate(order)}
 
 
-def _within(rings, p):
-    """True if a point is on a polygon given as its outline and holes (even-odd)."""
-    inside = False
-    for ring in rings:
-        for a, b in zip(ring, ring[1:] + ring[:1]):
-            if (a[1] > p[1]) != (b[1] > p[1]) and p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]):
-                inside = not inside
-    return inside
-
-
 # --------------------------------------------------------------------------------------------------------------
-# Pours and spokes, as plain geometry: where a pour may be reached, which copper hangs on it, how a pad is
-# tied to it. Nothing here touches KiCad.
+# Zones: the geometry is the engine's (src/pours); these are the questions put to it. `ask` takes a question
+# and returns the answer (see `Engine.ask`). Nothing here touches KiCad.
 
-def _apart(a, b):
-    """How far apart two boxes [x0, y0, x1, y1] are; 0 if they touch or overlap."""
-    return math.hypot(max(a[0] - b[2], b[0] - a[2], 0.0), max(a[1] - b[3], b[1] - a[3], 0.0))
-
-
-def _along(ring, spacing, most):
-    """Places along a ring, `spacing` apart, or further apart for `most` of them at most."""
-    sides = list(zip(ring, ring[1:] + ring[:1]))
-    spacing = max(spacing, sum(math.dist(a, b) for a, b in sides) / most)
-    places, left = [], 0.0  # (how far the next place lies along the side at hand)
-    for a, b in sides:
-        length = math.dist(a, b)
-        while left < length - 1e-12:
-            places.append([a[0] + (b[0] - a[0]) * left / length, a[1] + (b[1] - a[1]) * left / length])
-            left += spacing
-        left -= length
-    return places[:most]
+def _spots(pads):
+    """Pads as a question names them: net, place and layers."""
+    return [dict(net=pad.net, at=pad.at, layers=pad.layers) for pad in pads]
 
 
-def into_pour(rings, p, inset):
-    """The point of a pour to take a track from `p` to: `p` itself if it is on the pour, else the nearest point
-    of its edge moved `inset` further in. None if that is not on the pour (a sliver too thin to end a track on)."""
-    if _within(rings, p):
-        return list(p)
-    best = None
-    for ring in rings:
-        for a, b in zip(ring, ring[1:] + ring[:1]):
-            vx, vy = b[0] - a[0], b[1] - a[1]
-            l2 = vx * vx + vy * vy
-            t = max(0.0, min(1.0, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2)) if l2 else 0.0
-            q = (a[0] + t * vx, a[1] + t * vy)
-            d = math.dist(p, q)
-            if best is None or d < best[0]:
-                best = (d, q)
-    if best is None or best[0] == 0:
-        return None
-    d, q = best
-    q = [_r(q[0] + (q[0] - p[0]) / d * inset), _r(q[1] + (q[1] - p[1]) / d * inset)]
-    return q if _within(rings, q) else None
+def reach_of(picture, rules, names, ask):
+    """Where each group of joined pads of these nets may be reached: {net: per group, [(point, its layers)]}.
+    The engine joins a group at whichever of its points comes cheapest.
 
-
-PIECE_PADS = 2  # pads of a group offered to each pad of another group of its net: the nearest
-POUR_AROUND = (0.0, 1.0, 2.0)  # mm from a pad, in four directions: where a pour is tried for a point to end on
-POUR_PADS = 4  # pads of another group that a pour is tried round: those nearest it
-POUR_EDGE = 60  # places along the edge of another group's pour that a pour is tried from, at most
-POUR_NEAR = 3.0  # mm: two pours further apart than this (by their boxes) are not tried along their edges
-POUR_SPREAD = 1.0  # mm at least between two points offered on one pour
-PIECE_POINTS = 64  # most points of one group
-FOUR_WAYS = ((1, 0), (0, 1), (-1, 0), (0, -1))
-
-
-def reach_of(pads, groups, pours, layers, inset, step=None):
-    """Where each group of joined pads of a net may be reached: per group, [(point, its layers)]. The engine
-    joins a group at whichever of its points comes cheapest.
-
-    A lone pad is reached at the pad. A group of several has, for each pad of every other group, its own
-    pads nearest to that pad. If a pour joins it, it also has points of the pour near the pads of each other
-    group that are nearest the pour: the pad's own place if the pour is there (on another layer: under the
-    pad), places round it, and the nearest point of the pour's edge moved `inset` in. Where the other group
-    has a pour close by (one pour cut in two), it has instead the points of its pour nearest to places along
-    the edge of the other: the two can be joined anywhere along the cut. A point of a pour is moved onto the grid of `step` if one is given (a track ends on a cell; only
-    a pad is worth leaving the grid for), and two on one pour are POUR_SPREAD apart at least. The nearest
-    come first, and there are PIECE_POINTS at most.
-
-    `groups`: the net's groups as indices into `pads`; `pours`: {index of a group: its pours}; `layers`: the
-    routing layers.
+    A lone pad is reached at the pad; a group of several at its pads nearest the other groups; one that a
+    pour joins also at points of the pour near the others, a track's half width and a little within it.
     """
-    on = lambda pad: [l for l in layers if l in pad.layers]
-    round_about = [(d * dx, d * dy) for d in POUR_AROUND for dx, dy in (FOUR_WAYS if d else FOUR_WAYS[:1])]
-    usable = {g: [pour for pour in own if pour.layer in layers] for g, own in pours.items()}
-    boxes = {}
-    def box(pour):
-        if id(pour) not in boxes:
-            xs, ys = [p[0] for p in pour.rings[0]], [p[1] for p in pour.rings[0]]
-            boxes[id(pour)] = (min(xs), min(ys), max(xs), max(ys))
-        return boxes[id(pour)]
-    out = []
-    for g, group in enumerate(groups):
-        own = usable.get(g, [])
-        if len(group) == 1 and not own:
-            pad = pads[group[0]]
-            out.append([(pad.at, on(pad))] if on(pad) else [])
-            continue
-        found = {}  # (x, y, layers) -> (how far from what it was found for, on a pour or not)
-        def offer(far, at, at_layers, poured=False):
-            key = (_r(at[0]), _r(at[1]), tuple(at_layers))
-            if at_layers and far < found.get(key, (math.inf,))[0]:
-                found[key] = (far, poured)
-        def offer_pour(pour, near):
-            """The point of a pour nearest to `near`, if it is well within the pour: not on a sliver of it."""
-            at = into_pour(pour.rings, near, inset)
-            if at is not None and step:
-                at = [_r(round(at[0] / step) * step), _r(round(at[1] / step) * step)]
-            if at is not None and all(_within(pour.rings, [at[0] + 0.7 * inset * ex, at[1] + 0.7 * inset * ey]) for ex, ey in FOUR_WAYS):
-                offer(math.dist(at, near), at, [pour.layer], True)
-        others = [(h, pads[i]) for h, other in enumerate(groups) if h != g for i in other]
-        for h, other in others:
-            near = sorted((math.dist(pads[i].at, other.at), i) for i in group if on(pads[i]))[:PIECE_PADS]
-            for far, i in near:
-                offer(far, pads[i].at, on(pads[i]))
-        # Each pour of the group against each other group: along the edges of that group's pours where it
-        # has any near this one (one pour cut in two), else round the pads of it nearest this pour.
-        for pour, (h, other) in itertools.product(own, [(h, other) for h, other in enumerate(groups) if h != g]):
-            beside = [theirs for theirs in usable.get(h, []) if _apart(box(pour), box(theirs)) <= POUR_NEAR]
-            for theirs in beside:
-                for place in _along(theirs.rings[0], POUR_SPREAD, POUR_EDGE):
-                    offer_pour(pour, place)
-            apart = lambda i: _apart(box(pour), pads[i].at + pads[i].at)
-            for i in sorted(other, key=apart)[:POUR_PADS] if not beside else []:
-                for dx, dy in round_about:
-                    offer_pour(pour, [pads[i].at[0] + dx, pads[i].at[1] + dy])
-        if not others:  # (the net's only group: nothing to join it to)
-            found = {(pads[i].at[0], pads[i].at[1], tuple(on(pads[i]))): (0, False) for i in group[:1] if on(pads[i])}
-        chosen = []
-        for key in sorted(found, key=lambda key: (found[key][0], key)):
-            crowded = lambda other: found[other][1] and other[2] == key[2] and math.dist(other[:2], key[:2]) < POUR_SPREAD
-            if len(chosen) < PIECE_POINTS and not (found[key][1] and any(crowded(other) for other in chosen)):
-                chosen.append(key)
-        out.append([([x, y], list(at_layers)) for x, y, at_layers in chosen])
-    return out
+    if not names:
+        return {}
+    used, nets = {}, []  # (the pours the nets name: index in the picture -> index in the question)
+    for name in names:
+        pours = picture.pours.get(name, {}) if rules.settings.pours else {}
+        nets.append(dict(groups=picture.groups[name], inset=_r(rules.track_width(name) / 2 + 0.1),
+                         pours=[[used.setdefault(f, len(used)) for f in pours.get(g, [])] for g in range(len(picture.groups[name]))]))
+    fills = [dict(net=pour.net, layer=pour.layer, rings=pour.rings) for pour in (picture.fills[f] for f in used)]
+    found = ask(dict(ask="reach", pads=_spots(picture.pads), fills=fills, layers=rules.routing_layers(picture.layers),
+                     step=rules.settings.step, nets=nets))
+    return {name: [[(place["xy"], place["layers"]) for place in group] for group in groups] for name, groups in zip(names, found)}
 
 
-def crossings(ring, outline):
-    """How often the edge of a piece of a zone crosses the line round a pad (both rings): the places, each
-    once. Two of them are one spoke, as KiCad's design rule check counts."""
-    box = [min(p[0] for p in outline), min(p[1] for p in outline), max(p[0] for p in outline), max(p[1] for p in outline)]
-    near = lambda a, b: not (max(a[0], b[0]) < box[0] or min(a[0], b[0]) > box[2] or max(a[1], b[1]) < box[1] or min(a[1], b[1]) > box[3])
-    places = set()
-    for a, b in zip(ring, ring[1:] + ring[:1]):
-        if not near(a, b):
-            continue
-        for c, d in zip(outline, outline[1:] + outline[:1]):
-            den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0])
-            if den == 0:
-                continue
-            t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den
-            u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den
-            if 0 <= t <= 1 and 0 <= u <= 1:
-                places.add((round(a[0] + t * (b[0] - a[0]), 4), round(a[1] + t * (b[1] - a[1]), 4)))
-    return places
+def parts_of(picture, problem, solution, ask):
+    """What a run laid, as what can be taken back piece by piece: the copper of an entry that has points of a
+    pour among its terminals as the pieces that hang together (keyed `KEY # n`, with `of` the entry's key),
+    each with the points of a pour it came to end on (`ends`: net, layer, xy); any other entry whole."""
+    return ask(dict(ask="parts", pads=_spots(picture.pads), entries=problem["nets"], laid=solution["nets"]))
 
 
-STUB_REACH = 3.0  # mm: how far from a pad's middle a track that ties it to its zone may end
-STUB_DIRECTIONS = 8
+def tie_targets(starved, ask):
+    """For pads with too few spokes, as [(Thermal, the pad's middle, how far within the zone to end, points
+    not to give again)]: for each, the points of its zone that a straight track from its middle may end on."""
+    return [] if not starved else ask(dict(ask="tie_targets", pads=[dict(outline=thermal.outline, fill=thermal.fill, at=at, inset=inset, tried=tried)
+                                             for thermal, at, inset, tried in starved]))
 
 
-def stub_targets(thermal, at, inset, tried=(), step=0.05):
-    """For a pad with too few spokes: the points of its zone that a straight track from the pad's middle `at`
-    may end on, one per direction of eight, the nearest first. Each is `inset` into the zone from where the
-    line first meets it beyond the gap. `tried`: points not to give again."""
-    on_zone = lambda p: any(_within(rings, p) for rings in thermal.fill)
-    found = []
-    for k in range(STUB_DIRECTIONS):
-        dx, dy = math.cos(k * 2 * math.pi / STUB_DIRECTIONS), math.sin(k * 2 * math.pi / STUB_DIRECTIONS)
-        along = lambda t: [_r(at[0] + t * dx), _r(at[1] + t * dy)]
-        t = step
-        while t + inset <= STUB_REACH:
-            if not _within([thermal.outline], along(t)) and all(on_zone(along(t + f * inset)) for f in (0, 0.5, 1, 2)):
-                if along(t + inset) not in tried:
-                    found.append((t, along(t + inset)))
-                break
-            t += step
-    return [point for _, point in sorted(found)]
-
-
-def ties(thermal, points):
-    """True if a track through `points` counts as a spoke of the pad for KiCad: one of its straight pieces
-    begins within half the gap of the pad and ends on the pad's zone."""
-    by_pad = lambda p: _within([thermal.outline], p)
-    on_zone = lambda p: any(_within(rings, p) for rings in thermal.fill)
-    return any((by_pad(a) and on_zone(b)) or (by_pad(b) and on_zone(a)) for a, b in zip(points, points[1:]))
-
-
-def _on_track(p, points):
-    """True if a point lies on a line through these points."""
-    for a, b in zip(points, points[1:]):
-        vx, vy = b[0] - a[0], b[1] - a[1]
-        l2 = vx * vx + vy * vy
-        t = max(0.0, min(1.0, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2)) if l2 else 0.0
-        if math.dist(p, (a[0] + t * vx, a[1] + t * vy)) < 1e-6:
-            return True
-    return False
-
-
-def parts_of(laid):
-    """The copper laid for one entry as the pieces that hang together: each a copy of the entry with its own
-    tracks and vias, keyed `KEY # n`, with `of` the entry's key. Two tracks hang together where one ends on the
-    other on the same layer, a track and a via where the via stands on the track."""
-    tracks, vias = laid["tracks"], laid["vias"]
-    leader = list(range(len(tracks) + len(vias)))
-
-    def find(i):
-        while leader[i] != i:
-            i = leader[i]
-        return i
-
-    ends = lambda track: (track["points"][0], track["points"][-1])
-    for i, track in enumerate(tracks):
-        for j, other in enumerate(tracks[:i]):
-            if track["layer"] == other["layer"] and (any(_on_track(p, other["points"]) for p in ends(track)) or
-                                                     any(_on_track(p, track["points"]) for p in ends(other))):
-                leader[find(i)] = find(j)
-        for j, via in enumerate(vias):
-            if _on_track(via, track["points"]):
-                leader[find(i)] = find(len(tracks) + j)
-    heads = sorted({find(i) for i in range(len(leader))})
-    if len(heads) < 2:
-        return [dict(laid, of=laid["key"])]
-    return [dict(laid, key=f"{laid['key']} # {n + 1}", of=laid["key"],
-                 tracks=[t for i, t in enumerate(tracks) if find(i) == head],
-                 vias=[v for j, v in enumerate(vias) if find(len(tracks) + j) == head]) for n, head in enumerate(heads)]
-
-
-def pour_ends(picture, problem, nets):
-    """For each piece of laid copper (see `parts_of`) that came to end on a point of a pour (not on a pad):
-    those points, as {key: [(net, layer, point)]}. A track that ends there, or a via there, is joined to the
-    net only as long as the pour is."""
-    at_pads = {(pad.net, _r(pad.at[0]), _r(pad.at[1]), layer) for pad in picture.pads for layer in pad.layers}
-    entries = {entry["key"]: entry for entry in problem["nets"]}
-    out = {}
-    for copper in nets:
-        entry = entries[copper["of"]]
-        points = lambda layer: [p for track in copper["tracks"] if track["layer"] == layer for p in (track["points"][0], track["points"][-1])] + copper["vias"]
-        for terminal in entry["terminals"]:
-            at = terminal["xy"]
-            if "piece" not in terminal:
-                continue
-            for layer in terminal["layers"]:
-                # (a pad of the net there on that layer is no point of a pour; under a pad on another layer is)
-                if (entry["net"], _r(at[0]), _r(at[1]), layer) not in at_pads and any(math.dist(at, p) < 1e-6 for p in points(layer)):
-                    out.setdefault(copper["key"], []).append((entry["net"], layer, at))
-    return out
+def ties(tracks, ask):
+    """For tracks laid to tie a pad to its zone, as [(Thermal, the track's points)]: whether each counts as a
+    spoke of its pad for KiCad."""
+    return [] if not tracks else ask(dict(ask="ties", tracks=[dict(outline=thermal.outline, fill=thermal.fill, points=points) for thermal, points in tracks]))
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -734,12 +536,13 @@ def decoupling(pads, groups):
     return links
 
 
-def build_problem(picture, rules, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None):
+def build_problem(picture, rules, ask, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
-    `narrow`: the second try, with narrower tracks and vias allowed in a net's own lands. `unlinked`: nets whose
-    capacitors get no link of their own to the pin they stand by. `stubs`: instead of the unjoined nets, a
-    track for each of these pads from its middle to its zone: [(key, Thermal, points of the zone to end on)].
+    `ask` puts a question to the engine (where each net may be reached). `narrow`: the second try, with
+    narrower tracks and vias allowed in a net's own lands. `unlinked`: nets whose capacitors get no link of
+    their own to the pin they stand by. `stubs`: instead of the unjoined nets, a track for each of these pads
+    from its middle to its zone: [(key, Thermal, points of the zone to end on)].
     """
     every = picture.layers
     layers = rules.routing_layers(every)
@@ -789,6 +592,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None, unlinke
             smallest[pad.net] = min(pad.smallest, smallest.get(pad.net, pad.smallest))
     unjoined = picture.unjoined(only) if stubs is None else []
     bus = buses(picture.pads, set(unjoined)) if rules.settings.bus_pull > 0 else {}
+    reached = reach_of(picture, rules, unjoined, ask)
     nets = []
     def entry(key, name, terminals, via_penalty, **more):
         width = rules.narrow_width(name, smallest.get(name)) if narrow else rules.track_width(name)
@@ -806,8 +610,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None, unlinke
         on = lambda pad: [l for l in layers if l in pad.layers]
         groups = picture.groups[name]
         pours = picture.pours.get(name, {}) if rules.settings.pours else {}
-        inset = _r(rules.track_width(name) / 2 + 0.1)
-        reach = reach_of(picture.pads, groups, pours, layers, inset, rules.settings.step)
+        reach = reached[name]
         if not all(reach):
             print(f"skipped {name}: a pad of it is on no routing layer", file=sys.stderr)
             continue
@@ -887,6 +690,36 @@ def run_engine(problem, engine, threads=0, problem_path=None, solution_path=None
         return json.loads(solution_path.read_text())
 
 
+def ask_engine(question, engine):
+    """Put a question about a board's zones to the pcb-routing program (its `pours` command) and return the
+    answer. `engine` is the program (or a command as a list)."""
+    command = ([engine] if isinstance(engine, (str, os.PathLike)) else list(engine)) + ["pours"]
+    try:
+        run = subprocess.run(command, input=json.dumps(question), capture_output=True, text=True)
+    except OSError as error:
+        raise EngineFailed(f"cannot run {command[0]}: {error}")
+    if run.returncode:
+        raise EngineFailed(run.stderr.strip() or f"{command[0]} pours ended with status {run.returncode}")
+    return json.loads(run.stdout)
+
+
+@dataclass
+class Engine:
+    """The pcb-routing program as `route` uses it."""
+    program: object  # the program, or a command as a list
+    threads: int = 0  # the threads it may use (0: as many as the machine has)
+    problem_path: object = None  # where the problem of the first run is kept, if anywhere
+    solution_path: object = None  # and its solution
+
+    def route(self, problem, first=False):
+        """Run a problem and return its solution (`first`: the first run of all); EngineFailed if it gives none."""
+        return run_engine(problem, self.program, self.threads, self.problem_path if first else None, self.solution_path if first else None)
+
+    def ask(self, question):
+        """Put a question about the board's zones (see src/pours) and return the answer; EngineFailed if it gives none."""
+        return ask_engine(question, self.program)
+
+
 @dataclass
 class Outcome:
     status: str = "routed"  # routed, or how the engine's last incomplete run ended (unroutable, conflicts)
@@ -912,7 +745,7 @@ def batches(names, most=ENGINE_NETS, size=BATCH_NETS):
     return [list(names[k:k + each]) for k in range(0, len(names), each)]
 
 
-def route(board, settings, run, only=None, options=None, say=print):
+def route(board, settings, engine, only=None, options=None, say=print):
     """Join the unjoined nets of a board (those named in `only`, if given).
 
     `board` reads and writes it: `read(nets)` gives its picture as it now stands (with the groups of joined pads
@@ -922,8 +755,7 @@ def route(board, settings, run, only=None, options=None, say=print):
     `take_back(keys)` removes what the last solution written laid for those entries, `mark()` gives the place
     in the record of what has been written and `rewind(mark)` removes all written since (both return the
     numbers of track segments and vias removed).
-    `run(problem, first)` runs the engine (`first`: the first run of all) and raises EngineFailed if it gives
-    no solution.
+    `engine` runs problems and answers questions about zones (see `Engine`).
     """
     outcome = Outcome()
     picture = board.read(only)
@@ -962,7 +794,7 @@ def route(board, settings, run, only=None, options=None, say=print):
                     say(f"no try at a {step:g} mm step: the grid would be larger than --max-states")
                     number_of_try, reread = number_of_try + 1, True
                     continue
-                problem = build_problem(picture, rules, only=set(lot), narrow=narrow, options=options, unlinked=unlinked)
+                problem = build_problem(picture, rules, engine.ask, only=set(lot), narrow=narrow, options=options, unlinked=unlinked)
             keys = list(dict.fromkeys(n["net"] for n in problem["nets"]))  # (a net may have several entries)
             if not number_of_try and reread is False and not unlinked:
                 wanted += [n for n in keys if n not in wanted]
@@ -972,7 +804,7 @@ def route(board, settings, run, only=None, options=None, say=print):
                 finer = step != tries[number_of_try - 1][0]
                 say(f"{'next try, at a %g mm step' % step if finer else 'second try, narrower'}: {', '.join(keys)}")
             try:
-                solution = run(problem, first)
+                solution = engine.route(problem, first)
             except EngineFailed as failure:
                 outcome.failure = str(failure)
                 break
@@ -989,15 +821,14 @@ def route(board, settings, run, only=None, options=None, say=print):
             first = False
             mark = board.mark() if settings.pours else None
             # (an entry that has points of a pour among its terminals is written piece by piece: see below)
-            poured = {n["key"] for n in problem["nets"] if any("piece" in t for t in n["terminals"])} if settings.pours else set()
-            parts = [part for laid in solution["nets"] for part in (parts_of(laid) if laid["key"] in poured else [dict(laid, of=laid["key"])])]
+            parts = parts_of(picture, problem, solution, engine.ask) if settings.pours else [dict(laid, of=laid["key"]) for laid in solution["nets"]]
             sizes = {n["key"]: (n["width"], n["via"]) for n in problem["nets"]}
             added = board.write(dict(solution, nets=parts), {part["key"]: sizes[part["of"]] for part in parts})
             # A track that ends on a pour is joined only while the pour is there: where the other new tracks
             # have cut it away, the copper that hangs on that end is taken back, and its net is among those
             # still to join.
-            ends = pour_ends(picture, problem, parts) if settings.pours else {}
-            loose = sorted(key for key, places in ends.items() if not all(board.on_pour(*place) for place in places))
+            on_pour = lambda part: all(board.on_pour(end["net"], end["layer"], end["xy"]) for end in part.get("ends", []))
+            loose = sorted(part["key"] for part in parts if not on_pour(part))
             if loose:
                 taken = board.take_back(loose)
                 added = (added[0] - taken[0], added[1] - taken[1])
@@ -1025,8 +856,8 @@ def route(board, settings, run, only=None, options=None, say=print):
                 # step apart, and a track between them holds nothing together.)
                 taken = board.rewind(base[1])
                 outcome.tracks, outcome.vias = outcome.tracks - taken[0], outcome.vias - taken[1]
-                by_pads = build_problem(picture, Rules.of(picture, replace(at_step, pours=False)), only=set(keys), narrow=narrow,
-                                        options=options, unlinked=set(keys))
+                by_pads = build_problem(picture, Rules.of(picture, replace(at_step, pours=False)), engine.ask, only=set(keys),
+                                        narrow=narrow, options=options, unlinked=set(keys))
                 bridges += [dict(entry, key=f"{entry['net']} ~ {len(bridges) + k + 1}") for k, entry in enumerate(by_pads["nets"])]
                 say(f"no way to join them past the new tracks: those are laid again, with the pieces of the pour held together: {', '.join(keys)}")
                 lot, reread, rejoining, again, agains = list(dict.fromkeys(n["net"] for n in base[0]["nets"])), False, False, True, agains + 1
@@ -1040,7 +871,7 @@ def route(board, settings, run, only=None, options=None, say=print):
             break
         given_up = set(board.unjoined(set(wanted))) if wanted else set()
     if settings.pours and not outcome.failure:
-        tie_starved(board, settings, run, outcome, only, starved_before, options, say)
+        tie_starved(board, settings, engine, outcome, only, starved_before, options, say)
     # (a net that was joined and that the new tracks parted for good is one left unjoined, as much as any)
     wanted += [n for n in board.unjoined() if n not in open_before and n not in wanted] if wanted else []
     outcome.wanted = len(wanted)
@@ -1050,7 +881,7 @@ def route(board, settings, run, only=None, options=None, say=print):
     return outcome
 
 
-def tie_starved(board, settings, run, outcome, only=None, before=frozenset(), options=None, say=print):
+def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(), options=None, say=print):
     """Give every pad that is tied to its zone by fewer spokes than the board asks for a straight track from
     its middle into the zone, where one fits: that is a tie as good as a spoke, and counted as one. Tracks of
     other nets across its spokes are what starve a pad: one that this run starved is tied whatever its net;
@@ -1068,27 +899,31 @@ def tie_starved(board, settings, run, outcome, only=None, before=frozenset(), op
             break
         rules = Rules.of(picture, settings)
         rules = Rules.of(picture, replace(settings, step=rules.step({t.net for t in starved})))
+        # (a track ends half its width and a little within the zone)
+        asked = [(thermal, picture.pads[thermal.pad].at, _r(rules.track_width(thermal.net) / 2 + 0.1), tried[thermal.pad, thermal.layer])
+                 for thermal in starved]
         stubs = []
-        for thermal in starved:
-            inset = _r(rules.track_width(thermal.net) / 2 + 0.1)
-            targets = stub_targets(thermal, picture.pads[thermal.pad].at, inset, tried[thermal.pad, thermal.layer])
-            if targets and len(stubs) < ENGINE_NETS - 1:
-                stubs.append((f"{thermal.net} + {len(stubs)}", thermal, targets))
-        if not stubs:
-            break  # (nothing left to try: `starved` is what stays so)
-        # (the second round on: narrower, where the net's own width found no room)
-        problem = build_problem(picture, rules, narrow=round_ > 0, options=options, stubs=stubs)
         try:
-            solution = run(problem, False)
+            for (thermal, *_), targets in zip(asked, tie_targets(asked, engine.ask)):
+                if targets and len(stubs) < ENGINE_NETS - 1:
+                    stubs.append((f"{thermal.net} + {len(stubs)}", thermal, targets))
+            if not stubs:
+                break  # (nothing left to try: `starved` is what stays so)
+            # (the second round on: narrower, where the net's own width found no room)
+            problem = build_problem(picture, rules, engine.ask, narrow=round_ > 0, options=options, stubs=stubs)
+            solution = engine.route(problem)
+            # only a track that counts as a spoke is kept: straight from the pad onto the zone
+            laid = {net["key"]: net for net in solution["nets"]}
+            alone = [(thermal, laid[key]["tracks"][0]["points"]) for key, thermal, _ in stubs
+                     if key in laid and len(laid[key]["tracks"]) == 1 and not laid[key].get("vias")]
+            tying = {id(thermal) for (thermal, _), tied in zip(alone, ties(alone, engine.ask)) if tied}
         except EngineFailed as failure:
             say(f"no tracks to the zones of pads with too few spokes: {failure}")
             break
-        # only a track that counts as a spoke is kept: straight from the pad onto the zone
-        laid = {net["key"]: net for net in solution["nets"]}
         kept = []
         for key, thermal, targets in stubs:
             tracks = laid.get(key, {}).get("tracks", [])
-            if len(tracks) == 1 and not laid[key].get("vias") and ties(thermal, tracks[0]["points"]):
+            if id(thermal) in tying:
                 kept.append(laid[key])
             # A point is not given again once a track has been laid to it that does not tie, nor any once a
             # narrower track has found no way to any of them. (A track's ends, whichever way round it is.)
@@ -1250,103 +1085,51 @@ def pad_groups(board, nets=None, copper=None):
     return out
 
 
-def pour_groups(board, groups, of):
-    """`groups` (pad_groups) with the groups that a filled zone joins made one, and for each net with pours
-    {index of a group: [Pour]}. `of`: the group of each track and via (see pad_groups). The zones must be filled.
-
-    A piece of a zone's fill joins the pads of its net whose copper on its layer it touches (through thermal
-    spokes too; a pad it keeps clear of is not joined), and the vias and track ends of its net that stand on
-    it: those of a group of pads, and those that reach no pad but join two pieces of pour.
-    """
-    enabled = copper_layers(board)
-    name = board.GetLayerName
-    connectivity = board.GetConnectivity()
-    zones, copper = {}, {}
-    for zone in board.Zones():
-        if not zone.GetIsRuleArea() and zone.GetNetname() in groups:
-            zones.setdefault(zone.GetNetname(), []).append(zone)
-    for track in board.GetTracks():
-        if track.GetNetname() in zones:
-            copper.setdefault(track.GetNetname(), []).append(track)
-    out, pours = {}, {}
-    for net, own in groups.items():
-        if net not in zones:
-            out[net] = own
-            continue
-        # what a piece of pour can join: the groups of pads, then the clusters of copper that reach no pad
-        node = {pad.m_Uuid.AsString(): g for g, group in enumerate(own) for pad in group}
-        node.update(of.get(net, {}))
-        count = len(own)
-        for item in copper.get(net, []):
-            if item.m_Uuid.AsString() in node:
-                continue
-            waiting = [item]
-            node[item.m_Uuid.AsString()] = count
-            while waiting:
-                for other in connectivity.GetConnectedTracks(waiting.pop()):
-                    if other.m_Uuid.AsString() not in node:
-                        node[other.m_Uuid.AsString()] = count
-                        waiting.append(other)
-            count += 1
-        leader = list(range(count))
-
-        def find(g):
-            while leader[g] != g:
-                g = leader[g]
-            return g
-
-        islands = []  # (something it joins, Pour)
-        for zone in zones[net]:
-            for l in enabled:
-                if not zone.IsOnLayer(l):
-                    continue
-                fill = zone.GetFilledPolysList(l)
-                for i in range(fill.OutlineCount()):
-                    island = pcbnew.SHAPE_POLY_SET(fill.Polygon(i))
-                    box = island.BBox()
-                    touched, items = set(), 0
-                    for group in own:
-                        for pad in group:
-                            if pad.IsOnLayer(l) and box.Intersects(pad.GetBoundingBox()):
-                                both = pad_polygon(pad, l)
-                                both.BooleanIntersection(island)
-                                if both.OutlineCount() > 0:
-                                    touched.add(node[pad.m_Uuid.AsString()])
-                                    items += 1
-                    for item in copper.get(net, []):
-                        via = item.Type() == pcbnew.PCB_VIA_T
-                        if not (via or item.GetLayer() == l):
-                            continue
-                        ends = [item.GetPosition()] if via else [item.GetStart(), item.GetEnd()]
-                        if any(island.Contains(end) for end in ends):
-                            touched.add(node[item.m_Uuid.AsString()])
-                            items += 1
-                    if touched:
-                        first = find(min(touched))
-                        for g in touched:
-                            leader[find(g)] = first
-                        islands.append((first, Pour(net, name(l), rings_of(island)[0])))
-        # the groups of pads, as the pours and the loose copper have joined them
-        heads = sorted({find(g) for g in range(len(own))})
-        out[net] = [[pad for g, group in enumerate(own) if find(g) == head for pad in group] for head in heads]
-        for g, pour in islands:
-            if find(g) in heads:  # (a pour that joins no pad is nobody's)
-                pours.setdefault(net, {}).setdefault(heads.index(find(g)), []).append(pour)
-    return out, pours
+def filled_zones(board):
+    """The zones that are filled with copper of a net, each with its number among them."""
+    return list(enumerate(zone for zone in board.Zones() if not zone.GetIsRuleArea() and zone.GetNetname()))
 
 
 def zone_fills(board):
     """Every piece of every filled zone on copper: [Pour]. The zones must be filled."""
     name = board.GetLayerName
     out = []
-    for zone in board.Zones():
-        if zone.GetIsRuleArea() or not zone.GetNetname():
-            continue
+    for number, zone in filled_zones(board):
         for l in copper_layers(board):
             if zone.IsOnLayer(l):
                 fill = zone.GetFilledPolysList(l)
-                out.extend(Pour(zone.GetNetname(), name(l), rings_of(pcbnew.SHAPE_POLY_SET(fill.Polygon(i)))[0])
+                out.extend(Pour(zone.GetNetname(), name(l), rings_of(pcbnew.SHAPE_POLY_SET(fill.Polygon(i)))[0], number)
                            for i in range(fill.OutlineCount()))
+    return out
+
+
+def zone_wires(board, groups, of):
+    """The vias and tracks of the nets that have zones, as the engine's survey takes them: net, layer (none
+    for a via), ends, and `node`, what each hangs on: the index of its group of pads (`groups`: those of each
+    net; `of`: the group of each track and via, see pad_groups), or, from the number of the net's groups on,
+    a number for copper that reaches no pad, the same for all of it that hangs together."""
+    name = board.GetLayerName
+    connectivity = board.GetConnectivity()
+    zoned = {zone.GetNetname() for _, zone in filled_zones(board)}
+    node = {net: dict(of.get(net, {})) for net in zoned if net in groups}
+    count = {net: len(groups[net]) for net in node}
+    out = []
+    for item in board.GetTracks():
+        net, uuid = item.GetNetname(), item.m_Uuid.AsString()
+        if net not in zoned:
+            continue
+        if net in node and uuid not in node[net]:
+            waiting = [item]
+            node[net][uuid] = count[net]
+            while waiting:
+                for other in connectivity.GetConnectedTracks(waiting.pop()):
+                    if other.m_Uuid.AsString() not in node[net]:
+                        node[net][other.m_Uuid.AsString()] = count[net]
+                        waiting.append(other)
+            count[net] += 1
+        via = item.Type() == pcbnew.PCB_VIA_T
+        out.append(dict(net=net, layer=None if via else name(item.GetLayer()), node=node.get(net, {}).get(uuid),
+                        ends=[xy(item.GetPosition())] if via else [xy(item.GetStart()), xy(item.GetEnd())]))
     return out
 
 
@@ -1370,115 +1153,38 @@ def thermal_gap(zone, pad):
     return own if isinstance(own, int) and own > 0 else zone.GetThermalReliefGap()
 
 
-def thermals(board, index):
-    """Every pad that a filled zone of its net is tied to by thermal spokes, with its spokes counted as KiCad's
-    design rule check counts them: [Thermal]. `index`: a pad's id -> its index in the picture. The zones must
-    be filled and the connectivity up to date.
-
-    A spoke is two crossings of the zone's edge with the line half the gap from the pad. Those of a piece of the
-    zone that joins nothing but this pad count only if the pad has no others; a track that begins by the pad
-    and ends on the zone counts as one, for a pad that has too few without (on the zone's layer: KiCad counts
-    one on any layer, which ties nothing to this one). A pad the zone covers without a gap, or does not reach,
-    is not tied by spokes at all.
-    """
+def spoked_pads(board, index):
+    """The pads that filled zones of their net are to meet by thermal spokes, as the engine's survey takes
+    them: per pad and layer, the zone (its number, see filled_zones), the line a spoke crosses (the pad's
+    outline grown by half the gap), the gap, the clearance the zone keeps, the spokes the board asks for, and
+    the tracks that begin on the pad, on that layer and elsewhere. `index`: a pad's id -> its index in the picture. The
+    zones must be filled and the connectivity up to date."""
     enabled = copper_layers(board)
     name = board.GetLayerName
     connectivity = board.GetConnectivity()
     least = getattr(board.GetDesignSettings(), "m_MinResolvedSpokes", 2)
-    grown = lambda pad, l, by: _transformed(pad, l, by)
-    pads, copper = {}, {}
+    pads = {}
     for pad in board.GetPads():
         pads.setdefault(pad.GetNetname(), []).append(pad)
-    for track in board.GetTracks():
-        copper.setdefault(track.GetNetname(), []).append(track)
     out = []
-    for zone in board.Zones():
-        net = zone.GetNetname()
-        if zone.GetIsRuleArea() or not net or least <= 0:
-            continue
+    for number, zone in filled_zones(board) if least > 0 else []:
         clearance = zone.GetLocalClearance()
         clearance = max(clearance if isinstance(clearance, int) else 0, zone.GetNet().GetNetClassSlow().GetClearance())
         for l in enabled:
-            if not zone.IsOnLayer(l):
+            fill = zone.GetFilledPolysList(l) if zone.IsOnLayer(l) else None
+            if fill is None or fill.OutlineCount() == 0:
                 continue
-            fill = zone.GetFilledPolysList(l)
-            islands = [pcbnew.SHAPE_POLY_SET(fill.Polygon(i)) for i in range(fill.OutlineCount())]
-            boxes = [island.BBox() for island in islands]
-            alone, edges = {}, {}
-
-            def edge(i):
-                """The outline of piece `i` of the fill, as a ring."""
-                if i not in edges:
-                    edges[i] = rings_of(islands[i])[0][0]
-                return edges[i]
-
-            def joins_one(i):
-                """True if piece `i` of the fill joins one thing only (a pad, a via or a track's end)."""
-                if i not in alone:
-                    count = 0
-                    for pad in pads.get(net, []):
-                        if count < 2 and pad.IsOnLayer(l) and boxes[i].Intersects(pad.GetBoundingBox()):
-                            both = pad_polygon(pad, l)
-                            both.BooleanIntersection(islands[i])
-                            count += both.OutlineCount() > 0
-                    for item in copper.get(net, []):
-                        via = item.Type() == pcbnew.PCB_VIA_T
-                        if count < 2 and (via or item.GetLayer() == l):
-                            ends = [item.GetPosition()] if via else [item.GetStart(), item.GetEnd()]
-                            count += any(islands[i].Contains(end) for end in ends)
-                    alone[i] = count < 2
-                return alone[i]
-
             whole = fill.BBox()
-            for pad in pads.get(net, []):
+            for pad in pads.get(zone.GetNetname(), []):
                 if not (pad.IsOnLayer(l) and pad.FlashLayer(l)) or zone_connection(zone, pad) != pcbnew.ZONE_CONNECTION_THERMAL:
                     continue
-                if not islands or not whole.Intersects(pad.GetBoundingBox()):
-                    continue
                 gap = thermal_gap(zone, pad)
-                if gap <= 0 or pad.m_Uuid.AsString() not in index:
+                if gap <= 0 or pad.m_Uuid.AsString() not in index or not whole.Intersects(pad.GetBoundingBox()):
                     continue
-                # the line a spoke crosses, half the gap from the pad; and most of the gap as a ring, for the
-                # shape of each spoke
-                outline = grown(pad, l, gap // 2)
-                line = rings_of(outline)[0][0]
-                wide = grown(pad, l, gap * 4 // 5)
-                wide.BooleanSubtract(grown(pad, l, gap // 5))
-                spokes = ignored = 0
-                tied, reach = [], []
-                for i, island in enumerate(islands):
-                    if not boxes[i].Intersects(pad.GetBoundingBox()):
-                        continue
-                    across = len(crossings(edge(i), line)) // 2
-                    if across == 0:
-                        continue  # not reached, or covered without a gap
-                    if joins_one(i):
-                        ignored += across
-                    else:
-                        spokes += across
-                    tied.append(i)
-                    # Each spoke, grown by the gap or by the clearance the zone keeps from a track if that is
-                    # more: about the ground where a track of another net would cut it.
-                    shape = pcbnew.SHAPE_POLY_SET(wide)
-                    shape.BooleanIntersection(island)
-                    shape.Inflate(max(gap, clearance), pcbnew.CORNER_STRATEGY_CHAMFER_ALL_CORNERS, pcbnew.FromMM(ARC_ERROR))
-                    reach.extend(rings_of(shape))
-                if spokes + ignored == 0:
-                    continue
-                if spokes < least:
-                    for track in connectivity.GetConnectedTracks(pad):
-                        if track.Type() == pcbnew.PCB_VIA_T or track.GetLayer() != l:
-                            continue
-                        a, b = track.GetStart(), track.GetEnd()
-                        spokes += (outline.Contains(a) and fill.Contains(b)) or (not outline.Contains(a) and outline.Contains(b) and fill.Contains(a))
-                if spokes == 0:
-                    spokes = ignored
-                thermal = Thermal(net, index[pad.m_Uuid.AsString()], name(l), least, spokes, reach)
-                if spokes < least:
-                    thermal.outline = line
-                    # (the pieces that join more than this pad first: a track is better ended on those)
-                    thermal.fill = [[edge(i)] for i in sorted(tied, key=joins_one)]
-                out.append(thermal)
+                tracks = [track for track in connectivity.GetConnectedTracks(pad) if track.Type() != pcbnew.PCB_VIA_T]
+                ends = lambda here: [[xy(track.GetStart()), xy(track.GetEnd())] for track in tracks if (track.GetLayer() == l) == here]
+                out.append(dict(pad=index[pad.m_Uuid.AsString()], layer=name(l), zone=number, gap=MM(gap), clearance=MM(clearance),
+                                least=least, line=rings_of(_transformed(pad, l, gap // 2))[0][0], tracks=ends(True), elsewhere=ends(False)))
     return out
 
 
@@ -1489,23 +1195,16 @@ def _transformed(pad, layer, by):
     return out
 
 
-def joined(board, nets=None, pours=True):
-    """For each net with pads on copper (those named, if given): its groups of pads already joined, by tracks,
-    vias and pads that touch and, with `pours`, by filled zones; and the pours of each net that has them."""
-    of = {}
-    groups = pad_groups(board, nets, of)
-    return pour_groups(board, groups, of) if pours else (groups, {})
+def unjoined_nets(board, nets=None):
+    """The nets (of those named, if given) whose pads the board's tracks and vias do not all join, whatever
+    its zones join. The board's connectivity must be up to date (BuildConnectivity after adding copper)."""
+    return sorted(name for name, groups in pad_groups(board, nets).items() if len(groups) > 1)
 
 
-def unjoined_nets(board, nets=None, pours=True):
-    """The nets (of those named, if given) whose pads the board's copper does not all join. The board's
-    connectivity must be up to date (BuildConnectivity after adding copper), and its zones filled."""
-    return sorted(name for name, groups in joined(board, nets, pours)[0].items() if len(groups) > 1)
-
-
-def read_board(board, ignored=frozenset(), nets=None, pours=True):
-    """A board as a Picture. `nets`: work out the groups of joined pads for these nets only. `pours`: what a
-    filled zone joins counts as joined (the zones must be filled)."""
+def read_board(board, ignored=frozenset(), ask=None):
+    """A board as a Picture. `ask` puts a question to the engine: with it, what a filled zone joins counts as
+    joined and the picture has the zones and the pads they tie (the zones must be filled); without, only
+    tracks, vias and pads that touch join."""
     settings = board.GetDesignSettings()
     enabled = copper_layers(board)
     name = board.GetLayerName
@@ -1592,11 +1291,20 @@ def read_board(board, ignored=frozenset(), nets=None, pours=True):
         for rings in rings_of(zone.Outline()):
             picture.areas.append(Area(rings=rings, layers=on, tracks=bool(zone.GetDoNotAllowTracks()), vias=bool(zone.GetDoNotAllowVias())))
 
-    groups, picture.pours = joined(board, nets, pours)
-    if pours:
-        picture.fills, picture.thermals = zone_fills(board), thermals(board, index)
-    for net, own in groups.items():
+    of = {}
+    for net, own in pad_groups(board, copper=of).items():
         picture.groups[net] = [[index[p.m_Uuid.AsString()] for p in group if p.m_Uuid.AsString() in index] for group in own]
+    picture.fills = zone_fills(board) if ask is not None else []
+    if picture.fills:
+        # what the zones join, and how they tie each pad: the engine's to work out from the plain geometry
+        zoned = {pour.net for pour in picture.fills}
+        pads = [dict(net=pad.net, at=pad.at, layers=pad.layers, shapes=pad.shapes if pad.net in zoned else {}) for pad in picture.pads]
+        found = ask(dict(ask="survey", pads=pads, wires=zone_wires(board, picture.groups, of), groups=picture.groups,
+                         fills=[dict(net=pour.net, layer=pour.layer, rings=pour.rings, zone=pour.zone) for pour in picture.fills],
+                         spoked=spoked_pads(board, index)))
+        picture.groups = found["groups"]
+        picture.pours = {net: {g: pieces for g, pieces in enumerate(own) if pieces} for net, own in found["pours"].items()}
+        picture.thermals = [Thermal(**thermal) for thermal in found["thermals"]]
     return picture
 
 
@@ -1631,12 +1339,13 @@ def write_back(board, solution, sizes, added=None):
 
 class KicadBoard:
     """A pcbnew board as `route` uses it; it keeps the zones filled and the connectivity up to date with what
-    has been written. `pours`: what a filled zone joins counts as joined."""
+    has been written. `ask` puts a question to the engine: with it, what a filled zone joins counts as joined."""
 
-    def __init__(self, board, ignored=frozenset(), pours=True):
-        self.board, self.ignored, self.pours = board, ignored, pours
-        self.zoned = pours and any(not zone.GetIsRuleArea() for zone in board.Zones())
+    def __init__(self, board, ignored=frozenset(), ask=None):
+        self.board, self.ignored, self.ask = board, ignored, ask
+        self.zoned = ask is not None and any(not zone.GetIsRuleArea() for zone in board.Zones())
         self.stale = self.zoned  # (a board may come with its zones not filled)
+        self.picture = None  # the board as it was last read, as long as nothing has been written since
         self.last = {}  # what the last solution written laid, by entry
         self.written = []  # and each one before it, in order
 
@@ -1645,11 +1354,13 @@ class KicadBoard:
             if self.zoned:
                 pcbnew.ZONE_FILLER(self.board).Fill(self.board.Zones())  # new tracks cut the pours
             self.board.BuildConnectivity()
-            self.stale = False
+            self.stale, self.picture = False, None
 
     def read(self, nets=None):
         self._fresh()
-        return read_board(self.board, self.ignored, nets, self.pours)
+        if self.picture is None:
+            self.picture = read_board(self.board, self.ignored, self.ask)
+        return self.picture
 
     def write(self, solution, sizes):
         self.stale, self.last = True, {}
@@ -1686,8 +1397,10 @@ class KicadBoard:
         return tracks, vias
 
     def unjoined(self, nets=None):
+        if self.zoned:
+            return self.read().unjoined(nets)
         self._fresh()
-        return unjoined_nets(self.board, nets, self.pours)
+        return unjoined_nets(self.board, nets)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1729,12 +1442,17 @@ def main(argv=None):
     settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=not args.no_pours,
                         pour_cost=args.pour_cost, spoke_cost=args.spoke_cost)
     options = dict(variants=args.variants, max_states=args.max_states)
-    run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
+    engine = Engine(args.engine, args.threads, args.problem, args.solution)
 
     if not Path(args.board).is_file():
         parser.error(f"no such board: {args.board}")  # (pcbnew crashes on a file that is not there)
     board = pcbnew.LoadBoard(args.board)
-    outcome = route(KicadBoard(board, ignored_checks(args.board), settings.pours), settings, run, only=names(args.nets), options=options)
+    try:
+        outcome = route(KicadBoard(board, ignored_checks(args.board), engine.ask if settings.pours else None), settings, engine,
+                        only=names(args.nets), options=options)
+    except EngineFailed as failure:  # (a question about the zones that got no answer: nothing is saved)
+        print(failure, file=sys.stderr)
+        return 2
 
     if outcome.failure:
         print(outcome.failure, file=sys.stderr)

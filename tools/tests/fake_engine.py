@@ -2,6 +2,7 @@
 """A stand-in for the pcb-routing program, for the bridge's tests.
 
     fake_engine.py route PROBLEM -o SOLUTION [--threads N]
+    fake_engine.py pours
 
 It joins the terminals of every net by one straight track on the first terminal's first layer. What it does
 otherwise is told by files in the directory named by FAKE_ENGINE_DIR:
@@ -9,11 +10,17 @@ otherwise is told by files in the directory named by FAKE_ENGINE_DIR:
     runs/N.json     written: the problem of run N (from 1)
     stubborn.json   {"nets": [...], "below": W}: these nets are left unrouted unless their width is under W
     fail_on         a run number: that run writes no solution and ends with status 2
+
+A question about zones (`pours`) is the program's own to answer: it is passed on to $PCB_ROUTING, else to the
+repository's release build.
 """
 import json, os, sys
 from pathlib import Path
 
 args = sys.argv[1:]
+if args[:1] == ["pours"]:
+    program = os.environ.get("PCB_ROUTING") or str(Path(__file__).resolve().parents[2] / "target/release/pcb-routing")
+    os.execv(program, [program] + args)
 assert args[0] == "route" and args[2] == "-o", args
 problem = json.loads(Path(args[1]).read_text())
 control = Path(os.environ["FAKE_ENGINE_DIR"])

@@ -1,10 +1,18 @@
-"""What the tests share: a stand-in for KiCad's `pcbnew` module, so that the bridge loads without KiCad, and a
-few hand-made pictures."""
+"""What the tests share: a stand-in for KiCad's `pcbnew` module, so that the bridge loads without KiCad, a
+few hand-made pictures, and the engine: a stand-in that routes (fake_engine.py) and passes questions about
+zones on to the program itself ($PCB_ROUTING, else the repository's release build: `cargo build --release`
+first)."""
 import sys, types
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent.parent
 FAKE_ENGINE = Path(__file__).resolve().parent / "fake_engine.py"
+ENGINE = [sys.executable, str(FAKE_ENGINE)]
+
+
+def ask(question):
+    """Put a question about zones to the engine."""
+    return bridge().ask_engine(question, ENGINE)
 
 
 class VECTOR2I:

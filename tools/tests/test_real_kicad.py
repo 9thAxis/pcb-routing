@@ -22,7 +22,7 @@ CLI = program("KICAD_CLI", APP / "MacOS/kicad-cli", "kicad-cli")
 ENGINE = program("PCB_ROUTING", HERE.parent.parent / "target/release/pcb-routing")
 
 
-@unittest.skipUnless(PYTHON and CLI, "KiCad is not installed")
+@unittest.skipUnless(PYTHON and CLI and ENGINE, "KiCad is not installed, or the engine is not built")
 class RealKicad(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -30,7 +30,7 @@ class RealKicad(unittest.TestCase):
         self.dir = Path(tmp.name)
 
     def scene(self, name):
-        run = subprocess.run([PYTHON, str(HERE / "kicad_scenes.py"), name, str(self.dir)], capture_output=True, text=True)
+        run = subprocess.run([PYTHON, str(HERE / "kicad_scenes.py"), name, str(self.dir), ENGINE], capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         return json.loads(run.stdout.strip().splitlines()[-1])
 
@@ -66,7 +66,6 @@ class RealKicad(unittest.TestCase):
         self.assertEqual(said["without"], [["J1"], ["J2"], ["J3"], ["J4"]])  # a zone joins nothing unless asked
         self.assertEqual(self.check(said["saved"])[1], 2)  # KiCad: J3 and J4 each to be joined to the rest
 
-    @unittest.skipUnless(ENGINE, "the engine is not built")
     def test_a_board_with_a_zone_is_routed_clean_with_and_without_pours(self):
         said = self.scene("to_route")
         lengths = {}

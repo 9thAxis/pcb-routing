@@ -143,12 +143,14 @@ here.
 * A self-check of the search (`--verify`), a mask export for comparing with another tool, a trace per round.
 * Decoupling capacitors joined to the pin they stand by, in the KiCad bridge: a link of its own that is slow
   to change layer, given up for a net that cannot be completed with it.
-* Copper zones followed, in the KiCad bridge: pads that a filled zone joins are left to the zone, and a net
+* Copper zones followed: pads that a filled zone joins are left to the zone, and a net
   with a zone gets tracks only from the pads the zone does not reach. Other nets pay for crossing a zone
   and more for crossing the spokes that tie a pad to it; a zone that new tracks cut is joined again; a pad
   left with fewer spokes than the board asks for gets a track of its own into the zone. On the 119 public
   boards with their designers' zones put back: all complete, no new error of any kind in KiCad's check
-  (thermal relief included), and 21 % less track than with the zones ignored.
+  (thermal relief included), and 21 % less track than with the zones ignored. What the zones join, where
+  a net may be joined to one and how each pad is tied to it are worked out in the crate, from the filled
+  zones as polygons (`pcb_routing::pours`, or `pcb-routing pours`); the KiCad bridge fills the zones and asks.
 * Buses kept together: nets marked as one bus (`bus` and `bus_lane` on a net; the KiCad bridge marks nets
   that leave one part and arrive at another side by side) are drawn to run beside each other on one layer,
   in the order of their pads, and are slow to cross each other.
@@ -202,15 +204,25 @@ nets are still too close.
 `Router` gives more control: a callback per round of negotiation, a self-check of the search, one attempt
 alone. See `examples/route_file.rs` and the API documentation (`cargo doc --open`).
 
+For a board with filled zones, `pcb_routing::pours` turns the zones as your CAD program filled them into
+what a problem takes: `survey` tells which pads the zones already join and counts the thermal spokes of
+each pad, `reach` gives the places a net may be joined to its zone (the terminals of one `piece`), and
+after a run `parts` tells which of the new copper hangs on a piece of zone, to be looked at again once the
+zones are refilled. The module documentation has the whole round.
+
 ## As a program
 
     pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N] [--trace] [--verify] [--only ATTEMPT]
     pcb-routing masks PROBLEM.json --net KEY -o MASK.bin
+    pcb-routing pours [QUESTION.json] [-o ANSWER.json]
 
 `route` exits with status 0 if every net is laid and none are too close, 1 otherwise, 2 if the problem could
 not be run. `--trace` prints one line per round and the time spent per kind of work. `--verify` runs every
 search a second time without the first pass (see below) and reports any whose cost differs. `masks` writes
-the router's picture of the board for one net, one byte per cell.
+the router's picture of the board for one net, one byte per cell. `pours` answers one question about a
+board's filled zones, as JSON (from standard input to standard output where no file is named): the field
+`ask` names it (`survey`, `reach`, `parts`, `tie_targets`, `ties`), and the rest is as documented on
+`pcb_routing::pours::Ask`.
 
 Try it on `examples/two_nets.json`.
 
