@@ -2,115 +2,44 @@
 
 use super::*;
 use crate::geom::dist2_segment;
-use crate::grid::EPS;
+use crate::grid::{Grid, EPS};
 
-impl Engine<'_> {
-    /// The cells a net's copper claims, for each size of track and via another net may have.
-    /// The cells whose centres lie within `r` of the segment from `a` to `b`.
-    pub(super) fn near(&self, a: Pt, b: Pt, r: f64) -> Vec<usize> {
-        let g = &self.plan.grid;
-        let lo = |v: f64, o: f64| (((v - r - o) / g.step).floor() as i64).max(0);
-        let hi = |v: f64, o: f64, n: usize| (((v + r - o) / g.step).ceil() as i64).min(n as i64 - 1);
-        let (i0, i1) = (lo(a[0].min(b[0]), g.x0), hi(a[0].max(b[0]), g.x0, g.w));
-        let (j0, j1) = (lo(a[1].min(b[1]), g.y0), hi(a[1].max(b[1]), g.y0, g.h));
-        let mut out = Vec::new();
-        for j in j0..=j1 {
-            for i in i0..=i1 {
-                let (x, y) = (g.x0 + i as f64 * g.step, g.y0 + j as f64 * g.step);
-                if dist2_segment([x, y], a, b) <= (r + EPS) * (r + EPS) {
-                    out.push(j as usize * g.w + i as usize);
-                }
+/// The cells whose centres lie within `r` of the segment from `a` to `b`.
+fn cells_near(g: &Grid, a: Pt, b: Pt, r: f64) -> Vec<usize> {
+    let lo = |v: f64, o: f64| (((v - r - o) / g.step).floor() as i64).max(0);
+    let hi = |v: f64, o: f64, n: usize| (((v + r - o) / g.step).ceil() as i64).min(n as i64 - 1);
+    let (i0, i1) = (lo(a[0].min(b[0]), g.x0), hi(a[0].max(b[0]), g.x0, g.w));
+    let (j0, j1) = (lo(a[1].min(b[1]), g.y0), hi(a[1].max(b[1]), g.y0, g.h));
+    let mut out = Vec::new();
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            let (x, y) = (g.x0 + i as f64 * g.step, g.y0 + j as f64 * g.step);
+            if dist2_segment([x, y], a, b) <= (r + EPS) * (r + EPS) {
+                out.push(j as usize * g.w + i as usize);
             }
         }
-        out
     }
+    out
+}
 
+impl Engine<'_> {
+    /// Claim the cells the copper of net `n` takes, for each size of track and via another net may have.
     pub(super) fn claim(&mut self, n: usize) {
         let _t = self.shared.timed(4);
-        let net = &self.p.nets[n];
-        let rules = &self.p.rules;
+        let (plan, rules) = (self.plan, &self.p.rules);
         let quiet = if rules.quiet_clearance_mm > 0.0 { rules.quiet_clearance_mm } else { rules.new_clearance_mm };
-        let (plain, mine) = (rules.new_clearance_mm, net.quiet);
-        let shapes = self.laid.nets[n].shapes.clone();
-        let (grid, space, nl) = (&self.plan.grid, self.plan.space, self.plan.space.nl);
-        let (half, via_r) = (net.width / 2.0, net.via[0] / 2.0);
-        let conns = self.laid.nets[n].conns.clone();
-        let vias = self.laid.nets[n].vias.clone();
+        let (plain, mine) = (rules.new_clearance_mm, self.p.nets[n].quiet);
         let mut claims_t = Vec::new();
-        for q in 0..self.plan.tr.len() {
-            let c = if self.plan.tr[q].1 != mine { quiet } else { plain };
-            let track = self.claims.disc(&self.plan.grid, half + c + self.plan.tr[q].0);
-            let via = self.claims.disc(&self.plan.grid, via_r + c + self.plan.tr[q].0);
-            let near: Vec<(usize, Vec<usize>)> =
-                shapes.iter().map(|&(l, a, b, hw_)| (l, self.near(a, b, hw_ + c + self.plan.tr[q].0))).collect();
-            self.claims.mark_gen += 1;
-            let gen = self.claims.mark_gen;
-            let mut out: Vec<u32> = Vec::new();
-            let mut put = |mark: &mut Vec<u32>, layer: usize, cell: usize, disc: &[(i32, i32)]| {
-                for c in grid.around(cell, disc) {
-                    let idx = space.state(layer, c);
-                    if mark[idx] != gen {
-                        mark[idx] = gen;
-                        out.push(idx as u32);
-                    }
-                }
-            };
-            for conn in &conns {
-                for &s in conn {
-                    let (layer, cell) = space.split(s as usize);
-                    put(&mut self.claims.mark, layer, cell, &track);
-                }
-            }
-            for &v in &vias {
-                for l in 0..nl {
-                    put(&mut self.claims.mark, l, v as usize, &via);
-                }
-            }
-            for (l, cells) in &near {
-                for &cell in cells {
-                    put(&mut self.claims.mark, *l, cell, &[(0, 0)]);
-                }
-            }
-            out.sort_unstable();
+        for (q, &(size, theirs)) in plan.tr.iter().enumerate() {
+            let out = self.claimed(n, if theirs != mine { quiet } else { plain }, size, false);
             for &idx in &out {
                 self.claims.occ_t[q][idx as usize] += 1;
             }
             claims_t.push(out);
         }
         let mut claims_v = Vec::new();
-        for q in 0..self.plan.vr.len() {
-            let c = if self.plan.vr[q].1 != mine { quiet } else { plain };
-            let track = self.claims.disc(&self.plan.grid, half + c + self.plan.vr[q].0);
-            // two holes also keep the drill spacing, whatever the copper round them would allow
-            let via =
-                self.claims.disc(&self.plan.grid, (via_r + c + self.plan.vr[q].0).max(self.p.rules.hole_centre_mm));
-            let near: Vec<Vec<usize>> =
-                shapes.iter().map(|&(_, a, b, hw_)| self.near(a, b, hw_ + c + self.plan.vr[q].0)).collect();
-            self.claims.mark_gen += 1;
-            let gen = self.claims.mark_gen;
-            let mut out: Vec<u32> = Vec::new();
-            let mut put = |mark: &mut Vec<u32>, cell: usize, disc: &[(i32, i32)]| {
-                for idx in grid.around(cell, disc) {
-                    if mark[idx] != gen {
-                        mark[idx] = gen;
-                        out.push(idx as u32);
-                    }
-                }
-            };
-            for conn in &conns {
-                for &s in conn {
-                    put(&mut self.claims.mark, space.split(s as usize).1, &track);
-                }
-            }
-            for &v in &vias {
-                put(&mut self.claims.mark, v as usize, &via);
-            }
-            for cells in &near {
-                for &cell in cells {
-                    put(&mut self.claims.mark, cell, &[(0, 0)]);
-                }
-            }
-            out.sort_unstable();
+        for (q, &(size, theirs)) in plan.vr.iter().enumerate() {
+            let out = self.claimed(n, if theirs != mine { quiet } else { plain }, size, true);
             for &idx in &out {
                 self.claims.occ_v[q][idx as usize] += 1;
             }
@@ -118,6 +47,57 @@ impl Engine<'_> {
         }
         self.laid.nets[n].claims_t = claims_t;
         self.laid.nets[n].claims_v = claims_v;
+    }
+
+    /// The cells where the centre of another net's copper of half width `size` would be nearer than `c` to
+    /// the copper of net `n`, sorted. `against_via`: that copper is a via, which is on every layer: the cells
+    /// are then plain cells, not (layer, cell) states.
+    fn claimed(&mut self, n: usize, c: f64, size: f64, against_via: bool) -> Vec<u32> {
+        let (plan, net) = (self.plan, &self.p.nets[n]);
+        let (grid, space) = (&plan.grid, plan.space);
+        let (half, via_r) = (net.width / 2.0, net.via[0] / 2.0);
+        let track = self.claims.disc(grid, half + c + size);
+        let via = if against_via {
+            // two holes also keep the drill spacing, whatever the copper round them would allow
+            self.claims.disc(grid, (via_r + c + size).max(self.p.rules.hole_centre_mm))
+        } else {
+            self.claims.disc(grid, via_r + c + size)
+        };
+        let st = &self.laid.nets[n];
+        let near: Vec<(usize, Vec<usize>)> =
+            st.shapes.iter().map(|&(l, a, b, half)| (l, cells_near(grid, a, b, half + c + size))).collect();
+        self.claims.mark_gen += 1;
+        let (mark, gen) = (&mut self.claims.mark, self.claims.mark_gen);
+        let mut out: Vec<u32> = Vec::new();
+        let mut put = |layer: usize, cell: usize, disc: &[(i32, i32)]| {
+            for c in grid.around(cell, disc) {
+                let idx = space.state(layer, c);
+                if mark[idx] != gen {
+                    mark[idx] = gen;
+                    out.push(idx as u32);
+                }
+            }
+        };
+        // against a via every layer counts as the first
+        let on = |layer: usize| if against_via { 0 } else { layer };
+        for conn in &st.conns {
+            for &s in conn {
+                let (layer, cell) = space.split(s as usize);
+                put(on(layer), cell, &track);
+            }
+        }
+        for &v in &st.vias {
+            for layer in 0..if against_via { 1 } else { space.nl } {
+                put(layer, v as usize, &via);
+            }
+        }
+        for (layer, cells) in &near {
+            for &cell in cells {
+                put(on(*layer), cell, &[(0, 0)]);
+            }
+        }
+        out.sort_unstable();
+        out
     }
 
     pub(super) fn unclaim(&mut self, n: usize) {
