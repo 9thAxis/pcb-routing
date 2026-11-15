@@ -15,9 +15,9 @@ impl Engine<'_> {
             if let Ok(t) = self.index(&pair.trunk) {
                 part[t] = Some((k, None));
             }
-            for end in 0..2 {
-                for leg in 0..2 {
-                    if let Ok(n) = self.index(&pair.stubs[end][leg]) {
+            for stubs in &pair.stubs {
+                for (leg, key) in stubs.iter().enumerate() {
+                    if let Ok(n) = self.index(key) {
                         part[n] = Some((k, Some(leg)));
                     }
                 }
