@@ -119,6 +119,16 @@ fn order(nets: usize, v: usize) -> Vec<usize> {
     order
 }
 
+/// How good an ending is, lower being better: all laid and clear, then all laid but some too close, then some
+/// not laid.
+fn rank(status: Status) -> u8 {
+    match status {
+        Status::Routed => 0,
+        Status::Conflicts => 1,
+        Status::Unroutable => 2,
+    }
+}
+
 fn attempts(p: &Problem, variants: usize, only: Option<usize>, diagnostics: Diagnostics) -> Solution {
     use rayon::prelude::*;
     let shared = Shared::new(p, diagnostics);
@@ -129,7 +139,7 @@ fn attempts(p: &Problem, variants: usize, only: Option<usize>, diagnostics: Diag
         None => (0..variants).into_par_iter().map(run).collect(),
     };
     // complete before incomplete, then fewer conflicts, then the lower score; of equals the earlier attempt
-    let rank = |s: &Solution| (s.status as u8, s.unrouted.len() + s.conflicts.len(), s.score.unwrap_or(f64::INFINITY));
+    let rank = |s: &Solution| (rank(s.status), s.unrouted.len() + s.conflicts.len(), s.score.unwrap_or(f64::INFINITY));
     let mut best = 0;
     for k in 1..results.len() {
         let (a, b) = (rank(&results[k]), rank(&results[best]));
@@ -152,4 +162,26 @@ fn attempts(p: &Problem, variants: usize, only: Option<usize>, diagnostics: Diag
     chosen.attempts = brief;
     chosen.stats = shared.stats();
     chosen
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_better_ending_ranks_lower() {
+        assert!(rank(Status::Routed) < rank(Status::Conflicts));
+        assert!(rank(Status::Conflicts) < rank(Status::Unroutable));
+    }
+
+    #[test]
+    fn the_first_attempt_keeps_the_given_order_and_the_others_are_shuffled_the_same_way_each_time() {
+        assert_eq!(order(5, 0), vec![0, 1, 2, 3, 4]);
+        for v in 1..4 {
+            let mut shuffled = order(5, v);
+            assert_eq!(shuffled, order(5, v));
+            shuffled.sort();
+            assert_eq!(shuffled, vec![0, 1, 2, 3, 4]);
+        }
+    }
 }

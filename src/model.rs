@@ -421,7 +421,9 @@ pub struct Attempt {
     pub score: Option<f64>,
     /// Rounds of negotiation.
     pub rounds: usize,
-    /// Length of each net in mm, in the order of [`Solution::nets`] (empty if the attempt found a net unroutable).
+    /// Length of each net the attempt laid in mm, in the order of its own [`Solution::nets`]: an attempt that
+    /// could not join every terminal still lists what it laid. Empty only if it ended with nothing to show
+    /// (a pair whose trunk could not be split).
     pub lengths_mm: Vec<f64>,
     /// New vias, all nets together.
     pub vias: usize,

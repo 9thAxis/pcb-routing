@@ -26,8 +26,8 @@ pub(super) struct Search {
     pub(super) heap: BucketQueue,
 }
 
-/// What one search needs for itself. Nets of a round are laid side by side, each with a worker of its own;
-/// workers are handed out from a common stock and returned clean.
+/// What one search needs for itself. The nets of an attempt are laid one after the other, each taking a
+/// worker from the common stock and returning it clean; attempts running side by side each hold one at a time.
 pub(super) struct Worker {
     pub(super) search: Search,
     /// 1 where the net being laid (or another entry of the same electrical net) holds a claim itself: taken off
@@ -36,14 +36,11 @@ pub(super) struct Worker {
     pub(super) own_v: Vec<u8>,
     pub(super) via_flag: Vec<u8>,
     pub(super) flagged: Vec<u32>,
-    /// What one step into each (layer, cell) costs the net being laid, as a factor on its length: 1 in free
-    /// ground, more where others claim it or conflicts have been, TAKEN where another net stands and may not be
-    /// crossed (closing passes), SHUT_COST where fixed copper closes it. Drawn up once per net, so that the
-    /// search reads one table instead of four.
-    /// It is kept in `swept`, beside what the first pass of a search finds for the same (layer, cell).
-    /// The cost of a layer change at each cell, SHUT_COST where no via may be.
+    /// What a layer change at each cell costs the net being laid, SHUT_COST where no via may be. Drawn up
+    /// once per net.
     pub(super) vcost: Vec<f32>,
-    /// The first pass of a search (see `sweep`): per (layer, cell) the cost from there to the goal.
+    /// Per (layer, cell): what the first pass of a search finds (see `sweep`), and beside it what a step into
+    /// the state costs.
     pub(super) swept: Vec<Swept>,
     pub(super) sweep_gen: u32,
     pub(super) sweep_queue: BucketQueue,
@@ -51,8 +48,15 @@ pub(super) struct Worker {
 
 #[derive(Clone, Copy)]
 pub(super) struct Swept {
+    /// The cost from here to the goal, as far as the first pass of the present search has got.
     pub(super) d: f32,
+    /// The mark of the search that last touched the state, and whether its cost is final.
     pub(super) seen: u32,
+    /// What one step into this state costs the net being laid, as a factor on its length: 1 in free ground,
+    /// more where others claim it or conflicts have been, TAKEN where another net stands and may not be
+    /// crossed (with the others fixed), SHUT_COST where fixed copper closes it. Drawn up once per net (see
+    /// `price`), so that the search reads one table instead of four; kept here so that it comes with the same
+    /// memory fetch as the first pass's cost.
     pub(super) mult: f32,
 }
 
