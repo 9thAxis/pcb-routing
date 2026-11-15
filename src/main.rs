@@ -7,7 +7,7 @@ use std::time::Instant;
 const USAGE: &str =
     "usage: pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N] [--trace] [--verify] [--only ATTEMPT]
        pcb-routing masks PROBLEM.json --net KEY -o MASK.bin
-       pcb-routing pours [QUESTION.json] [-o ANSWER.json]
+       pcb-routing pours [QUESTION.json] [-o ANSWER.json] [--threads N]
 
 route   lay the nets of the problem; exit status 0 if every net is laid and none are too close, 1 otherwise
 masks   one byte per cell, row by row: bit i set = routing layer i closed to the net's tracks, 0x80 = closed to its vias
@@ -34,7 +34,11 @@ fn run() -> Result<ExitCode, String> {
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
     let flag = |flag: &str, env: &str| args.iter().any(|a| a == flag) || std::env::var(env).is_ok();
     if args.get(1).map(String::as_str) == Some("pours") {
-        return pours(args.get(2).filter(|a| *a != "-o"), value("-o"));
+        // (the question is the argument that is neither a flag nor the value of one)
+        let flagged = |k: usize| args[k].starts_with('-') || ["-o", "--threads"].contains(&args[k - 1].as_str());
+        let threads =
+            value("--threads").map(|n| n.parse().map_err(|_| "--threads takes a number".to_string())).transpose()?;
+        return pours((2..args.len()).find(|&k| !flagged(k)).map(|k| &args[k]), value("-o"), threads.unwrap_or(0));
     }
     if args.len() < 3 || !["route", "masks"].contains(&args[1].as_str()) {
         return Err(USAGE.into());
@@ -114,7 +118,7 @@ fn run() -> Result<ExitCode, String> {
 }
 
 /// Answer a question about zones: from a file or standard input, to a file or standard output.
-fn pours(question: Option<&String>, out: Option<String>) -> Result<ExitCode, String> {
+fn pours(question: Option<&String>, out: Option<String>, threads: usize) -> Result<ExitCode, String> {
     use std::io::Read;
     let (name, text) = match question {
         Some(path) => (path.as_str(), std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?),
@@ -125,7 +129,14 @@ fn pours(question: Option<&String>, out: Option<String>) -> Result<ExitCode, Str
         }
     };
     let ask: pcb_routing::pours::Ask = serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))?;
-    let answer = pcb_routing::pours::answer(&ask).map_err(|e| e.to_string())?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| format!("cannot start threads: {e}"))?;
+    let answer = pool.install(|| pcb_routing::pours::answer(&ask)).map_err(|e| match e {
+        pcb_routing::Error::Invalid { field, reason } => format!("{name}: {field}: {reason}"),
+        other => other.to_string(),
+    })?;
     let json = serde_json::to_string(&answer).map_err(|e| e.to_string())?;
     match out {
         Some(path) => std::fs::write(&path, json).map_err(|e| format!("cannot write {path}: {e}"))?,

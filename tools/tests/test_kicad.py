@@ -177,7 +177,7 @@ class BoardAdapter(unittest.TestCase):
         board = Board([pad("a1", "A"), pad("a2", "A")], nets=["A"])
         board.built = 0
         board.BuildConnectivity = lambda: setattr(board, "built", board.built + 1)
-        adapter = k.KicadBoard(board)
+        adapter = k.KicadBoard(board, frozenset(), support.ask, pours=False)
         self.assertEqual(adapter.unjoined(), ["A"])
         self.assertEqual(board.built, 0)  # as loaded, it is up to date
         adapter.write(dict(nets=[dict(key="A", net="A", vias=[], tracks=[dict(layer="F.Cu", points=[[0, 0], [1, 0]])])]), {"A": (0.2, [0.6, 0.3])})

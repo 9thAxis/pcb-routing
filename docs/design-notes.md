@@ -114,20 +114,32 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     the gap from the pad are one spoke; those of a piece of fill that joins nothing else count only if the
     pad has no others; a straight track from the pad onto the fill counts as one. A pad left with too few
     gets that track. The count agrees with KiCad's on all 238 boards tried (stripped and routed), but
-    for a track on another layer, which KiCad counts and which ties nothing to this layer's fill.
-  With the zones: 26,000 mm of track where ignoring them takes 33,000, 464 vias for 388 (a land on one
+    for a track on another layer, which KiCad counts and which ties nothing to this layer's fill. A pad
+    is given the fewer of the two counts: with such a track counted KiCad no longer counts the spokes of
+    a piece of fill that joins the pad alone, so the count without it can be the higher one (a through
+    pad with a track on the front and, on the back, two spokes to an island of the zone that the new
+    tracks had cut off: one board of the 119, found when this was moved into the crate).
+  With the zones: 26,000 mm of track where ignoring them takes 33,000, 462 vias for 388 (a land on one
   side is taken down to a zone on the other), 326 s for 213 s on the 119 boards. On the nets the designers
   routed as tracks, the tracks keep a little less distance from other copper on the large boards (a median
   gap of 3.9 clearances for 4.8), and turn sharply less often (7 per 100 connections for 12).
   Where it is done: all of the above was first written in the bridge, in Python, where the zones are
   read. None of it needs KiCad once the fills are polygons, a board from another program has the same
-  questions, and on the largest board choosing the points of the zones alone took 10 s of Python: it is
+  questions, and on the largest board choosing the points of the zones alone took 10 s of Python (all
+  that is done outside the router's own runs now takes under 4 s there, KiCad's fills included): it is
   now a module of the crate (`src/pours`), which the bridge asks through `pcb-routing pours`. The port
   gives the same groups, pieces, spoke counts and points on all 119 boards. One thing is made differently:
   the ground of a spoke was cut out with KiCad's polygon operations (the zone within a band round the pad,
   grown by the gap); it is now everything within that distance of where the half-gap line runs on the
-  zone, which needs no polygon clipping and covers the same ground to within a few per cent. Filling a
-  zone stays KiCad's: its fill is what the board is checked against.
+  zone, one polygon without a hollow per spoke, which needs no polygon clipping and covers the old
+  ground and about a tenth more. And places
+  as good as equally far from what they were found for now come in the order of where they are, not of
+  the last bit of a distance (on 5 of the 119 boards that changes which of them are offered). Filling a
+  zone stays KiCad's: its fill is what the board is checked against. Copper that only touches a piece
+  of zone, edge to edge, is joined to it, as it is for KiCad: taking that for apart parted pads from
+  their zones on 4 boards. Which loose copper hangs together (vias and tracks that reach no pad but
+  join two pieces of zone) and whether a point is still on a zone after a fill are the crate's as well:
+  the bridge asks KiCad only for what KiCad alone knows.
   Still open: a custom rule for the thermal gap or the number of spokes is not read; a pad no straight
   track fits by is only named; the time a cut zone costs when a run is done again.
 * Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,

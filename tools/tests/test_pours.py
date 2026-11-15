@@ -1,5 +1,5 @@
 """What `route` does for a board with pours, against a stand-in for the engine and scripted boards. No KiCad."""
-import unittest
+import sys, unittest
 
 import support
 from test_route import FakeBoard, WithEngine
@@ -37,7 +37,9 @@ class PouredBoard:
         for n, net in enumerate(self.more):  # (other nets of two pads each, off to the side)
             pads += [support.land(k, net, 2, 20 + 2 * n), support.land(k, net, 8, 20 + 2 * n)]
         halves = [[[0.0, 0.0], [10.0, 0.0], [10.0, 4.5], [0.0, 4.5]], [[0.0, 5.5], [10.0, 5.5], [10.0, 10.0], [0.0, 10.0]]]
-        pours = [k.Pour("GND", "F.Cu", [ring]) for ring in (halves if self.parted() else [SQUARE])]
+        eroded = self.erodes and len(self.laid("SIG")) == 1 and not self.taken
+        whole = [[0.0, 0.0], [9.0, 0.0], [9.0, 10.0], [0.0, 10.0]] if eroded else SQUARE  # (drawn back from its right edge)
+        pours = [k.Pour("GND", "F.Cu", [ring]) for ring in (halves if self.parted() else [whole])]
         on_pour = [[0], [1]] if self.parted() else [[0, 1]]
         beside = [] if not self.beside or any(key == "GND" for key in self.laid("GND")) else [[4]]
         if self.beside and not beside:
@@ -62,10 +64,6 @@ class PouredBoard:
         groups = self.read().groups
         self.reads -= 1
         return sorted(n for n, g in groups.items() if len(g) > 1 and (nets is None or n in nets))
-
-    def on_pour(self, net, layer, at):
-        assert (net, layer) == ("GND", "F.Cu") and 0 <= at[0] <= 10 and 0 <= at[1] <= 10, (net, layer, at)
-        return not (self.erodes and len(self.laid("SIG")) == 1 and not self.taken)
 
     def take_back(self, keys):
         self.taken.append(list(keys))
@@ -143,6 +141,34 @@ class Pours(WithEngine):
         self.assertEqual((outcome.status, outcome.left), ("unroutable", 1))
 
 
+class Unanswered(WithEngine):
+    """A question about the zones that the engine does not answer."""
+
+    def no_answer_from(self, number):
+        (self.dir / "fail_pours").write_text(str(number))
+
+    def test_a_question_without_an_answer_in_mid_run_keeps_what_was_laid(self):
+        board = PouredBoard(cuts=True)
+        self.no_answer_from(3)  # where the signal may be reached, what was laid for it; then where GND may be
+        outcome = super().route(board, settings=k.Settings(pours=True))
+        self.assertEqual(board.written, [["SIG"]])
+        self.assertIn("not to answer", outcome.failure)
+        self.assertEqual((outcome.tracks, outcome.wanted, outcome.left), (board.segments["SIG"], 2, 1))  # the zone is cut, and stays so
+
+    def test_without_an_answer_to_the_first_question_nothing_is_laid(self):
+        board = PouredBoard()
+        self.no_answer_from(1)
+        outcome = super().route(board, settings=k.Settings(pours=True))
+        self.assertEqual((board.written, outcome.laid), ([], False))
+        self.assertIn("not to answer", outcome.failure)
+
+    def test_an_answer_that_cannot_be_read_is_no_answer(self):
+        with self.assertRaises(k.EngineFailed):
+            k.ask_engine(dict(ask="ties", fills=[], tracks=[]), [sys.executable, "-c", "print('{')"])
+        with self.assertRaises(k.EngineFailed):
+            k.ask_engine(dict(ask="ties", fills=[], tracks=[]), str(self.dir / "no-such-engine"))
+
+
 class ManyNets(FakeBoard):
     """Nets enough for two batches, on a board without zones, with what a board with pours is asked."""
 
@@ -153,9 +179,6 @@ class ManyNets(FakeBoard):
         raise AssertionError("nothing is to be taken back")
 
     take_back = rewind
-
-    def on_pour(self, net, layer, at):
-        return True
 
 
 class Batches(WithEngine):
@@ -180,7 +203,7 @@ class StarvedBoard:
     def read(self, nets=None):
         picture = support.picture(k, [support.land(k, "GND", 5, 5, part="U1", half=self.half), support.land(k, "GND", 8, 8, part="U2")], {"GND": [[0, 1]]})
         tied = any(self.written)
-        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 2 if tied else 1, outline=[] if tied else self.LINE, fill=[] if tied else [self.ZONE]),
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 2 if tied else 1, outline=[] if tied else self.LINE, fill=[] if tied else [0]),
                             k.Thermal("GND", 1, "F.Cu", 2, 4)]
         picture.fills = [k.Pour("GND", "F.Cu", self.ZONE)]
         return picture

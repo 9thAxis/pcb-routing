@@ -1,4 +1,4 @@
-"""build_problem on hand-written pictures: the output is what the engine's model (src/model.rs) accepts, and
+"""The problem built from hand-written pictures: the output is what the engine's model (src/model.rs) accepts, and
 says what the rules say. No KiCad."""
 import io, json, math, unittest
 from contextlib import redirect_stderr
@@ -91,7 +91,7 @@ class Shape(unittest.TestCase):
 
     def build(self, picture, settings=None, **more):
         # the distances these tests expect are worked out with a slack of 0.02 mm
-        return self.check(k.build_problem(picture, k.Rules.of(picture, settings or k.Settings(slack=0.02)), support.ask, **more))
+        return self.check(k.problem_of(picture, k.Rules.of(picture, settings or k.Settings(slack=0.02)), support.ask, **more))
 
 
 class Structure(Shape):
@@ -358,10 +358,10 @@ class Buses(unittest.TestCase):
     def test_the_problem_names_the_bus_of_each_net_and_none_without_pull(self):
         pads = self.row("U1", ["a", "b", "c"], 0, pitch=2.0) + self.row("U2", ["a", "b", "c"], 20, pitch=2.0)
         picture = support.picture(k, pads)
-        problem = k.build_problem(picture, k.Rules.of(picture), support.ask)
+        problem = k.problem_of(picture, k.Rules.of(picture), support.ask)
         self.assertEqual(len({net["bus"] for net in problem["nets"]}), 1)
         self.assertEqual(sorted(net["bus_lane"] for net in problem["nets"]), [0, 1, 2])
-        problem = k.build_problem(picture, k.Rules.of(picture, k.Settings(bus_pull=0.0)), support.ask)
+        problem = k.problem_of(picture, k.Rules.of(picture, k.Settings(bus_pull=0.0)), support.ask)
         self.assertTrue(all("bus" not in net for net in problem["nets"]))
 
 
@@ -373,7 +373,7 @@ class Decoupling(unittest.TestCase):
                 support.land(k, "GND", 30 if far else 2, 2, part="C1"), support.land(k, "VCC", 20, 0, part="J1"),
                 support.land(k, "GND", 20, 2, part="J1"), support.land(k, "GND", 0, 2, part="U1")]
         picture = support.picture(k, pads)
-        return k.build_problem(picture, k.Rules.of(picture, k.Settings(**settings)), support.ask)
+        return k.problem_of(picture, k.Rules.of(picture, k.Settings(**settings)), support.ask)
 
     def test_the_capacitor_goes_to_the_pin_and_the_rest_is_joined_without_it(self):
         nets = {net["key"]: net for net in self.board()["nets"]}
@@ -410,12 +410,12 @@ class Decoupling(unittest.TestCase):
         others = [support.land(k, f"N{i:03}", 40 + i % 2, i, part=f"R{i}") for i in range(280)]
         pads = supply("+3V3", 0) + supply("VCC", 4) + [support.land(k, "GND", 30, 9, part="J1")] + others
         picture = support.picture(k, pads)
-        keys = [net["key"] for net in k.build_problem(picture, k.Rules.of(picture), support.ask, only={"+3V3", "VCC", "GND"} | {f"N{i:03}" for i in range(0, 280, 2)})["nets"]]
+        keys = [net["key"] for net in k.problem_of(picture, k.Rules.of(picture), support.ask, only={"+3V3", "VCC", "GND"} | {f"N{i:03}" for i in range(0, 280, 2)})["nets"]]
         self.assertIn("+3V3 | C0", keys)
         self.assertIn("VCC | C4", keys)  # the last net by name has its link all the same
         named = support.picture(k, supply("V", 0) + [support.land(k, "GND", 30, 9, part="J1"), support.land(k, "GND", 0, 9, part="U1"),
                                                       support.land(k, "V | C0", 50, 0, part="R1"), support.land(k, "V | C0", 52, 0, part="R2")])
-        keys = [net["key"] for net in k.build_problem(named, k.Rules.of(named), support.ask)["nets"]]
+        keys = [net["key"] for net in k.problem_of(named, k.Rules.of(named), support.ask)["nets"]]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertIn("V | C0'", keys)
 
@@ -432,9 +432,9 @@ class Pours(unittest.TestCase):
         picture = support.picture(k, pads, {"GND": [[0, 1], [2], [3]], "SIG": [[4], [5]]})
         pour = k.Pour("GND", "F.Cu", [self.SQUARE])
         picture.pours, picture.fills = {"GND": {0: [0]}}, [pour]
-        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 4, reach=[[[[1.0, 2.6], [3.0, 2.6], [3.0, 3.4], [1.0, 3.4]]]])]
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 4, ground=[[[[1.0, 2.6], [3.0, 2.6], [3.0, 3.4], [1.0, 3.4]]]])]
         picture.box = [-1.0, -1.0, 16.0, 14.0]
-        return k.build_problem(picture, k.Rules.of(picture, k.Settings(pours=pours, **settings)), support.ask)
+        return k.problem_of(picture, k.Rules.of(picture, k.Settings(pours=pours, **settings)), support.ask)
 
     def test_a_net_with_a_pour_is_one_entry_and_the_pour_one_piece_with_points_near_each_pad_off_it(self):
         nets = {net["key"]: net for net in self.board()["nets"]}
@@ -455,6 +455,27 @@ class Pours(unittest.TestCase):
         self.assertEqual([(d["factor"], d["net"], d["layers"]) for d in dear], [(2.0, "GND", ["F.Cu"]), (4.0, "GND", ["F.Cu"])])
         self.assertEqual(dear[0]["rings"], [self.SQUARE])
         self.assertNotIn("dear", self.board(pour_cost=1.0, spoke_cost=1.0))
+
+    def test_each_net_is_taken_to_its_own_pours_wherever_they_stand_among_the_fills(self):
+        pads = [support.land(k, "GND", 2, 2), support.land(k, "GND", 14, 5), support.land(k, "VCC", 22, 2), support.land(k, "VCC", 34, 5)]
+        picture = support.picture(k, pads)
+        far = [[20.0, 0.0], [30.0, 0.0], [30.0, 10.0], [20.0, 10.0]]
+        picture.fills = [k.Pour("VCC", "F.Cu", [far]), k.Pour("GND", "F.Cu", [self.SQUARE])]  # (not in the order of the nets)
+        picture.pours = {"GND": {0: [1]}, "VCC": {0: [0]}}
+        picture.box = [-1.0, -1.0, 36.0, 11.0]
+        nets = {net["key"]: net for net in k.problem_of(picture, k.Rules.of(picture), support.ask)["nets"]}
+        on_pour = lambda name: [t["xy"][0] for t in nets[name]["terminals"] if "piece" in t]
+        self.assertTrue(on_pour("GND") and all(0 < x < 10 for x in on_pour("GND")), on_pour("GND"))
+        self.assertTrue(on_pour("VCC") and all(20 < x < 30 for x in on_pour("VCC")), on_pour("VCC"))
+
+    def test_the_places_of_a_group_are_terminals_of_one_piece_and_a_lone_place_stands_alone(self):
+        # (the builder alone, with the places given: no engine)
+        pads = [support.land(k, "A", 2, 2), support.land(k, "A", 4, 2), support.land(k, "A", 8, 2)]
+        picture = support.picture(k, pads, {"A": [[0, 1], [2]]})
+        reached = {"A": [[([4, 2], ["F.Cu"]), ([3, 3], ["B.Cu"])], [([8, 2], ["F.Cu"])]]}
+        (net,) = k.build_problem(picture, k.Rules.of(picture), reached)["nets"]
+        self.assertEqual(net["terminals"], [dict(xy=[4, 2], layers=["F.Cu"], piece=0), dict(xy=[3, 3], layers=["B.Cu"], piece=0),
+                                            dict(xy=[8, 2], layers=["F.Cu"])])
 
     def test_without_pours_the_net_is_joined_pad_to_pad(self):
         problem = self.board(pours=False)

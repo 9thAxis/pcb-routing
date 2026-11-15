@@ -2,12 +2,14 @@
 few hand-made pictures, and the engine: a stand-in that routes (fake_engine.py) and passes questions about
 zones on to the program itself ($PCB_ROUTING, else the repository's release build: `cargo build --release`
 first)."""
-import sys, types
+import os, shutil, sys, types, unittest
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent.parent
 FAKE_ENGINE = Path(__file__).resolve().parent / "fake_engine.py"
 ENGINE = [sys.executable, str(FAKE_ENGINE)]
+if not shutil.which(os.environ.get("PCB_ROUTING") or str(TOOLS.parent / "target/release/pcb-routing")):
+    raise unittest.SkipTest("the engine is not built: cargo build --release, or name the program in $PCB_ROUTING")
 
 
 def ask(question):

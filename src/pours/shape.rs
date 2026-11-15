@@ -1,7 +1,7 @@
 //! Polygons as the work on zones needs them: boxes, sides, crossings, and a polygon kept so that a point is
 //! soon told to be on it or not.
 
-use crate::geom::dist;
+use crate::geom::{dist, dist_segment, nearest_on_segment, within};
 use crate::model::Pt;
 
 /// A box `[x0, y0, x1, y1]`.
@@ -10,6 +10,32 @@ pub(super) type Bounds = [f64; 4];
 /// A point rounded to a millionth of a millimetre.
 pub(super) fn rounded(p: Pt) -> Pt {
     [(p[0] * 1e6).round() / 1e6, (p[1] * 1e6).round() / 1e6]
+}
+
+/// A point in millionths of a millimetre: what two places are the same by.
+pub(super) fn micro(p: Pt) -> (i64, i64) {
+    ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64)
+}
+
+/// The head of the set that `i` is in, where `leader` names for each a member of its set nearer the head.
+pub(super) fn head_of(leader: &[usize], mut i: usize) -> usize {
+    while leader[i] != i {
+        i = leader[i];
+    }
+    i
+}
+
+/// True if two pieces of copper of one net hang together: tracks (a layer and the points of a line) where an
+/// end of one lies on the other on the same layer, and a via (no layer, one point) with what it stands on.
+pub(super) fn hang_together(a: (Option<&str>, &[Pt]), b: (Option<&str>, &[Pt])) -> bool {
+    let on = |p: Pt, line: &[Pt]| match line {
+        [only] => dist(p, *only) < 1e-6,
+        _ => line.windows(2).any(|pair| dist_segment(p, pair[0], pair[1]) < 1e-6),
+    };
+    let ends = |line: &[Pt]| [line.first().copied(), line.last().copied()];
+    let ends_on = |one: &[Pt], other: &[Pt]| ends(one).iter().flatten().any(|&p| on(p, other));
+    let same_layer = a.0.is_none() || b.0.is_none() || a.0 == b.0;
+    same_layer && (ends_on(a.1, b.1) || ends_on(b.1, a.1))
 }
 
 /// The box round some points; one that holds nothing if there are none.
@@ -53,14 +79,6 @@ pub(super) fn crossing(a: Pt, b: Pt, c: Pt, d: Pt) -> Option<(f64, f64)> {
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((t, u))
 }
 
-/// The point of a segment nearest to `p`.
-pub(super) fn nearest_on(p: Pt, a: Pt, b: Pt) -> Pt {
-    let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = vx * vx + vy * vy;
-    let t = if l2 > 0.0 { (((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    [a[0] + t * vx, a[1] + t * vy]
-}
-
 /// Places along a ring, `spacing` apart, or further apart for `most` of them at most.
 pub(super) fn along(ring: &[Pt], spacing: f64, most: usize) -> Vec<Pt> {
     let round: f64 = sides(ring).map(|(a, b)| dist(a, b)).sum();
@@ -70,7 +88,7 @@ pub(super) fn along(ring: &[Pt], spacing: f64, most: usize) -> Vec<Pt> {
     for (a, b) in sides(ring) {
         let length = dist(a, b);
         while left < length - 1e-12 {
-            places.push(between(a, b, left / length));
+            places.push([a[0] + (b[0] - a[0]) * left / length, a[1] + (b[1] - a[1]) * left / length]);
             left += spacing;
         }
         left -= length;
@@ -92,6 +110,28 @@ pub(super) fn stroke(a: Pt, b: Pt, r: f64) -> Vec<Pt> {
     };
     let quarter = std::f64::consts::FRAC_PI_2;
     end(b, along + quarter).chain(end(a, along - quarter)).collect()
+}
+
+/// The smallest polygon without a hollow that holds some points.
+pub(super) fn hull(mut points: Vec<Pt>) -> Vec<Pt> {
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let turn = |o: Pt, a: Pt, b: Pt| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut ring: Vec<Pt> = Vec::new();
+    for half in [points.clone(), points.into_iter().rev().collect()] {
+        let from = ring.len();
+        for p in half {
+            while ring.len() >= from + 2 && turn(ring[ring.len() - 2], ring[ring.len() - 1], p) <= 0.0 {
+                ring.pop();
+            }
+            ring.push(p);
+        }
+        ring.pop(); // (the last of each half is the first of the other)
+    }
+    ring
 }
 
 /// A polygon (its outline, then its holes; even-odd) with its sides sorted by the rows they pass, so that
@@ -157,21 +197,39 @@ impl<'a> Piece<'a> {
         })
     }
 
-    /// The point of its edge nearest to `p`, and how far that is. None for a polygon without sides.
+    /// The point of its edge nearest to `p`, and how far that is; of several as near, that of its first side.
+    /// None for a polygon without sides.
     pub fn nearest_edge(&self, p: Pt) -> Option<(f64, Pt)> {
-        let mut best: Option<(f64, Pt)> = None;
-        for &(a, b) in &self.all {
-            let q = nearest_on(p, a, b);
-            let d = dist(p, q);
-            if best.map_or(true, |(least, _)| d < least) {
-                best = Some((d, q));
+        // The rows are looked at from the one `p` is level with outwards, until those left lie further
+        // off than the nearest side found.
+        let level = self.row(p[1]);
+        let off = |row: usize| {
+            let top = self.bounds[1] + row as f64 * self.row_height;
+            (top - p[1]).max(p[1] - top - self.row_height).max(0.0)
+        };
+        let mut best: Option<(f64, u32, Pt)> = None;
+        for step in 0..self.rows.len() {
+            let above = level.checked_sub(step);
+            let below = Some(level + step).filter(|&row| step > 0 && row < self.rows.len());
+            let worth = |row: &usize| best.map_or(true, |(least, ..)| off(*row) <= least + 1e-9);
+            let rows: Vec<usize> = [above, below].into_iter().flatten().filter(worth).collect();
+            if rows.is_empty() && (best.is_some() || (above.is_none() && below.is_none())) {
+                break;
+            }
+            for &k in rows.iter().flat_map(|&row| &self.rows[row]) {
+                let (a, b) = self.all[k as usize];
+                let q = nearest_on_segment(p, a, b);
+                let d = dist(p, q);
+                if best.map_or(true, |(least, first, _)| d < least || (d == least && k < first)) {
+                    best = Some((d, k, q));
+                }
             }
         }
-        best
+        best.map(|(d, _, q)| (d, q))
     }
 
-    /// True if another polygon and this one have ground in common: sides that cross, or one with a corner on
-    /// the other.
+    /// True if another polygon and this one touch: sides that meet, or one with a corner on the other. Two
+    /// that lie edge to edge or corner to corner do: copper that touches is joined, as it is for KiCad.
     pub fn touches(&self, other: &[Vec<Pt>]) -> bool {
         let theirs = bounds(other.iter().flatten());
         if !meet(self.bounds, theirs) {
@@ -180,20 +238,17 @@ impl<'a> Piece<'a> {
         if other.iter().flatten().any(|&p| self.contains(p)) {
             return true;
         }
-        if self.sides_by(theirs).any(|(a, _)| crate::geom::within(other, a)) {
+        if self.sides_by(theirs).any(|(a, _)| within(other, a)) {
             return true;
         }
-        other
-            .iter()
-            .flat_map(|ring| sides(ring))
-            .any(|(c, d)| self.sides_by(bounds([&c, &d])).any(|(a, b)| crossing(a, b, c, d).is_some()))
+        let their_sides = || other.iter().flat_map(|ring| sides(ring));
+        their_sides().any(|(c, d)| self.sides_by(bounds([&c, &d])).any(|(a, b)| crossing(a, b, c, d).is_some()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::within;
 
     fn square(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Pt> {
         vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
@@ -234,6 +289,38 @@ mod tests {
     }
 
     #[test]
+    fn the_nearest_edge_is_the_one_a_look_at_every_side_finds() {
+        // a comb: many sides, in many rows
+        let mut ring: Vec<Pt> = vec![[0.0, 0.0], [40.0, 0.0]];
+        for k in (0..40).rev() {
+            let x = k as f64;
+            ring.extend([[x + 0.7, 3.0], [x + 0.7, 30.0 - x * 0.5], [x + 0.3, 30.0 - x * 0.5], [x + 0.3, 3.0]]);
+        }
+        let rings = vec![ring, square(10.0, 1.0, 12.0, 2.0)];
+        let piece = Piece::new(&rings);
+        for j in -6..40 {
+            for i in -6..50 {
+                let p = [i as f64 * 0.93 + 0.011, j as f64 * 0.97 + 0.013];
+                let mut all: Option<(f64, Pt)> = None;
+                for (a, b) in rings.iter().flat_map(|ring| sides(ring)) {
+                    let q = nearest_on_segment(p, a, b);
+                    if all.map_or(true, |(least, _)| dist(p, q) < least) {
+                        all = Some((dist(p, q), q));
+                    }
+                }
+                assert_eq!(piece.nearest_edge(p), all, "{p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hull_holds_its_points_and_has_no_hollow() {
+        let ring = hull(vec![[0., 0.], [4., 0.], [4., 4.], [0., 4.], [2., 2.], [1., 3.], [4., 0.], [2., 0.]]);
+        assert_eq!(ring, [[0., 0.], [4., 0.], [4., 4.], [0., 4.]]);
+        assert_eq!(hull(vec![[1., 1.], [1., 1.]]), [[1., 1.]]);
+    }
+
+    #[test]
     fn the_sides_by_a_box_are_those_that_touch_it_each_once() {
         let rings = vec![square(0.0, 0.0, 10.0, 10.0), square(4.0, 4.0, 6.0, 6.0)];
         let piece = Piece::new(&rings);
@@ -257,6 +344,28 @@ mod tests {
     }
 
     #[test]
+    fn polygons_that_lie_against_each_other_touch() {
+        // (a spoke that ends on the edge of its pad joins it)
+        let rings = vec![square(0.0, 0.0, 10.0, 10.0)];
+        let piece = Piece::new(&rings);
+        assert!(piece.touches(&[square(10.0, 4.5, 11.0, 5.5)])); // edge to edge
+        assert!(piece.touches(&[square(-1.0, 4.5, 0.0, 5.5)]));
+        assert!(piece.touches(&[square(10.0, 10.0, 11.0, 11.0)])); // corner to corner
+        assert!(piece.touches(&[vec![[10.0, 5.0], [11.0, 4.0], [12.0, 5.0], [11.0, 6.0]]])); // a corner on its edge
+        assert!(!piece.touches(&[square(10.001, 4.5, 11.0, 5.5)])); // a thousandth off
+    }
+
+    #[test]
+    fn a_polygon_without_height_or_without_points_is_no_ground() {
+        let flat = vec![vec![[0.0, 1.0], [5.0, 1.0], [9.0, 1.0]]];
+        assert!(!Piece::new(&flat).contains([2.0, 1.0]));
+        let none: Vec<Vec<Pt>> = vec![vec![]];
+        let piece = Piece::new(&none);
+        assert!(!piece.contains([0.0, 0.0]) && piece.nearest_edge([0.0, 0.0]).is_none());
+        assert!(!piece.touches(&[square(0.0, 0.0, 1.0, 1.0)]));
+    }
+
+    #[test]
     fn a_stroke_holds_what_is_near_the_segment() {
         let ring = stroke([0.0, 0.0], [4.0, 0.0], 1.0);
         assert!(within(std::slice::from_ref(&ring), [2.0, 0.9]));
@@ -264,6 +373,18 @@ mod tests {
         assert!(within(std::slice::from_ref(&ring), [-0.9, 0.0]));
         assert!(!within(std::slice::from_ref(&ring), [2.0, 1.1]));
         assert!(!within(std::slice::from_ref(&ring), [5.1, 0.0]));
+    }
+
+    #[test]
+    fn copper_hangs_together_where_an_end_lies_on_the_other_on_its_layer() {
+        let (a, b): (&[Pt], &[Pt]) = (&[[0., 0.], [5., 0.]], &[[2., 0.], [2., 3.]]);
+        assert!(hang_together((Some("F"), a), (Some("F"), b))); // a branch from the middle
+        assert!(!hang_together((Some("F"), a), (Some("B"), b)));
+        assert!(!hang_together((Some("F"), a), (Some("F"), &[[2., 1.], [2., 3.]])));
+        assert!(hang_together((None, &[[2., 0.]]), (Some("B"), a))); // a via on a track of any layer
+        assert!(hang_together((None, &[[2., 0.]]), (None, &[[2., 0.]])));
+        assert!(!hang_together((None, &[[2., 0.5]]), (Some("F"), a)));
+        assert!(!hang_together((Some("F"), &[]), (Some("F"), a)));
     }
 
     #[test]

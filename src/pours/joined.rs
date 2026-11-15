@@ -1,6 +1,6 @@
 //! What each piece of a filled zone touches, and the groups of pads that the zones join.
 
-use super::shape::Piece;
+use super::shape::{hang_together, head_of, Piece};
 use super::{Layout, Wire};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -55,6 +55,24 @@ pub(super) fn touches(layout: &Layout, pieces: &[Piece]) -> Vec<Touch> {
     layout.fills.par_iter().zip(pieces).map(touch).collect()
 }
 
+/// The wires of a net that are joined to no pad, each with the number of the copper it is of (wires that
+/// hang together are of one), and how many such there are. They are numbered in the order of their first wire.
+fn loose_copper(layout: &Layout, net: &str) -> (HashMap<usize, usize>, usize) {
+    let loose = |w: &usize| layout.wires[*w].net == net && layout.wires[*w].group.is_none();
+    let wires: Vec<usize> = (0..layout.wires.len()).filter(loose).collect();
+    let copper = |w: usize| (layout.wires[w].layer.as_deref(), &layout.wires[w].ends[..]);
+    let mut leader: Vec<usize> = (0..wires.len()).collect();
+    for i in 0..wires.len() {
+        for j in (0..i).filter(|&j| hang_together(copper(wires[i]), copper(wires[j]))) {
+            let (a, b) = (head_of(&leader, i), head_of(&leader, j));
+            leader[a.max(b)] = a.min(b); // (the head of each is its first wire)
+        }
+    }
+    let heads: Vec<usize> = (0..wires.len()).filter(|&i| leader[i] == i).collect();
+    let number = |i: usize| heads.binary_search(&head_of(&leader, i)).unwrap_or_default();
+    ((0..wires.len()).map(|i| (wires[i], number(i))).collect(), heads.len())
+}
+
 /// The groups of pads of each net as the zones join them, and the pieces of zone that join each group.
 pub(super) type Joined = (BTreeMap<String, Vec<Vec<usize>>>, BTreeMap<String, Vec<Vec<usize>>>);
 
@@ -74,35 +92,30 @@ pub(super) fn joined(layout: &Layout, touch: &[Touch]) -> Joined {
         // what a piece can join: the groups of pads, then the copper that reaches no pad
         let group_of: HashMap<usize, usize> =
             own.iter().enumerate().flat_map(|(g, group)| group.iter().map(move |&pad| (pad, g))).collect();
-        let hangs_on = |w: usize| layout.wires[w].node;
-        let count = fills.iter().flat_map(|&f| touch[f].wires.iter().filter_map(|&w| hangs_on(w))).max();
-        let mut leader: Vec<usize> = (0..own.len().max(count.map_or(0, |most| most + 1))).collect();
-        fn find(leader: &[usize], mut g: usize) -> usize {
-            while leader[g] != g {
-                g = leader[g];
-            }
-            g
-        }
+        let (loose, clusters) = loose_copper(layout, net);
+        let hangs_on = |w: usize| layout.wires[w].group.or_else(|| loose.get(&w).map(|cluster| own.len() + cluster));
+        let mut leader: Vec<usize> = (0..own.len() + clusters).collect();
         let mut joining: Vec<(usize, usize)> = Vec::new(); // (something it joins, the piece)
         for &f in &fills {
             let by_pads = touch[f].pads.iter().filter_map(|pad| group_of.get(pad).copied());
             let touched: BTreeSet<usize> = by_pads.chain(touch[f].wires.iter().filter_map(|&w| hangs_on(w))).collect();
             let Some(&least) = touched.first() else { continue };
-            let first = find(&leader, least);
+            let first = head_of(&leader, least);
             for &g in &touched {
-                let head = find(&leader, g);
+                let head = head_of(&leader, g);
                 leader[head] = first;
             }
             joining.push((first, f));
         }
-        let heads: Vec<usize> = (0..own.len()).map(|g| find(&leader, g)).collect::<BTreeSet<_>>().into_iter().collect();
+        let heads: Vec<usize> =
+            (0..own.len()).map(|g| head_of(&leader, g)).collect::<BTreeSet<_>>().into_iter().collect();
         let pads_under = |head: usize| -> Vec<usize> {
-            (0..own.len()).filter(|&g| find(&leader, g) == head).flat_map(|g| own[g].iter().copied()).collect()
+            (0..own.len()).filter(|&g| head_of(&leader, g) == head).flat_map(|g| own[g].iter().copied()).collect()
         };
         groups.insert(net.clone(), heads.iter().map(|&head| pads_under(head)).collect());
         let mut of_group: Vec<Vec<usize>> = vec![Vec::new(); heads.len()];
         for (g, f) in joining {
-            if let Ok(group) = heads.binary_search(&find(&leader, g)) {
+            if let Ok(group) = heads.binary_search(&head_of(&leader, g)) {
                 of_group[group].push(f);
             }
         }
@@ -174,13 +187,18 @@ mod tests {
             fill("GND", "B.Cu", vec![[0.0, 5.0], [20.0, 5.0], [20.0, 9.0], [0.0, 9.0]]), // below, touching no pad
             fill("GND", "F.Cu", vec![[12.0, 0.0], [16.0, 0.0], [16.0, 9.0], [12.0, 9.0]]), // round the last
         ];
-        // copper that reaches no pad: a via on the first and the second piece, and one on the second and third
-        let via =
-            |x: f64, y: f64, node: usize| Wire { net: "GND".into(), layer: None, ends: vec![[x, y]], node: Some(node) };
-        layout.wires = vec![via(1.0, 3.5, 4), via(1.0, 6.0, 4), via(14.0, 7.0, 5)];
-        // (the first via is of a track that runs down to the second: one piece of loose copper)
+        // copper that reaches no pad: a via on the first piece with a track on the back to a via on the
+        // second (one piece of loose copper), and a via on the second and third
+        let via = |x: f64, y: f64| Wire { net: "GND".into(), layer: None, ends: vec![[x, y]], group: None };
+        let ends = vec![[1.0, 3.5], [1.0, 6.0]];
+        layout.wires = vec![
+            via(1.0, 3.5),
+            via(1.0, 6.0),
+            via(14.0, 7.0),
+            Wire { layer: Some("B.Cu".into()), ends, ..via(0.0, 0.0) },
+        ];
         let (touch, (groups, pours)) = survey(&layout);
-        assert_eq!(touch[1].wires, [1, 2]);
+        assert_eq!(touch[1].wires, [1, 2, 3]);
         assert_eq!(groups["GND"], [vec![1], vec![2], vec![0, 3]]);
         assert_eq!(pours["GND"], [vec![], vec![], vec![0, 1, 2]]);
     }
@@ -193,7 +211,7 @@ mod tests {
             net: "GND".into(),
             layer: Some(layer.into()),
             ends: vec![[2.0, 2.0], [2.0, 6.0]],
-            node: Some(0),
+            group: Some(0),
         };
         layout.wires = vec![track("F.Cu")];
         let (touch, (_, pours)) = survey(&layout);
@@ -204,6 +222,22 @@ mod tests {
         assert_eq!(touch[0].wires, [0]);
         assert_eq!(groups["GND"].len(), 4); // it joins the first pad's group to nothing else
         assert_eq!(pours["GND"], [vec![0], vec![], vec![], vec![]]);
+    }
+
+    #[test]
+    fn loose_copper_that_does_not_hang_together_joins_nothing() {
+        // as above, but the vias on the first and the second piece have no track between them
+        let mut layout = row();
+        layout.fills = vec![
+            fill("GND", "F.Cu", vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]),
+            fill("GND", "B.Cu", vec![[0.0, 5.0], [20.0, 5.0], [20.0, 9.0], [0.0, 9.0]]),
+            fill("GND", "F.Cu", vec![[12.0, 0.0], [16.0, 0.0], [16.0, 9.0], [12.0, 9.0]]),
+        ];
+        let via = |x: f64, y: f64| Wire { net: "GND".into(), layer: None, ends: vec![[x, y]], group: None };
+        layout.wires = vec![via(1.0, 3.5), via(1.0, 6.0), via(14.0, 7.0)];
+        let (_, (groups, pours)) = survey(&layout);
+        assert_eq!(groups["GND"], [vec![0], vec![1], vec![2], vec![3]]);
+        assert_eq!(pours["GND"], [vec![0], vec![], vec![], vec![1, 2]]); // the second piece hangs on the last pad's
     }
 
     #[test]

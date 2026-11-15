@@ -39,7 +39,8 @@ fn a_net_is_taken_to_its_zone_and_what_was_laid_hangs_on_it() {
 
     let layers = vec!["F".to_string()];
     let places =
-        pours::reach(&layout.pads, &layout.fills, &survey.groups["GND"], &survey.pours["GND"], &layers, 0.2, Some(0.1));
+        pours::reach(&layout.pads, &layout.fills, &survey.groups["GND"], &survey.pours["GND"], &layers, 0.2, Some(0.1))
+            .unwrap();
     assert!(places[0].len() > 2, "the pads of the group and points of the zone: {:?}", places[0]);
     assert_eq!(places[1].len(), 1);
 
@@ -108,17 +109,26 @@ fn parts_and_ties_as_json() {
     assert_eq!(found[0]["key"], "GND");
     assert_eq!(found[0]["ends"], json!([{"net": "GND", "layer": "F", "xy": [9.8, 5.0]}]));
 
+    // the zone has drawn back from where the track ended: the end is on it no longer
+    let fills = |x1: f64| json!([{"net": "GND", "layer": "F", "rings": [square(0.0, 0.0, x1, 10.0)]}]);
+    let on_zone = |x1: f64| asked(json!({"ask": "on_zone", "fills": fills(x1), "points": found[0]["ends"]}));
+    assert_eq!((on_zone(10.0), on_zone(9.5)), (json!([true]), json!([false])));
+    let other = json!([{"net": "VCC", "layer": "F", "xy": [9.8, 5.0]}, {"net": "GND", "layer": "B", "xy": [9.8, 5.0]}]);
+    assert_eq!(asked(json!({"ask": "on_zone", "fills": fills(10.0), "points": other})), json!([false, false]));
+
     // a pad at (5, 5) with the zone 1 mm off all round: the line half way, and a track out to the zone
-    let pad = json!({"outline": square(4.5, 4.5, 5.5, 5.5), "fill": [[square(0.0, 0.0, 10.0, 10.0), square(4.0, 4.0, 6.0, 6.0)]]});
+    let fills =
+        json!([{"net": "GND", "layer": "F", "rings": [square(0.0, 0.0, 10.0, 10.0), square(4.0, 4.0, 6.0, 6.0)]}]);
+    let pad = json!({"outline": square(4.5, 4.5, 5.5, 5.5), "fill": [0]});
     let mut target = pad.clone();
     target["at"] = json!([5.0, 5.0]);
     target["inset"] = json!(0.2);
-    let found = asked(json!({"ask": "tie_targets", "pads": [target]}));
+    let found = asked(json!({"ask": "tie_targets", "fills": fills, "pads": [target]}));
     assert_eq!(found[0].as_array().unwrap().len(), 8);
     let (mut tying, mut short) = (pad.clone(), pad);
     tying["points"] = json!([[5.0, 5.0], found[0][0]]);
     short["points"] = json!([[5.0, 5.0], [5.8, 5.0]]);
-    assert_eq!(asked(json!({"ask": "ties", "tracks": [tying, short]})), json!([true, false]));
+    assert_eq!(asked(json!({"ask": "ties", "fills": fills, "tracks": [tying, short]})), json!([true, false]));
 }
 
 #[test]
@@ -133,7 +143,25 @@ fn a_question_that_names_what_is_not_there_is_refused() {
     assert!(refused(survey).contains("groups[GND][2]"));
     let reach = json!({"ask": "reach", "layers": ["F"], "pads": [], "nets": [{"groups": [[0]], "inset": 0.2}]});
     assert!(refused(reach).contains("nets[0].groups"));
+    let nothing = json!({"ask": "reach", "layers": ["F"], "pads": [{"at": [1.0, 1.0], "layers": ["F"]}], "step": 0.0,
+                         "nets": [{"groups": [[0]], "inset": 0.2}]});
+    assert!(refused(nothing).contains("nets[0].step"));
+    // copper said to hang on a group that is none
+    let mut loose = board();
+    loose["ask"] = json!("survey");
+    loose["wires"] = json!([{"net": "GND", "ends": [[1.0, 1.0]], "group": 1_000_000_000_000u64}]);
+    assert!(refused(loose).contains("wires[0].group"));
+    let tie = |fill: Value, inset: f64| json!({"ask": "tie_targets", "fills": [], "pads": [{"outline": [], "fill": fill, "at": [0.0, 0.0], "inset": inset}]});
+    assert!(refused(tie(json!([2]), 0.2)).contains("pads[0].fill"));
+    assert!(refused(tie(json!([]), -1e18)).contains("pads[0].inset"));
+    // a kind of question that is none, and a field that is none
     assert!(serde_json::from_value::<Ask>(json!({"ask": "nothing"})).is_err());
+    let misspelt = json!({"ask": "reach", "layers": ["F"], "pads": [], "nets": [], "stpe": 0.05});
+    assert!(serde_json::from_value::<Ask>(misspelt).is_err());
+    let mut misspelt = board();
+    misspelt["ask"] = json!("survey");
+    misspelt["filss"] = json!([]);
+    assert!(serde_json::from_value::<Ask>(misspelt).is_err());
 }
 
 #[test]
@@ -142,7 +170,7 @@ fn the_answers_are_plain_lists_and_maps() {
     let pads =
         vec![Pad { net: Some("A".into()), at: [1.0, 1.0], layers: vec!["F".into()], shapes: Default::default() }];
     let fills: Vec<Fill> = Vec::new();
-    let places = pours::reach(&pads, &fills, &[vec![0]], &[], &["F".to_string()], 0.2, None);
+    let places = pours::reach(&pads, &fills, &[vec![0]], &[], &["F".to_string()], 0.2, None).unwrap();
     assert_eq!(
         serde_json::to_value(Answer::Reach(vec![places])).unwrap(),
         json!([[[{"xy": [1.0, 1.0], "layers": ["F"]}]]])
@@ -173,5 +201,27 @@ fn the_program_answers_from_standard_input_and_says_why_it_cannot() {
         r#"{"ask": "survey", "pads": [], "spoked": [{"pad": 3, "layer": "F", "line": [], "gap": 0.5, "least": 2}]}"#,
     );
     assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("spoked[0].pad"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("the question: spoked[0].pad"));
+    assert_eq!(run("{not json").status.code(), Some(2));
+
+    // from a file to a file, whichever is named first, and on one thread
+    let dir = std::env::temp_dir().join(format!("pcb-routing-pours-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (asked, answered) = (dir.join("question.json"), dir.join("answer.json"));
+    std::fs::write(&asked, question.to_string()).unwrap();
+    let out_first: [&std::ffi::OsStr; 3] = ["-o".as_ref(), answered.as_os_str(), asked.as_os_str()];
+    let out_last: [&std::ffi::OsStr; 3] = [asked.as_os_str(), "-o".as_ref(), answered.as_os_str()];
+    for order in [out_first, out_last] {
+        let _ = std::fs::remove_file(&answered);
+        let done = Command::new(env!("CARGO_BIN_EXE_pcb-routing"))
+            .arg("pours")
+            .args(order)
+            .args(["--threads", "1"])
+            .output()
+            .unwrap();
+        assert!(done.status.success() && done.stdout.is_empty(), "{}", String::from_utf8_lossy(&done.stderr));
+        let found: Value = serde_json::from_str(&std::fs::read_to_string(&answered).unwrap()).unwrap();
+        assert_eq!(found["pours"]["GND"], json!([[0], []]));
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }

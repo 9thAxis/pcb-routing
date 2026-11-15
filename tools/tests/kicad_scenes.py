@@ -86,7 +86,7 @@ class Scene:
     def read(self):
         pcbnew.ZONE_FILLER(self.board).Fill(self.board.Zones())
         self.board.BuildConnectivity()
-        return k.read_board(self.board, ask=ASK)
+        return k.read_board(self.board, frozenset(), ASK)
 
 
 def spokes(scene, tie=True):
@@ -102,12 +102,12 @@ def spokes(scene, tie=True):
     picture = scene.read()
     cut = count(picture)
     starved = [t for t in picture.thermals if t.spokes < t.least]
-    targets = k.tie_targets([(starved[0], picture.pads[starved[0].pad].at, 0.25, [])], ASK)[0] if starved else []
+    targets = k.tie_targets(picture, [(starved[0], picture.pads[starved[0].pad].at, 0.25, [])], ASK)[0] if starved else []
     if targets and tie:
         scene.track("GND", pcbnew.F_Cu, (2.2, 2.2), tuple(targets[0]))
     return dict(whole=whole, cut=cut, targets=targets, tied=count(scene.read()),
                 starved=[picture.pads[t.pad].part for t in starved], least=[t.least for t in picture.thermals],
-                dear=sorted({t.layer for t in picture.thermals if t.reach}))
+                dear=sorted({t.layer for t in picture.thermals if t.ground}))
 
 
 def groups(scene):
@@ -122,7 +122,7 @@ def groups(scene):
     cut = scene.read()
     return dict(whole=names(whole), cut=names(cut), fills=[len(whole.fills), len(cut.fills)],
                 pours=[sorted(len(own) for own in picture.pours["GND"].values()) for picture in (whole, cut)],
-                unjoined=cut.unjoined(), without=names(k.read_board(scene.board)))
+                unjoined=cut.unjoined(), without=names(k.read_board(scene.board, frozenset(), ASK, pours=False)))
 
 
 def to_route(scene):

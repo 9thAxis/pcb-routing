@@ -8,15 +8,21 @@ pub(crate) fn dist(a: Pt, b: Pt) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-/// Square of the distance from a point to the segment a-b (to the point `a` if the segment has no length).
+/// The point of the segment a-b nearest to a point (`a` if the segment has no length).
 #[inline]
-pub(crate) fn dist2_segment(p: Pt, a: Pt, b: Pt) -> f64 {
+pub(crate) fn nearest_on_segment(p: Pt, a: Pt, b: Pt) -> Pt {
     let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
     let (wx, wy) = (p[0] - a[0], p[1] - a[1]);
     let l2 = vx * vx + vy * vy;
     let t = if l2 > 0.0 { ((wx * vx + wy * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    let (dx, dy) = (wx - t * vx, wy - t * vy);
-    dx * dx + dy * dy
+    [a[0] + t * vx, a[1] + t * vy]
+}
+
+/// Square of the distance from a point to the segment a-b (to the point `a` if the segment has no length).
+#[inline]
+pub(crate) fn dist2_segment(p: Pt, a: Pt, b: Pt) -> f64 {
+    let q = nearest_on_segment(p, a, b);
+    (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)
 }
 
 /// Distance from a point to the segment a-b.

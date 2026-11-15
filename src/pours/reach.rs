@@ -1,7 +1,8 @@
 //! Where a group of joined pads may be reached: at its pads, and on the zone that joins it.
 
-use super::shape::{along, apart, bounds, rounded, Bounds, Piece};
+use super::shape::{along, apart, bounds, micro, rounded, Bounds, Piece};
 use super::{Fill, Pad, Place};
+use crate::error::{invalid, Error};
 use crate::geom::dist;
 use crate::model::Pt;
 use std::collections::HashMap;
@@ -45,8 +46,9 @@ struct Pour<'a> {
 struct Found<'a> {
     at: Pt,
     layers: Vec<&'a str>,
-    /// How far it is from what it was found for.
-    far: f64,
+    /// How far it is from what it was found for, in millionths of a micrometre: places as good as equally
+    /// far are told apart by where they are, not by the last bit of a distance.
+    far: i64,
     /// Whether it is a point of a pour (not a pad).
     poured: bool,
 }
@@ -64,8 +66,9 @@ impl<'a> Offers<'a> {
         if layers.is_empty() {
             return;
         }
-        let at = rounded(at);
-        let key = ((at[0] * 1e6).round() as i64, (at[1] * 1e6).round() as i64, layers.clone());
+        let (at, far) = (rounded(at), (far * 1e9).round() as i64);
+        let (x, y) = micro(at);
+        let key = (x, y, layers.clone());
         let found = Found { at, layers, far, poured };
         match self.known.get(&key) {
             Some(&k) if far < self.found[k].far => self.found[k] = found,
@@ -94,7 +97,7 @@ impl<'a> Offers<'a> {
     fn chosen(mut self) -> Vec<Place> {
         let order = |a: &Found, b: &Found| {
             let by_place = a.at[0].total_cmp(&b.at[0]).then(a.at[1].total_cmp(&b.at[1]));
-            a.far.total_cmp(&b.far).then(by_place).then_with(|| a.layers.cmp(&b.layers))
+            a.far.cmp(&b.far).then(by_place).then_with(|| a.layers.cmp(&b.layers))
         };
         self.found.sort_by(order);
         let mut chosen: Vec<Found> = Vec::new();
@@ -123,9 +126,43 @@ impl<'a> Offers<'a> {
 /// two on one pour are 1 mm apart at least. The nearest come first, and there are 64 at most.
 ///
 /// `groups`: the net's groups as indices into `pads`; `pours`: for each group, in the same order, the pours
-/// that join it as indices into `fills` (groups it does not reach have none); `layers`: the routing layers. A group none of whose pads is on a routing layer
-/// has no place.
+/// that join it as indices into `fills` (groups it does not reach have none); `layers`: the routing layers.
+/// A group none of whose pads is on a routing layer has no place.
+///
+/// The choice among a group's own pads is not about zones: it is made the same way for a net without any.
+///
+/// An error if a group is empty, an index names no pad or fill, or `inset` or `step` is not more than 0.
 pub fn reach(
+    pads: &[Pad],
+    fills: &[Fill],
+    groups: &[Vec<usize>],
+    pours: &[Vec<usize>],
+    layers: &[String],
+    inset: f64,
+    step: Option<f64>,
+) -> Result<Vec<Vec<Place>>, Error> {
+    let known = |field: &str, i: usize, of: usize| match i < of {
+        true => Ok(()),
+        false => Err(invalid(field, format!("{i} of {of}"))),
+    };
+    for (g, group) in groups.iter().enumerate() {
+        if group.is_empty() {
+            return Err(invalid(format!("groups[{g}]"), "a group has a pad at least"));
+        }
+        group.iter().try_for_each(|&i| known(&format!("groups[{g}]"), i, pads.len()))?;
+    }
+    pours.iter().flatten().try_for_each(|&f| known("pours", f, fills.len()))?;
+    if !(inset > 0.0 && inset.is_finite()) {
+        return Err(invalid("inset", format!("is {inset}: more than 0")));
+    }
+    if step.is_some_and(|step| !(step > 0.0 && step.is_finite())) {
+        return Err(invalid("step", "more than 0, if given"));
+    }
+    Ok(places(pads, fills, groups, pours, layers, inset, step))
+}
+
+/// See [`reach`], which has checked what it was given.
+fn places(
     pads: &[Pad],
     fills: &[Fill],
     groups: &[Vec<usize>],
@@ -265,7 +302,7 @@ mod tests {
     #[test]
     fn a_group_of_one_pad_is_one_place() {
         let pads = [land(2.0, 2.0, "F.Cu"), land(8.0, 2.0, "F.Cu")];
-        let found = reach(&pads, &[], &[vec![0], vec![1]], &[], &layers(&LAYERS), 0.2, None);
+        let found = reach(&pads, &[], &[vec![0], vec![1]], &[], &layers(&LAYERS), 0.2, None).unwrap();
         let one = |x: f64| vec![Place { xy: [x, 2.0], layers: layers(&["F.Cu"]) }];
         assert_eq!(found, [one(2.0), one(8.0)]);
     }
@@ -274,7 +311,7 @@ mod tests {
     fn a_group_of_many_pads_offers_those_nearest_the_others() {
         let mut pads: Vec<Pad> = (0..10).map(|k| land(2.0 * k as f64, 0.0, "F.Cu")).collect();
         pads.push(land(30.0, 0.0, "F.Cu"));
-        let found = reach(&pads, &[], &[(0..10).collect(), vec![10]], &[], &layers(&["F.Cu"]), 0.2, None);
+        let found = reach(&pads, &[], &[(0..10).collect(), vec![10]], &[], &layers(&["F.Cu"]), 0.2, None).unwrap();
         assert_eq!(found[0].iter().map(|p| p.xy).collect::<Vec<_>>(), [[18.0, 0.0], [16.0, 0.0]]);
         assert_eq!(found[1], [Place { xy: [30.0, 0.0], layers: layers(&["F.Cu"]) }]);
     }
@@ -285,7 +322,7 @@ mod tests {
         let pads = [land(2.0, 2.0, "F.Cu"), land(8.0, 8.0, "F.Cu"), land(14.0, 5.0, "F.Cu"), land(5.0, 5.0, "B.Cu")];
         let fills = [pour("F.Cu", square())];
         let groups = [vec![0, 1], vec![2], vec![3]];
-        let found = reach(&pads, &fills, &groups, &[vec![0]], &layers(&LAYERS), 0.225, Some(0.05));
+        let found = reach(&pads, &fills, &groups, &[vec![0]], &layers(&LAYERS), 0.225, Some(0.05)).unwrap();
         assert_eq!(found[1], [Place { xy: [14.0, 5.0], layers: layers(&["F.Cu"]) }]);
         assert_eq!(found[2], [Place { xy: [5.0, 5.0], layers: layers(&["B.Cu"]) }]);
         let places: Vec<Pt> = found[0].iter().map(|p| p.xy).collect();
@@ -302,7 +339,7 @@ mod tests {
         let pads = [land(2.0, 2.0, "F.Cu"), land(21.0, 1.0, "F.Cu")];
         let fills = [pour("F.Cu", square()), pour("F.Cu", vec![[20.0, 0.0], [22.0, 0.0], [22.0, 2.0], [20.0, 2.0]])];
         let pours = [vec![0], vec![1]];
-        let found = reach(&pads, &fills, &[vec![0], vec![1]], &pours, &layers(&LAYERS), 0.2, None);
+        let found = reach(&pads, &fills, &[vec![0], vec![1]], &pours, &layers(&LAYERS), 0.2, None).unwrap();
         assert!(found[0].iter().any(|p| 9.5 < p.xy[0] && p.xy[0] < 10.0)); // the edge of the large one nearest the small
         assert!(found[1].iter().any(|p| 20.0 < p.xy[0] && p.xy[0] < 20.5)); // and of the small one nearest the large
     }
@@ -314,7 +351,7 @@ mod tests {
         let lower = vec![[0.0, 5.5], [10.0, 5.5], [10.0, 10.0], [0.0, 10.0]];
         let fills = [pour("F.Cu", upper), pour("F.Cu", lower)];
         let pours = [vec![0], vec![1]];
-        let found = reach(&pads, &fills, &[vec![0], vec![1]], &pours, &layers(&["F.Cu"]), 0.2, Some(0.05));
+        let found = reach(&pads, &fills, &[vec![0], vec![1]], &pours, &layers(&["F.Cu"]), 0.2, Some(0.05)).unwrap();
         let by_cut: Vec<Pt> = found[0].iter().map(|p| p.xy).filter(|p| p[1] == 4.3).collect(); // 0.2 mm in from the cut
         assert!(by_cut.len() >= 8);
         for a in &by_cut {
@@ -327,15 +364,55 @@ mod tests {
     fn a_pour_on_a_layer_that_carries_no_routes_is_no_place() {
         let pads = [land(2.0, 2.0, "F.Cu"), land(14.0, 5.0, "F.Cu")];
         let fills = [pour("In1.Cu", square())];
-        let found = reach(&pads, &fills, &[vec![0], vec![1]], &[vec![0]], &layers(&LAYERS), 0.2, None);
+        let found = reach(&pads, &fills, &[vec![0], vec![1]], &[vec![0]], &layers(&LAYERS), 0.2, None).unwrap();
         assert_eq!(found[0], [Place { xy: [2.0, 2.0], layers: layers(&["F.Cu"]) }]);
         assert_eq!(found[1], [Place { xy: [14.0, 5.0], layers: layers(&["F.Cu"]) }]);
     }
 
     #[test]
+    fn places_as_good_as_equally_far_come_in_the_order_of_where_they_are() {
+        // two pads of one group equally far from the pad of the other, to a part in a thousand million
+        let pads = [land(3.0, 4.0 + 1e-13, "F.Cu"), land(-3.0, 4.0, "F.Cu"), land(0.0, 0.0, "F.Cu")];
+        let found = reach(&pads, &[], &[vec![0, 1], vec![2]], &[], &layers(&["F.Cu"]), 0.2, None).unwrap();
+        assert_eq!(found[0].iter().map(|p| p.xy[0]).collect::<Vec<_>>(), [-3.0, 3.0]);
+    }
+
+    #[test]
+    fn no_more_places_than_the_most_and_none_closer_on_a_pour_than_the_spread() {
+        // a pour 100 mm long, and 60 pads of another group along it
+        let mut pads = vec![land(1.0, 1.0, "F.Cu")];
+        pads.extend((0..60).map(|k| land(1.0 + 1.6 * k as f64, 5.0, "F.Cu")));
+        let fills = [
+            pour("F.Cu", vec![[0.0, 0.0], [100.0, 0.0], [100.0, 2.0], [0.0, 2.0]]),
+            pour("F.Cu", vec![[0.0, 4.0], [100.0, 4.0], [100.0, 6.0], [0.0, 6.0]]),
+        ];
+        let groups = [vec![0], (1..61).collect::<Vec<_>>()];
+        let found = reach(&pads, &fills, &groups, &[vec![0], vec![1]], &layers(&["F.Cu"]), 0.2, Some(0.1)).unwrap();
+        assert!(found[0].len() <= PIECE_POINTS && found[0].len() > 20, "{}", found[0].len());
+        for (k, a) in found[0].iter().enumerate() {
+            assert!(found[0][..k]
+                .iter()
+                .all(|b| a.xy == pads[0].at || b.xy == pads[0].at || dist(a.xy, b.xy) >= POUR_SPREAD - 1e-9));
+        }
+    }
+
+    #[test]
+    fn what_names_nothing_is_refused() {
+        let pads = [land(2.0, 2.0, "F.Cu")];
+        let refused = |groups: &[Vec<usize>], pours: &[Vec<usize>], inset: f64, step: Option<f64>| {
+            reach(&pads, &[], groups, pours, &layers(&["F.Cu"]), inset, step).unwrap_err().to_string()
+        };
+        assert!(refused(&[vec![0], vec![]], &[], 0.2, None).contains("groups[1]"));
+        assert!(refused(&[vec![0], vec![3]], &[], 0.2, None).contains("groups[1]"));
+        assert!(refused(&[vec![0]], &[vec![0]], 0.2, None).contains("pours"));
+        assert!(refused(&[vec![0]], &[], -1.0, None).contains("inset"));
+        assert!(refused(&[vec![0]], &[], 0.2, Some(0.0)).contains("step"));
+    }
+
+    #[test]
     fn a_pad_on_no_routing_layer_leaves_its_group_without_a_place() {
         let pads = [land(2.0, 2.0, "In1.Cu"), land(8.0, 2.0, "F.Cu")];
-        let found = reach(&pads, &[], &[vec![0], vec![1]], &[], &layers(&["F.Cu"]), 0.2, None);
+        let found = reach(&pads, &[], &[vec![0], vec![1]], &[], &layers(&["F.Cu"]), 0.2, None).unwrap();
         assert!(found[0].is_empty());
     }
 }

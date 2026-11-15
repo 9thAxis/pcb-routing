@@ -1,15 +1,11 @@
 //! The copper laid for an entry that was joined to a zone, as the pieces that hang together without the
 //! zone, and where each of them ends on it.
 
+use super::shape::{hang_together, head_of, micro};
 use super::{End, Pad, Part};
-use crate::geom::{dist, dist_segment};
+use crate::geom::dist;
 use crate::model::{Net, NetResult, Pt};
 use std::collections::{BTreeSet, HashSet};
-
-/// True if a point lies on a line through these points.
-fn on_track(p: Pt, points: &[Pt]) -> bool {
-    points.windows(2).any(|pair| dist_segment(p, pair[0], pair[1]) < 1e-6)
-}
 
 /// The copper laid for one entry as the pieces that hang together: each with its own tracks and vias, keyed
 /// `KEY # n` (the entry's own key if it is all of a piece). Two tracks hang together where one ends on the
@@ -17,32 +13,18 @@ fn on_track(p: Pt, points: &[Pt]) -> bool {
 fn hanging_together(laid: &NetResult) -> Vec<Part> {
     let (tracks, vias) = (&laid.tracks, &laid.vias);
     let mut leader: Vec<usize> = (0..tracks.len() + vias.len()).collect();
-    fn find(leader: &[usize], mut i: usize) -> usize {
-        while leader[i] != i {
-            i = leader[i];
-        }
-        i
-    }
-    let ends = |k: usize| [tracks[k].points[0], tracks[k].points[tracks[k].points.len() - 1]];
+    let track = |k: usize| (Some(tracks[k].layer.as_str()), &tracks[k].points[..]);
     for i in 0..tracks.len() {
-        if tracks[i].points.is_empty() {
-            continue;
+        for j in (0..i).filter(|&j| hang_together(track(i), track(j))) {
+            let (a, b) = (head_of(&leader, i), head_of(&leader, j));
+            leader[a] = b;
         }
-        for j in (0..i).filter(|&j| !tracks[j].points.is_empty() && tracks[j].layer == tracks[i].layer) {
-            let meet = |one: usize, other: usize| ends(one).iter().any(|&p| on_track(p, &tracks[other].points));
-            if meet(i, j) || meet(j, i) {
-                let (a, b) = (find(&leader, i), find(&leader, j));
-                leader[a] = b;
-            }
-        }
-        for (j, &via) in vias.iter().enumerate() {
-            if on_track(via, &tracks[i].points) {
-                let (a, b) = (find(&leader, i), find(&leader, tracks.len() + j));
-                leader[a] = b;
-            }
+        for j in (0..vias.len()).filter(|&j| hang_together(track(i), (None, &vias[j..=j]))) {
+            let (a, b) = (head_of(&leader, i), head_of(&leader, tracks.len() + j));
+            leader[a] = b;
         }
     }
-    let heads: BTreeSet<usize> = (0..leader.len()).map(|i| find(&leader, i)).collect();
+    let heads: BTreeSet<usize> = (0..leader.len()).map(|i| head_of(&leader, i)).collect();
     let whole = |key: String, keep: &dyn Fn(usize) -> bool| Part {
         key,
         of: laid.key.clone(),
@@ -57,7 +39,7 @@ fn hanging_together(laid: &NetResult) -> Vec<Part> {
     heads
         .iter()
         .enumerate()
-        .map(|(n, &head)| whole(format!("{} # {}", laid.key, n + 1), &|i| find(&leader, i) == head))
+        .map(|(n, &head)| whole(format!("{} # {}", laid.key, n + 1), &|i| head_of(&leader, i) == head))
         .collect()
 }
 
@@ -70,9 +52,9 @@ fn hanging_together(laid: &NetResult) -> Vec<Part> {
 /// at a pad of the net on that layer is no point of a zone; one under a pad that is on another layer is.
 ///
 /// `entries` are the entries of the problem that was run, `laid` its solution's nets, `pads` the pads of the
-/// board (their nets, places and layers).
+/// board (their nets, places and layers). What was laid for a [`Pair`](crate::Pair) is under a key of its
+/// own and comes back whole.
 pub fn parts(pads: &[Pad], entries: &[Net], laid: &[NetResult]) -> Vec<Part> {
-    let micro = |p: Pt| ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
     let at_pads: HashSet<(&str, (i64, i64), &str)> = pads
         .iter()
         .filter_map(|pad| pad.net.as_deref().map(|net| (pad, net)))

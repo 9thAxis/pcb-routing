@@ -214,14 +214,14 @@ zones are refilled. The module documentation has the whole round.
 
     pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N] [--trace] [--verify] [--only ATTEMPT]
     pcb-routing masks PROBLEM.json --net KEY -o MASK.bin
-    pcb-routing pours [QUESTION.json] [-o ANSWER.json]
+    pcb-routing pours [QUESTION.json] [-o ANSWER.json] [--threads N]
 
 `route` exits with status 0 if every net is laid and none are too close, 1 otherwise, 2 if the problem could
 not be run. `--trace` prints one line per round and the time spent per kind of work. `--verify` runs every
 search a second time without the first pass (see below) and reports any whose cost differs. `masks` writes
 the router's picture of the board for one net, one byte per cell. `pours` answers one question about a
 board's filled zones, as JSON (from standard input to standard output where no file is named): the field
-`ask` names it (`survey`, `reach`, `parts`, `tie_targets`, `ties`), and the rest is as documented on
+`ask` names it (`survey`, `reach`, `parts`, `on_zone`, `tie_targets`, `ties`), and the rest is as documented on
 `pcb_routing::pours::Ask`.
 
 Try it on `examples/two_nets.json`.
@@ -306,7 +306,7 @@ repository) records what each of these bought when it was added, and what was tr
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 70 in the engine, 121 in the bridge, 141 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 146 in the engine and its zone module, 136 in the bridge, 141 in the quality tools |
 
 ## Sources
 

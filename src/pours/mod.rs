@@ -15,29 +15,36 @@
 //!    spokes, with its spokes counted.
 //! 2. For each net still in several groups, [`reach`] gives the places each group may be reached at: these
 //!    are the terminals of its entry, those of one group with the same `piece`. The pieces of zone, and the
-//!    [`Thermal::reach`] of each pad, are the problem's dear ground.
+//!    [`Thermal::ground`] of each pad, are the problem's dear ground.
 //! 3. Route. [`parts`] gives what was laid as the pieces that can be taken back one by one, each with the
 //!    points of a zone it ended on.
-//! 4. Fill the zones again and survey again: a part that ended on a piece of zone the new tracks cut away is
-//!    taken back; nets the new tracks parted are joined again; a pad left with too few spokes gets a straight
+//! 4. Fill the zones again and survey again: a part that ended on a piece of zone the new tracks cut away
+//!    ([`on_zone`] tells) is taken back; nets the new tracks parted are joined again; a pad left with too few spokes gets a straight
 //!    track into its zone, ending on one of its [`tie_targets`] and kept if it [`ties`] the pad.
 //!
 //! Every one of these is also a question the `pcb-routing pours` command answers, as JSON: see [`Ask`].
 //!
-//! Lengths are in millimetres. A polygon is a list of rings, even-odd: its outline, then its holes.
+//! Two of them are of use without any zone: [`reach`] also chooses, for a group of several pads that tracks
+//! already join, the pads nearest the rest of the net, and [`parts`] tells what a run laid apart into the
+//! pieces that hang together.
+//!
+//! Lengths are in millimetres. A polygon is a list of rings, even-odd: its outline, then its holes. (KiCad
+//! gives a filled zone as outlines with the holes cut into them; both forms are taken.)
 
+mod ask;
 mod joined;
 mod parts;
 mod reach;
 mod shape;
 mod spokes;
 
+pub use ask::{answer, Answer, Ask, ReachNet, TiePad, TieTrack};
 pub use parts::parts;
 pub use reach::reach;
 pub use spokes::{tie_targets, ties};
 
 use crate::error::{invalid, Error};
-use crate::model::{Net, NetResult, Pt, Track};
+use crate::model::{Pt, Track};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -85,11 +92,11 @@ pub struct Wire {
     pub layer: Option<String>,
     /// The two ends of a track, or the one place of a via.
     pub ends: Vec<Pt>,
-    /// What it hangs on: the index of the group of pads it is joined to (see [`Layout::groups`]), or, from
-    /// the number of the net's groups on, a number for copper that reaches no pad, the same for all of it
-    /// that hangs together. Absent: not known, and then it joins nothing.
+    /// The group of pads it is joined to, as an index into the groups of its net (see [`Layout::groups`]);
+    /// absent for copper that reaches no pad. Such copper still counts where it joins two pieces of zone:
+    /// wires that hang together (an end of one on the other on its layer, a via on a track) are one.
     #[serde(default)]
-    pub node: Option<usize>,
+    pub group: Option<usize>,
 }
 
 /// A pad that a zone is to meet by thermal spokes, on one layer.
@@ -142,6 +149,7 @@ pub struct Layout {
 }
 
 /// A pad tied to a filled zone of its net by thermal spokes, on one layer.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Thermal {
     /// The zone's net.
@@ -156,21 +164,22 @@ pub struct Thermal {
     /// other layers.
     pub spokes: u32,
     /// The ground where a track of another net would cut its spokes, as polygons: dear ground for a router.
-    pub reach: Vec<Polygon>,
+    pub ground: Vec<Polygon>,
     /// For a pad with too few spokes: the line a spoke crosses ([`Spoked::line`]). Empty otherwise.
     pub outline: Vec<Pt>,
-    /// For a pad with too few spokes: the pieces of the zone it is tied to, those that join more than this
-    /// pad first. Empty otherwise.
-    pub fill: Vec<Polygon>,
+    /// For a pad with too few spokes: the pieces of the zone it is tied to, as indices into
+    /// [`Layout::fills`], those that join more than this pad first. Empty otherwise.
+    pub fill: Vec<usize>,
 }
 
 /// What [`survey`] finds.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Survey {
     /// The groups of [`Layout::groups`] with those that a filled zone joins made one.
     pub groups: BTreeMap<String, Vec<Vec<usize>>>,
-    /// Per net with zones: for each of its groups, in the order of `groups`, the pieces of zone that join
-    /// it, as indices into [`Layout::fills`]. A piece that joins no pad is nobody's.
+    /// Per net that a zone joins a pad of: for each of its groups, in the order of `groups`, the pieces of
+    /// zone that join it, as indices into [`Layout::fills`]. A piece that joins no pad is nobody's.
     pub pours: BTreeMap<String, Vec<Vec<usize>>>,
     /// Every pad a zone ties by spokes, in the order of [`Layout::spoked`]. A pad its zone covers without a
     /// gap, or does not reach, is not among them.
@@ -178,6 +187,7 @@ pub struct Survey {
 }
 
 /// A place where a group of pads may be reached: a terminal for a router.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Place {
     /// Where.
@@ -187,6 +197,7 @@ pub struct Place {
 }
 
 /// A point of a zone that laid copper came to end on.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct End {
     /// The zone's net.
@@ -198,6 +209,7 @@ pub struct End {
 }
 
 /// Copper of one entry that hangs together.
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Part {
     /// Its name: the entry's key if the entry's copper is all of a piece, else `KEY # n`.
@@ -230,6 +242,23 @@ pub fn survey(layout: &Layout) -> Result<Survey, Error> {
     Ok(Survey { groups, pours, thermals: spokes::thermals(layout, &pieces, &touch) })
 }
 
+/// Whether each of some points is on a piece of zone of its net on its layer (`fills`: the pieces, as the
+/// zones are now filled). A track that ended on a point of a zone hangs on nothing once the zone has drawn
+/// back from it (see [`Part::ends`]).
+pub fn on_zone(fills: &[Fill], points: &[End]) -> Vec<bool> {
+    let pieces: Vec<Option<shape::Piece>> = fills
+        .iter()
+        .map(|fill| {
+            points.iter().any(|p| p.net == fill.net && p.layer == fill.layer).then(|| shape::Piece::new(&fill.rings))
+        })
+        .collect();
+    let stands = |point: &End| {
+        let own = fills.iter().zip(&pieces).filter(|(fill, _)| fill.net == point.net && fill.layer == point.layer);
+        own.flat_map(|(_, piece)| piece).any(|piece| piece.contains(point.xy))
+    };
+    points.iter().map(stands).collect()
+}
+
 impl Layout {
     fn check(&self) -> Result<(), Error> {
         let pad = |field: String, i: usize| match i < self.pads.len() {
@@ -251,132 +280,11 @@ impl Layout {
             if wire.ends.is_empty() || wire.ends.len() > 2 {
                 return Err(invalid(format!("wires[{k}].ends"), "one place for a via, two ends for a track"));
             }
+            let most = self.groups.get(&wire.net).map_or(0, Vec::len);
+            if wire.group.is_some_and(|group| group >= most) {
+                return Err(invalid(format!("wires[{k}].group"), format!("names a group of {most}")));
+            }
         }
         Ok(())
     }
-}
-
-/// A question about a board's zones, as the `pcb-routing pours` command takes it: JSON with the kind of
-/// question in the field `ask`, answered with the JSON of an [`Answer`].
-#[derive(Deserialize, Clone, Debug)]
-#[serde(tag = "ask", rename_all = "snake_case")]
-pub enum Ask {
-    /// [`survey`]: answered with a [`Survey`].
-    Survey(Layout),
-    /// [`reach`], for several nets at once: answered with the places of each group of each net.
-    Reach {
-        /// The pads (their places and layers).
-        pads: Vec<Pad>,
-        /// The pieces of zone the nets name.
-        #[serde(default)]
-        fills: Vec<Fill>,
-        /// The routing layers.
-        layers: Vec<String>,
-        /// The grid step, if points of a zone are to be on the grid.
-        #[serde(default)]
-        step: Option<f64>,
-        /// The nets.
-        nets: Vec<Reached>,
-    },
-    /// [`parts`]: answered with the parts.
-    Parts {
-        /// The pads (their nets, places and layers).
-        pads: Vec<Pad>,
-        /// The entries of the problem that was run.
-        entries: Vec<Net>,
-        /// What the run laid: the nets of its solution.
-        laid: Vec<NetResult>,
-    },
-    /// [`tie_targets`], for several pads at once: answered with the points for each.
-    TieTargets {
-        /// The pads.
-        pads: Vec<Tied>,
-    },
-    /// [`ties`], for several tracks at once: answered with true or false for each.
-    Ties {
-        /// The tracks, each with its pad.
-        tracks: Vec<Tied>,
-    },
-}
-
-/// One net of a question [`Ask::Reach`].
-#[derive(Deserialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct Reached {
-    /// Its groups of joined pads, as indices into the pads.
-    pub groups: Vec<Vec<usize>>,
-    /// For each group, in the same order, the pieces of zone that join it, as indices into the fills.
-    /// Groups it does not reach have none.
-    #[serde(default)]
-    pub pours: Vec<Vec<usize>>,
-    /// How far within a zone a track is to end: half its width and a little.
-    pub inset: f64,
-}
-
-/// One pad of a question [`Ask::TieTargets`], or one track of a question [`Ask::Ties`].
-#[derive(Deserialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct Tied {
-    /// The pad's [`Thermal::outline`].
-    pub outline: Vec<Pt>,
-    /// Its [`Thermal::fill`].
-    pub fill: Vec<Polygon>,
-    /// For targets: the pad's middle.
-    #[serde(default)]
-    pub at: Pt,
-    /// For targets: how far within the zone the track is to end.
-    #[serde(default)]
-    pub inset: f64,
-    /// For targets: points not to give again.
-    #[serde(default)]
-    pub tried: Vec<Pt>,
-    /// For a track: its points.
-    #[serde(default)]
-    pub points: Vec<Pt>,
-}
-
-/// The answer to an [`Ask`].
-#[derive(Serialize, Clone, Debug)]
-#[serde(untagged)]
-pub enum Answer {
-    /// To [`Ask::Survey`].
-    Survey(Survey),
-    /// To [`Ask::Reach`]: per net, per group, its places.
-    Reach(Vec<Vec<Vec<Place>>>),
-    /// To [`Ask::Parts`].
-    Parts(Vec<Part>),
-    /// To [`Ask::TieTargets`]: per pad, the points.
-    TieTargets(Vec<Vec<Pt>>),
-    /// To [`Ask::Ties`]: per track, whether it ties its pad.
-    Ties(Vec<bool>),
-}
-
-/// Answer a question.
-pub fn answer(ask: &Ask) -> Result<Answer, Error> {
-    Ok(match ask {
-        Ask::Survey(layout) => Answer::Survey(survey(layout)?),
-        Ask::Reach { pads, fills, layers, step, nets } => {
-            for (n, net) in nets.iter().enumerate() {
-                let known = |field: &str, i: usize, of: usize| match i < of {
-                    true => Ok(()),
-                    false => Err(invalid(format!("nets[{n}].{field}"), format!("{i} of {of}"))),
-                };
-                for group in &net.groups {
-                    if group.is_empty() {
-                        return Err(invalid(format!("nets[{n}].groups"), "a group has a pad at least"));
-                    }
-                    group.iter().try_for_each(|&i| known("groups", i, pads.len()))?;
-                }
-                net.pours.iter().flatten().try_for_each(|&f| known("pours", f, fills.len()))?;
-            }
-            use rayon::prelude::*;
-            let places = |net: &Reached| reach(pads, fills, &net.groups, &net.pours, layers, net.inset, *step);
-            Answer::Reach(nets.par_iter().map(places).collect())
-        }
-        Ask::Parts { pads, entries, laid } => Answer::Parts(parts(pads, entries, laid)),
-        Ask::TieTargets { pads } => {
-            Answer::TieTargets(pads.iter().map(|p| tie_targets(&p.outline, &p.fill, p.at, p.inset, &p.tried)).collect())
-        }
-        Ask::Ties { tracks } => Answer::Ties(tracks.iter().map(|t| ties(&t.outline, &t.fill, &t.points)).collect()),
-    })
 }
