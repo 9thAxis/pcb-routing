@@ -118,6 +118,49 @@ class TwoTries(WithEngine):
         self.assertEqual(self.runs()[0]["options"], dict(variants=3, max_states=5))
 
 
+class Steps(WithEngine):
+    def coarse_first(self, board, **more):
+        run = lambda problem, first: k.run_engine(problem, ENGINE)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return k.route(board, k.Settings(step=None, coarse_first=True), run, say=self.said.append, **more)
+
+    def test_the_step_follows_from_the_rules(self):
+        picture = FakeBoard(1).read()
+        rules = lambda settings, **sizes: k.Rules(picture.minima, {"N000": k.NetClass(via_size=0.6, via_drill=0.3, **sizes)}, settings=settings)
+        step = lambda **sizes: rules(k.Settings(step=None), **sizes).step(["N000"])
+        # 0.25 mm tracks 0.22 mm apart (with the slack): 0.47 mm from one to the next, nine cells of 0.05 mm
+        self.assertEqual(step(track_width=0.25, clearance=0.2), 0.05)
+        self.assertEqual(step(track_width=0.5, clearance=0.3), 0.1)
+        # a step the user chose is kept
+        self.assertEqual(rules(k.Settings(step=0.08), track_width=0.25, clearance=0.2).tries(["N000"]), [(0.08, False), (0.08, True)])
+        self.assertEqual(rules(k.Settings(step=0.08, coarse_first=True), track_width=0.25, clearance=0.2).tries(["N000"]),
+                         [(0.16, False), (0.08, False), (0.08, True)])
+
+    def test_all_joined_on_the_coarse_grid(self):
+        outcome = self.coarse_first(FakeBoard(3))
+        self.assertEqual([p["step"] for p in self.runs()], [0.1])
+        self.assertEqual((outcome.status, outcome.left), ("routed", 0))
+
+    def test_what_is_left_goes_to_the_fine_grid_and_then_narrower(self):
+        board = FakeBoard(3, narrow_pads={"N001"})
+        self.stubborn(["N001"], below=0.25)
+        outcome = self.coarse_first(board)
+        runs = self.runs()
+        self.assertEqual([(p["step"], [n["key"] for n in p["nets"]], p["nets"][-1]["width"]) for p in runs],
+                         [(0.1, ["N000", "N001", "N002"], 0.25), (0.05, ["N001"], 0.25), (0.05, ["N001"], 0.2)])
+        self.assertEqual(self.said, ["next try, at a 0.05 mm step: N001", "second try, narrower: N001"])
+        self.assertEqual((outcome.status, outcome.left, len(board.reads)), ("routed", 0, 3))
+
+    def test_no_fine_try_on_a_grid_too_large(self):
+        board = FakeBoard(3)
+        self.stubborn(["N001"])
+        # the board is 12 by 8 mm with its margin: 121 * 81 cells at 0.1 mm, four times that at 0.05
+        outcome = self.coarse_first(board, options=dict(max_states=20_000))
+        self.assertEqual([p["step"] for p in self.runs()], [0.1])
+        self.assertEqual(len([line for line in self.said if "larger than --max-states" in line]), 2)
+        self.assertEqual((outcome.status, outcome.left, outcome.failure), ("unroutable", 1, None))
+
+
 class EngineFailure(WithEngine):
     def test_failure_at_the_first_try_lays_nothing(self):
         board = FakeBoard(3)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Route the unconnected nets of a KiCad board with pcb-routing.
 
-    kicad_route.py BOARD.kicad_pcb -o ROUTED.kicad_pcb [--nets A,B] [--step 0.05] [--variants N]
+    kicad_route.py BOARD.kicad_pcb -o ROUTED.kicad_pcb [--nets A,B] [--step auto|MM] [--variants N]
                    [--layers F.Cu,B.Cu] [--problem FILE] [--solution FILE] [--engine PATH]
 
 Run it with the Python that ships with KiCad (it needs the `pcbnew` module), for example on macOS:
@@ -35,7 +35,7 @@ Exit status: 0 every net joined, 1 some nets left unjoined, 2 the engine failed 
 is saved all the same).
 """
 import argparse, json, math, os, subprocess, sys, tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 try:
@@ -163,7 +163,8 @@ class Picture:
 @dataclass
 class Settings:
     """What the user chose for a run."""
-    step: float = 0.05
+    step: object = 0.05  # grid step in mm; None: chosen from the board's rules
+    coarse_first: bool = False  # a first pass at twice the step, for speed
     slack: float = 0.02
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
@@ -187,6 +188,8 @@ class Rules:
     NARROW_BY = 0.1  # the second try's track is this much narrower than the net's narrowest pad
     NARROWEST = 0.1  # and never narrower than this
     DEFAULT_VIA_DRILL = 0.3  # for the hole spacing when no net is to be routed
+    STEPS = (0.1, 0.05, 0.025)  # the steps chosen from
+    CELLS_PER_PITCH = 6  # at least this many cells from one track to the next
 
     def __init__(self, minima, classes, ignored=frozenset(), settings=None):
         self.minima, self.classes, self.ignored = minima, classes, frozenset(ignored)
@@ -275,6 +278,32 @@ class Rules:
         drill = max(self.classes[net].via_drill, self.minima.through_drill)
         size = max(self.classes[net].via_size, self.minima.via_size, drill + 2 * self.minima.annular_width)
         return [size, drill]
+
+    # -- how fine
+
+    def step(self, nets):
+        """The grid step for these nets: the user's, else the coarsest that still has several cells from one
+        track to the next (tracks can only be a whole number of cells apart, so a coarse grid wastes room)."""
+        if self.settings.step is not None:
+            return self.settings.step
+        pitch = min((self.track_width(net) + self.clearance(net) for net in nets), default=0.0)
+        return next((s for s in self.STEPS if s * self.CELLS_PER_PITCH <= pitch + 1e-9), self.STEPS[-1])
+
+    def tries(self, nets):
+        """The tries the nets get, in turn, each for what the one before left unjoined: (grid step, narrower or not).
+
+        Once as the rules say, once narrower. If the user asked for it, a pass on a grid twice as coarse comes
+        first: most nets of most boards are joined there at a quarter of the work, at the price of a little
+        more track and a few more vias, and of room on a crowded board.
+        """
+        step = self.step(nets)
+        return ([(2 * step, False)] if self.settings.coarse_first else []) + [(step, False), (step, True)]
+
+    def states(self, box, layers):
+        """The size of the router's grid at the present step: cells times routing layers."""
+        window, step = self.window(box), self.settings.step
+        across = lambda a, b: round((b - a) / step) + 1
+        return across(window[0], window[2]) * across(window[1], window[3]) * len(self.routing_layers(layers))
 
     # -- where
 
@@ -471,18 +500,26 @@ def route(board, settings, run, only=None, options=None, say=print):
         if number:
             picture = board.read(lot)
             say(f"batch {number + 1} of {len(lots)}")
-        for narrow in (False, True):
-            if narrow:
+        tries = Rules.of(picture, settings).tries(lot)
+        for number_of_try, (step, narrow) in enumerate(tries):
+            at_step = replace(settings, step=step)
+            if number_of_try:
                 # what could not be joined is tried once more against the board as it now stands
                 picture = board.read(lot)
-            problem = build_problem(picture, Rules.of(picture, settings), only=set(lot), narrow=narrow, options=options)
+            rules = Rules.of(picture, at_step)
+            most = (options or {}).get("max_states")
+            if number_of_try and most and rules.states(picture.box, picture.layers) > most:
+                say(f"no try at a {step:g} mm step: the grid would be larger than --max-states")
+                continue
+            problem = build_problem(picture, rules, only=set(lot), narrow=narrow, options=options)
             keys = [n["key"] for n in problem["nets"]]
-            if not narrow:
+            if not number_of_try:
                 wanted += keys
             if not keys:
                 break
-            if narrow:
-                say(f"second try, narrower: {', '.join(keys)}")
+            if number_of_try:
+                finer = step != tries[number_of_try - 1][0]
+                say(f"{'next try, at a %g mm step' % step if finer else 'second try, narrower'}: {', '.join(keys)}")
             try:
                 solution = run(problem, first)
             except EngineFailed as failure:
@@ -804,7 +841,8 @@ def main(argv=None):
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--nets", help="only these nets, comma separated (default: every net with pads not yet joined)")
     parser.add_argument("--layers", help="copper layers that may carry routes, comma separated (default: all)")
-    parser.add_argument("--step", type=float, default=0.05, help="grid step in mm")
+    parser.add_argument("--step", default="auto", help="grid step in mm, or 'auto' (the default): chosen from the track widths and clearances of the nets")
+    parser.add_argument("--coarse-first", action="store_true", help="a first pass on a grid twice as coarse, then what is left on the fine one: about three times faster, a little more track and vias, and less room on a crowded board")
     parser.add_argument("--slack", type=float, default=0.02, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
@@ -818,7 +856,11 @@ def main(argv=None):
         parser.error("the pcbnew module is not here: run this with the Python that ships with KiCad")
 
     names = lambda text: set(text.split(",")) if text else None
-    settings = Settings(step=args.step, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers))
+    try:
+        step = None if args.step == "auto" else float(args.step)
+    except ValueError:
+        parser.error("--step takes a number of mm, or auto")
+    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers))
     options = dict(variants=args.variants, max_states=args.max_states)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
 
