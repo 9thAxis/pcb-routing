@@ -66,6 +66,8 @@ class Board:
 
     def GetPads(self): return self.pads
     def GetConnectivity(self): return self.connectivity
+    def Zones(self): return []
+    def GetTracks(self): return []
     def GetEnabledLayers(self): return self
     def CuStack(self): return [pcbnew.F_Cu, pcbnew.B_Cu]
     def GetLayerName(self, layer): return {pcbnew.F_Cu: "F.Cu", pcbnew.B_Cu: "B.Cu"}[layer]
@@ -89,20 +91,20 @@ class Joined(unittest.TestCase):
         self.board = Board([self.a1, self.a2, self.a3, self.b1, self.b2, self.c1, self.d1, self.d2, self.free, self.masked], self.connectivity)
 
     def test_joined_pads_follows_tracks_and_vias(self):
-        self.assertEqual(names(k.joined_pads(self.connectivity, self.a1)), ["a1", "a2"])
-        self.assertEqual(names(k.joined_pads(self.connectivity, self.a2)), ["a2", "a1"])
+        self.assertEqual(names(k.joined_pads(self.connectivity, self.a1)[0]), ["a1", "a2"])
+        self.assertEqual(names(k.joined_pads(self.connectivity, self.a2)[0]), ["a2", "a1"])
 
     def test_a_pad_alone_or_with_a_loose_track(self):
-        self.assertEqual(names(k.joined_pads(self.connectivity, self.a3)), ["a3"])
-        self.assertEqual(names(k.joined_pads(self.connectivity, self.c1)), ["c1"])
+        self.assertEqual(names(k.joined_pads(self.connectivity, self.a3)[0]), ["a3"])
+        self.assertEqual(names(k.joined_pads(self.connectivity, self.c1)[0]), ["c1"])
 
     def test_pads_that_touch(self):
-        self.assertEqual(names(k.joined_pads(self.connectivity, self.b1)), ["b1", "b2"])
+        self.assertEqual(names(k.joined_pads(self.connectivity, self.b1)[0]), ["b1", "b2"])
 
     def test_a_loop_of_copper_ends(self):
         t1, t2 = track("t1"), track("t2")
         ring = Connectivity((self.a1, t1), (t1, t2), (t2, self.a1), (t1, self.a2), (t2, self.a2))
-        self.assertEqual(sorted(names(k.joined_pads(ring, self.a1))), ["a1", "a2"])
+        self.assertEqual(sorted(names(k.joined_pads(ring, self.a1)[0])), ["a1", "a2"])
 
     def test_pad_groups(self):
         groups = {net: [names(g) for g in gs] for net, gs in k.pad_groups(self.board).items()}

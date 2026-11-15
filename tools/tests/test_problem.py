@@ -470,14 +470,15 @@ class Pours(unittest.TestCase):
         self.assertEqual(sorted(nets), ["GND", "SIG"])
         self.assertEqual(len(nets["GND"]["terminals"]), 3)
 
-    def test_the_largest_pour_is_the_one_the_others_are_taken_to(self):
+    def test_the_largest_pour_is_the_one_the_others_are_taken_to_and_a_smaller_one_is_joined_from_its_own_copper(self):
         small = [[20.0, 0.0], [22.0, 0.0], [22.0, 2.0], [20.0, 2.0]]
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 21, 1, part="U2")]
         links = k.to_pours(pads, [[0], [1]], {0: [k.Pour("GND", "F.Cu", [self.SQUARE])], 1: [k.Pour("GND", "F.Cu", [small])]}, ["F.Cu", "B.Cu"], 0.2)
         self.assertEqual(len(links), 1)
-        pad, at, layers = links[0]
-        self.assertEqual((pad, layers), (1, ["F.Cu"]))
+        start, start_layers, at, layers = links[0]
+        self.assertEqual((start_layers, layers), (["F.Cu"], ["F.Cu"]))
         self.assertTrue(9.5 < at[0] < 10 and at[1] == 1)
+        self.assertTrue(20 < start[0] < 20.5 and start[1] == 1)  # from the small pour's edge, not from its pad
 
     def test_a_pour_on_a_layer_that_carries_no_routes_is_no_pour(self):
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 14, 5, part="J1")]

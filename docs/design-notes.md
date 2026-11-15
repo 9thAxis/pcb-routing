@@ -91,6 +91,23 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   the engine's limit ran out; any capacitor by a pin counted, one in series with a signal too (now both
   its nets must have three pads); a bus name changed results with the pull at 0 (the hundredth applied);
   nets of a bus too far apart to be drawn together no longer paid for crossing (they do again).
+* Pours (bridge, `--pours`, not the default). The benchmark's boards come without their zones; 86 of the
+  119 originals have them, and they can be put back on the stripped boards (the pads agree to 0.0002 mm).
+  With them, and the pads a filled zone joins counted as joined: 26,900 mm of track where there were
+  33,200 (a net with a zone gets only stubs from the pads the zone does not reach), 498 vias where there
+  were 389 (new tracks cut the zones freely, and the pieces are stitched together again). But 112 of 119
+  boards complete (119 without), 98 with no new error (119): 20 new thermal relief errors, a pad left with
+  one spoke or with spokes into a piece of zone cut off from the rest, and one clearance error. What it
+  took to get that far: the zone's own clearance is often more than a track's (0.5 against 0.2 mm), so a
+  track that keeps its distance from a spoke still has the zone cut the spoke off; a piece of zone held
+  by one through-hole pad is joined through the pad for the bridge and "isolated" for KiCad, and must be
+  stitched from its own copper, not from the pad; a stitch between two pieces of zone touches no pad and
+  was not seen as joining anything. Reserving more room round every pad with spokes took the thermal
+  errors away on some boards and closed the way out of a USB connector on another. The designers' own
+  boards fail the same check (10 of the 20 larger ones, 30 errors): that is no reason to leave it.
+  To do: a price on running through a zone, more by a pad with spokes; after filling, the spokes of
+  each pad counted as KiCad counts them, and the tracks that starved a pad laid again round it; a
+  stitch tried elsewhere when its first place is closed.
 * Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,
   the designers 27 %, on seven pairs); short last stretches before a pad; copper pours.
 

@@ -25,9 +25,12 @@ What it does not do:
 
 - It routes on a grid, with tracks at multiples of 45 degrees and through vias only (no blind, buried or micro
   vias, no arcs).
-- It does not follow zones or planes when deciding which pads are already joined: only tracks, vias and pads
-  that touch. A net meant to be joined by a plane is therefore routed as tracks, unless it is left out by
-  naming the others with --nets.
+- By default it does not follow zones or planes when deciding which pads are already joined: only tracks, vias
+  and pads that touch. A net meant to be joined by a plane is then routed as tracks, unless it is left out by
+  naming the others with --nets. With --pours (not yet the default: it leaves some boards incomplete that are
+  completed without) the zones are filled first and pads that a filled zone joins count as joined: a net with
+  a zone gets tracks only from the pads its zone does not reach, each to the nearest point of the zone; pads
+  that the new tracks part from their zone are joined again.
 - No differential pairs and no length tuning through this bridge yet (the engine can lay pairs; the bridge does
   not ask for them).
 
@@ -138,6 +141,7 @@ class Pour:
     net: object
     layer: str
     rings: list  # its outline, then its holes
+    lone: bool = False  # joined to the rest of its net by one pad alone (its spokes then lead nowhere, for KiCad)
 
 
 @dataclass
@@ -179,7 +183,7 @@ class Settings:
     slack: float = 0.002
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
-    pours: bool = True  # pads that a filled zone joins count as joined, and the rest of the net is taken to the zone
+    pours: bool = False  # pads that a filled zone joins count as joined, and the rest of the net is taken to the zone
     decoupling: bool = True  # a capacitor beside a pin of an IC on its net is joined to that pin itself
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
 
@@ -460,37 +464,61 @@ def into_pour(rings, p, inset):
 
 
 def to_pours(pads, groups, pours, layers, inset):
-    """How a net with pours is joined: [(pad index, target point, target layers)], one for each group of pads
-    that is not on the net's largest pour. The pad is the group's nearest to that pour's group; the target the
-    nearest of that group's copper to it: a point of one of its pours, or one of its pads.
+    """How a net with pours is joined: [(start point, its layers, target point, its layers)], one for each
+    group of pads that is not on the net's largest pour. The target is the nearest of that pour's group's copper
+    to the group: a point of one of its pours, or one of its pads. The start is the group's pad nearest to it;
+    or, for a group with a pour of its own, the point of that pour nearest the target: a piece of pour joined
+    only through a pad's spokes would leave them counted as leading nowhere.
 
     `groups`: the net's groups of joined pads; `pours`: {index of a group: its pours}; `layers`: the routing
     layers. Empty if the net has no pour on a routing layer.
     """
-    area = {g: sum(_area(pour.rings) for pour in own if pour.layer in layers) for g, own in pours.items()}
-    area = {g: a for g, a in area.items() if a > 0}
+    usable = {g: [pour for pour in own if pour.layer in layers] for g, own in pours.items()}
+    area = {g: sum(_area(pour.rings) for pour in own) for g, own in usable.items() if own}
     if not area:
         return []
     main = max(sorted(area), key=area.get)
     links = []
+    # A piece of pour of the main group that one pad alone joins to it (a through-hole pad, by the other side):
+    # joined to the rest of the group's copper from a point of its own, as a stitching via would.
+    anchor = max(usable[main], key=lambda pour: _area(pour.rings))
+    for lone in (pour for pour in usable[main] if pour.lone and pour is not anchor):
+        best = None
+        for pour in (pour for pour in usable[main] if not pour.lone or pour is anchor):
+            at = into_pour(pour.rings, lone.rings[0][0], inset)
+            start = at and into_pour(lone.rings, at, inset)
+            at = start and into_pour(pour.rings, start, inset)
+            if at and (best is None or math.dist(start, at) < best[0]):
+                best = (math.dist(start, at), start, [lone.layer], at, [pour.layer])
+        if best:
+            links.append(best[1:])
     for g, group in enumerate(groups):
         if g == main:
             continue
         best = None
         for i in group:
-            if not any(l in layers for l in pads[i].layers):
+            on = [l for l in layers if l in pads[i].layers]
+            if not on:
                 continue
             here = pads[i].at
             targets = [(pads[j].at, [l for l in layers if l in pads[j].layers]) for j in groups[main]]
-            targets += [(into_pour(pour.rings, here, inset), [pour.layer]) for pour in pours[main] if pour.layer in layers]
-            for at, on in targets:
-                if at is not None and on and (best is None or math.dist(here, at) < best[0]):
-                    best = (math.dist(here, at), i, at, on)
-        if best:
-            links.append(best[1:])
+            targets += [(into_pour(pour.rings, here, inset), [pour.layer]) for pour in usable[main]]
+            for at, target_on in targets:
+                if at is not None and target_on and (best is None or math.dist(here, at) < best[0]):
+                    best = (math.dist(here, at), here, on, at, target_on)
+        if best is None:
+            continue
+        _, start, on, at, target_on = best
+        own = [(into_pour(pour.rings, at, inset), [pour.layer]) for pour in usable.get(g, [])]
+        own = [(math.dist(point, at), point, layer) for point, layer in own if point is not None]
+        if own:
+            _, start, on = min(own)
+        links.append((start, on, at, target_on))
     return links
 
 
+KEPT_SPOKES = 4  # thermal spokes of a pad that other nets keep clear of, where it has them
+POUR_REPEATS = 3  # how often nets that new tracks have parted from their pour are joined again
 DECOUPLING_REACH = 5.0  # mm from a capacitor's pad to the pin it is taken to stand by
 DECOUPLING_VIA_PENALTY = 5.0  # times the usual: the detour accepted before the link to the pin changes layer
 
@@ -587,8 +615,8 @@ def build_problem(picture, rules, only=None, narrow=False, options=None, unlinke
         # A net with a pour: each group of pads that is not on it is taken to its nearest point, by an entry of
         # its own, so that nothing is laid where the pour already joins.
         poured = to_pours(picture.pads, groups, picture.pours.get(name, {}), layers, _r(width / 2 + 0.1)) if rules.settings.pours else []
-        for number, (pad, at, target_layers) in enumerate(poured):
-            nets.append(entry(f"{name} > {number + 1}", [terminal(picture.pads[pad]), dict(xy=at, layers=target_layers)],
+        for number, (start, start_layers, at, target_layers) in enumerate(poured):
+            nets.append(entry(f"{name} > {number + 1}", [dict(xy=start, layers=start_layers), dict(xy=at, layers=target_layers)],
                               rules.settings.via_penalty))
         if poured:
             continue
@@ -698,6 +726,7 @@ def route(board, settings, run, only=None, options=None, say=print):
     outcome = Outcome()
     picture = board.read(only)
     names = picture.unjoined(only)
+    open_before = set(board.unjoined())  # nets that are not this run's to join, or were not joined to begin with
     lots = batches(names)
     if len(lots) > 1:
         say(f"{len(names)} nets to join, more than the engine takes in one run: routed in {len(lots)} batches of at most "
@@ -708,7 +737,7 @@ def route(board, settings, run, only=None, options=None, say=print):
             picture = board.read(lot)
             say(f"batch {number + 1} of {len(lots)}")
         tries = Rules.of(picture, settings).tries(lot)
-        number_of_try, reread, unlinked = 0, False, set()
+        number_of_try, reread, unlinked, repeats = 0, False, set(), 0
         while number_of_try < len(tries):
             step, narrow = tries[number_of_try]
             at_step = replace(settings, step=step)
@@ -739,7 +768,7 @@ def route(board, settings, run, only=None, options=None, say=print):
             # laid, nothing of the run is kept: it is done again with that net whole, as it is from then on.
             failed = {n["net"] for n in problem["nets"] if any(m.startswith(n["key"] + ":") for m in solution.get("unrouted", []))}
             failed |= {n["net"] for n in problem["nets"] for c in solution.get("conflicts", []) if c.get("key") == n["key"]}
-            linked = {n["net"] for n in problem["nets"] if n["key"] != n["net"]}
+            linked = {n["net"] for n in problem["nets"] if n["key"].startswith(n["net"] + " | ")} - unlinked
             if failed & linked:
                 say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
                 unlinked |= failed & linked
@@ -749,7 +778,15 @@ def route(board, settings, run, only=None, options=None, say=print):
             added = board.write(solution, {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
             outcome.tracks, outcome.vias = outcome.tracks + added[0], outcome.vias + added[1]
             if solution["status"] == "routed":
-                break
+                # The new tracks may have cut a pour and parted pads it joined: those nets are joined again,
+                # against the board as it now stands.
+                cut = [n for n in board.unjoined() if n in keys or n not in open_before] if repeats < POUR_REPEATS else []
+                if not cut:
+                    break
+                say(f"parted by the new tracks, joined again: {', '.join(cut)}")
+                wanted += [n for n in cut if n not in wanted]
+                lot, reread, repeats = cut, True, repeats + 1
+                continue
             last = solution["status"]
             lot = keys
             number_of_try, reread = number_of_try + 1, True
@@ -867,8 +904,9 @@ def copper_layers(board):
 
 
 def joined_pads(connectivity, pad):
-    """The pads that copper already joins to a pad: followed from item to item through tracks and vias."""
-    found, pads, waiting = {pad.m_Uuid.AsString()}, [pad], [pad]
+    """The pads that copper already joins to a pad, followed from item to item through tracks and vias; and
+    those tracks and vias."""
+    found, pads, others, waiting = {pad.m_Uuid.AsString()}, [pad], [], [pad]
     while waiting:
         item = waiting.pop()
         for other in list(connectivity.GetConnectedTracks(item)) + list(connectivity.GetConnectedPads(item)):
@@ -877,13 +915,13 @@ def joined_pads(connectivity, pad):
                 continue
             found.add(key)
             waiting.append(other)
-            if other.Type() == pcbnew.PCB_PAD_T:
-                pads.append(other)
-    return pads
+            (pads if other.Type() == pcbnew.PCB_PAD_T else others).append(other)
+    return pads, others
 
 
-def pad_groups(board, nets=None):
-    """For each net with pads on copper (those named, if given): its groups of pads already joined."""
+def pad_groups(board, nets=None, copper=None):
+    """For each net with pads on copper (those named, if given): its groups of pads already joined. `copper`,
+    if given, is filled with the tracks and vias of each group: {net: {item's id: index of its group}}."""
     enabled = copper_layers(board)
     connectivity = board.GetConnectivity()
     by_net = {}
@@ -897,21 +935,170 @@ def pad_groups(board, nets=None):
         for pad in pads:
             if pad.m_Uuid.AsString() in seen:
                 continue
-            group = joined_pads(connectivity, pad)
+            group, others = joined_pads(connectivity, pad)
             seen.update(p.m_Uuid.AsString() for p in group)
+            if copper is not None:
+                copper.setdefault(name, {}).update((o.m_Uuid.AsString(), len(groups)) for o in others)
             groups.append(group)
         out[name] = groups
     return out
 
 
-def unjoined_nets(board, nets=None):
+def pour_groups(board, groups, of):
+    """`groups` (pad_groups) with the groups that a filled zone joins made one, and for each net with pours
+    {index of a group: [Pour]}. `of`: the group of each track and via (see pad_groups). The zones must be filled.
+
+    A piece of a zone's fill joins the pads of its net whose copper on its layer it touches (through thermal
+    spokes too; a pad it keeps clear of is not joined), and the vias and track ends of its net that stand on
+    it: those of a group of pads, and those that reach no pad but join two pieces of pour.
+    """
+    enabled = copper_layers(board)
+    name = board.GetLayerName
+    connectivity = board.GetConnectivity()
+    zones, copper = {}, {}
+    for zone in board.Zones():
+        if not zone.GetIsRuleArea() and zone.GetNetname() in groups:
+            zones.setdefault(zone.GetNetname(), []).append(zone)
+    for track in board.GetTracks():
+        if track.GetNetname() in zones:
+            copper.setdefault(track.GetNetname(), []).append(track)
+    out, pours = {}, {}
+    for net, own in groups.items():
+        if net not in zones:
+            out[net] = own
+            continue
+        # what a piece of pour can join: the groups of pads, then the clusters of copper that reach no pad
+        node = {pad.m_Uuid.AsString(): g for g, group in enumerate(own) for pad in group}
+        node.update(of.get(net, {}))
+        count = len(own)
+        for item in copper.get(net, []):
+            if item.m_Uuid.AsString() in node:
+                continue
+            waiting = [item]
+            node[item.m_Uuid.AsString()] = count
+            while waiting:
+                for other in connectivity.GetConnectedTracks(waiting.pop()):
+                    if other.m_Uuid.AsString() not in node:
+                        node[other.m_Uuid.AsString()] = count
+                        waiting.append(other)
+            count += 1
+        leader = list(range(count))
+
+        def find(g):
+            while leader[g] != g:
+                g = leader[g]
+            return g
+
+        islands = []  # (something it joins, Pour)
+        for zone in zones[net]:
+            for l in enabled:
+                if not zone.IsOnLayer(l):
+                    continue
+                fill = zone.GetFilledPolysList(l)
+                for i in range(fill.OutlineCount()):
+                    island = pcbnew.SHAPE_POLY_SET(fill.Polygon(i))
+                    box = island.BBox()
+                    touched, items = set(), 0
+                    for group in own:
+                        for pad in group:
+                            if pad.IsOnLayer(l) and box.Intersects(pad.GetBoundingBox()):
+                                both = pad_polygon(pad, l)
+                                both.BooleanIntersection(island)
+                                if both.OutlineCount() > 0:
+                                    touched.add(node[pad.m_Uuid.AsString()])
+                                    items += 1
+                    for item in copper.get(net, []):
+                        via = item.Type() == pcbnew.PCB_VIA_T
+                        if not (via or item.GetLayer() == l):
+                            continue
+                        ends = [item.GetPosition()] if via else [item.GetStart(), item.GetEnd()]
+                        if any(island.Contains(end) for end in ends):
+                            touched.add(node[item.m_Uuid.AsString()])
+                            items += 1
+                    if touched:
+                        first = find(min(touched))
+                        for g in touched:
+                            leader[find(g)] = first
+                        islands.append((first, Pour(net, name(l), rings_of(island)[0], lone=items == 1)))
+        # the groups of pads, as the pours and the loose copper have joined them
+        heads = sorted({find(g) for g in range(len(own))})
+        out[net] = [[pad for g, group in enumerate(own) if find(g) == head for pad in group] for head in heads]
+        for g, pour in islands:
+            if find(g) in heads:  # (a pour that joins no pad is nobody's)
+                pours.setdefault(net, {}).setdefault(heads.index(find(g)), []).append(pour)
+    return out, pours
+
+
+def kept_spokes(board, picture):
+    """The thermal spokes that must stay: for each pad a filled zone of its net reaches through spokes, as many
+    of them as the board asks of a pad (two unless it says otherwise), as polygons of the pad's net that other
+    nets keep their distance from. Those furthest from the pads of other nets, where a track is least wanted.
+    The zones must be filled.
+
+    A spoke is found as it is filled: the zone's copper within the gap round the pad. A pad that the zone
+    covers without a gap has none.
+    """
+    enabled = copper_layers(board)
+    name = board.GetLayerName
+    least = getattr(board.GetDesignSettings(), "m_MinResolvedSpokes", 2)
+    others = [(pad.net, pad.at) for pad in picture.pads]
+    out = []
+    for zone in board.Zones():
+        net = zone.GetNetname()
+        if zone.GetIsRuleArea() or not net:
+            continue
+        gap = zone.GetThermalReliefGap()
+        if gap <= 0:
+            continue
+        clearance = zone.GetLocalClearance()
+        clearance = max(clearance if isinstance(clearance, int) else 0, zone.GetNet().GetNetClassSlow().GetClearance())
+        for l in enabled:
+            if not zone.IsOnLayer(l):
+                continue
+            fill = zone.GetFilledPolysList(l)
+            box = fill.BBox()
+            for pad in board.GetPads():
+                if pad.GetNetname() != net or not pad.IsOnLayer(l) or not box.Intersects(pad.GetBoundingBox()):
+                    continue
+                # the ring between a fifth and four fifths of the gap from the pad
+                ring, inner = pcbnew.SHAPE_POLY_SET(), pcbnew.SHAPE_POLY_SET()
+                pad.TransformShapeToPolygon(ring, l, gap * 4 // 5, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
+                pad.TransformShapeToPolygon(inner, l, gap // 5, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
+                ring.BooleanSubtract(inner)
+                whole = ring.Area()
+                ring.BooleanIntersection(fill)
+                if ring.OutlineCount() == 0 or ring.Area() > 0.6 * whole:
+                    continue  # not reached, or covered without a gap
+                # Grown by the gap, or by the clearance the zone keeps from a track if that is more (often more
+                # than a track keeps from copper): enough for most spokes to keep their pour. More would make
+                # sure of it, and close the ways between the pads beside a ground pad.
+                ring.Inflate(max(gap, clearance), pcbnew.CORNER_STRATEGY_CHAMFER_ALL_CORNERS, pcbnew.FromMM(ARC_ERROR))
+                spokes = []
+                for rings in rings_of(ring):
+                    middle = [sum(p[0] for p in rings[0]) / len(rings[0]), sum(p[1] for p in rings[0]) / len(rings[0])]
+                    room = min((math.dist(middle, at) for other, at in others if other != net), default=math.inf)
+                    spokes.append((-room, middle, rings))
+                out.extend(Polygon(rings, name(l), net) for _, _, rings in sorted(spokes)[:max(least, KEPT_SPOKES)])
+    return out
+
+
+def joined(board, nets=None, pours=True):
+    """For each net with pads on copper (those named, if given): its groups of pads already joined, by tracks,
+    vias and pads that touch and, with `pours`, by filled zones; and the pours of each net that has them."""
+    of = {}
+    groups = pad_groups(board, nets, of)
+    return pour_groups(board, groups, of) if pours else (groups, {})
+
+
+def unjoined_nets(board, nets=None, pours=True):
     """The nets (of those named, if given) whose pads the board's copper does not all join. The board's
-    connectivity must be up to date (BuildConnectivity after adding copper)."""
-    return sorted(name for name, groups in pad_groups(board, nets).items() if len(groups) > 1)
+    connectivity must be up to date (BuildConnectivity after adding copper), and its zones filled."""
+    return sorted(name for name, groups in joined(board, nets, pours)[0].items() if len(groups) > 1)
 
 
-def read_board(board, ignored=frozenset(), nets=None):
-    """A board as a Picture. `nets`: work out the groups of joined pads for these nets only."""
+def read_board(board, ignored=frozenset(), nets=None, pours=True):
+    """A board as a Picture. `nets`: work out the groups of joined pads for these nets only. `pours`: what a
+    filled zone joins counts as joined (the zones must be filled)."""
     settings = board.GetDesignSettings()
     enabled = copper_layers(board)
     name = board.GetLayerName
@@ -998,8 +1185,11 @@ def read_board(board, ignored=frozenset(), nets=None):
         for rings in rings_of(zone.Outline()):
             picture.areas.append(Area(rings=rings, layers=on, tracks=bool(zone.GetDoNotAllowTracks()), vias=bool(zone.GetDoNotAllowVias())))
 
-    for net, groups in pad_groups(board, nets).items():
-        picture.groups[net] = [[index[p.m_Uuid.AsString()] for p in group if p.m_Uuid.AsString() in index] for group in groups]
+    groups, picture.pours = joined(board, nets, pours)
+    if pours:
+        picture.polygons.extend(kept_spokes(board, picture))
+    for net, own in groups.items():
+        picture.groups[net] = [[index[p.m_Uuid.AsString()] for p in group if p.m_Uuid.AsString() in index] for group in own]
     return picture
 
 
@@ -1031,19 +1221,24 @@ def write_back(board, solution, sizes):
 
 
 class KicadBoard:
-    """A pcbnew board as `route` uses it; it keeps the connectivity up to date with what has been written."""
+    """A pcbnew board as `route` uses it; it keeps the zones filled and the connectivity up to date with what
+    has been written. `pours`: what a filled zone joins counts as joined."""
 
-    def __init__(self, board, ignored=frozenset()):
-        self.board, self.ignored, self.stale = board, ignored, False
+    def __init__(self, board, ignored=frozenset(), pours=True):
+        self.board, self.ignored, self.pours = board, ignored, pours
+        self.zoned = pours and any(not zone.GetIsRuleArea() for zone in board.Zones())
+        self.stale = self.zoned  # (a board may come with its zones not filled)
 
     def _fresh(self):
         if self.stale:
+            if self.zoned:
+                pcbnew.ZONE_FILLER(self.board).Fill(self.board.Zones())  # new tracks cut the pours
             self.board.BuildConnectivity()
             self.stale = False
 
     def read(self, nets=None):
         self._fresh()
-        return read_board(self.board, self.ignored, nets)
+        return read_board(self.board, self.ignored, nets, self.pours)
 
     def write(self, solution, sizes):
         self.stale = True
@@ -1051,7 +1246,7 @@ class KicadBoard:
 
     def unjoined(self, nets=None):
         self._fresh()
-        return unjoined_nets(self.board, nets)
+        return unjoined_nets(self.board, nets, self.pours)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1067,6 +1262,7 @@ def main(argv=None):
     parser.add_argument("--slack", type=float, default=0.002, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
+    parser.add_argument("--pours", action="store_true", help="not yet the default: fill the zones first and count pads that a filled zone joins as joined, so that a net with a zone gets tracks only from the pads its zone does not reach")
     parser.add_argument("--no-decoupling", action="store_true", help="do not join a capacitor that stands by a pin of an IC to that pin itself")
     parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
@@ -1085,12 +1281,12 @@ def main(argv=None):
         parser.error("--step takes a number of mm, or auto")
     if not 0 <= args.bus_pull <= 10:
         parser.error("--bus-pull takes a number from 0 to 10")
-    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling)
+    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=args.pours)
     options = dict(variants=args.variants, max_states=args.max_states)
     run = lambda problem, first: run_engine(problem, args.engine, args.threads, args.problem if first else None, args.solution if first else None)
 
     board = pcbnew.LoadBoard(args.board)
-    outcome = route(KicadBoard(board, ignored_checks(args.board)), settings, run, only=names(args.nets), options=options)
+    outcome = route(KicadBoard(board, ignored_checks(args.board), settings.pours), settings, run, only=names(args.nets), options=options)
 
     if outcome.failure:
         print(outcome.failure, file=sys.stderr)

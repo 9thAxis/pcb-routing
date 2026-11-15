@@ -45,6 +45,12 @@ First version as a library.
   If a net with such links is not all laid, nothing of the run is kept and it is done again with that net
   whole. On 51 such capacitors on public boards: a via between capacitor and pin for 14 to 6 %
   (the designers: 6 %), for 1.4 % more track.
+- KiCad bridge, `--pours` (not yet the default): the zones are filled first, and pads that a filled zone joins
+  count as joined. A net with a zone gets tracks only from the pads its zone does not reach, each to the
+  nearest point of the zone; a piece of zone that new tracks cut off is joined again from its own copper, as
+  by a stitching via; the thermal spokes a pad has are copper that other nets keep clear of. On the public
+  boards with their designers' zones put back: a fifth less track, but 7 of 119 boards left incomplete and
+  20 new thermal relief errors, so it stays a choice until both are none.
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.

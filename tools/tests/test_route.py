@@ -234,7 +234,7 @@ class EngineFailure(WithEngine):
         kicad = mock.patch.multiple(support.stub_pcbnew(), create=True, LoadBoard=lambda path: mock.Mock(),
                                     SaveBoard=lambda path, b: saved.append(path), ZONE_FILLER=lambda b: mock.Mock())
         out, err = io.StringIO(), io.StringIO()
-        with kicad, mock.patch.object(k, "KicadBoard", lambda b, ignored: board), redirect_stdout(out), redirect_stderr(err):
+        with kicad, mock.patch.object(k, "KicadBoard", lambda b, ignored, pours=True: board), redirect_stdout(out), redirect_stderr(err):
             status = k.main(["in.kicad_pcb", "-o", "out.kicad_pcb", "--engine", str(engine), *more])
         return status, saved, out.getvalue(), err.getvalue()
 
