@@ -2,6 +2,7 @@
 
 use super::report::push;
 use super::*;
+use crate::geom::{dist, dist_segment};
 use crate::grid::round6;
 
 impl Engine<'_> {
@@ -108,7 +109,7 @@ impl Engine<'_> {
                         if clear < need + 1e-6 {
                             continue;
                         }
-                        let far = ((c[0] - at[0]).powi(2) + (c[1] - at[1]).powi(2)).sqrt();
+                        let far = dist(c, at);
                         if best.map_or(true, |b| far < b.0 - 1e-9) {
                             best = Some((far, cell as u32));
                         }
@@ -122,12 +123,4 @@ impl Engine<'_> {
         self.legs[k] = Some((layer, lines));
         Ok(vec![stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]])
     }
-}
-
-/// Distance from a point to a segment.
-fn dist_segment(p: Pt, a: Pt, b: Pt) -> f64 {
-    let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = vx * vx + vy * vy;
-    let t = if l2 > 0.0 { (((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    ((p[0] - a[0] - t * vx).powi(2) + (p[1] - a[1] - t * vy).powi(2)).sqrt()
 }

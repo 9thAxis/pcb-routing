@@ -46,6 +46,7 @@
 
 mod engine;
 mod error;
+mod geom;
 mod grid;
 pub mod mask;
 pub mod model;

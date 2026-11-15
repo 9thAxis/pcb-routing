@@ -6,20 +6,12 @@
 //! of any solder land, within the hole spacing of another hole, or within (via radius + margin) of a closed
 //! region. Distances are exact (to the segment, circle or polygon), not to a polygon drawn round them.
 
+use crate::geom::dist2_segment;
 use crate::grid::{Grid, EPS};
 use crate::model::*;
 
 /// Bit set in a cell of a net's mask when a via may not be placed there. Bits 0..n are the routing layers.
 pub const VIA_BIT: u8 = 0x80;
-
-fn dist2_segment(p: Pt, a: Pt, b: Pt) -> f64 {
-    let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
-    let (wx, wy) = (p[0] - a[0], p[1] - a[1]);
-    let l2 = vx * vx + vy * vy;
-    let t = if l2 > 0.0 { ((wx * vx + wy * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    let (dx, dy) = (wx - t * vx, wy - t * vy);
-    dx * dx + dy * dy
-}
 
 /// Set `bits` in every cell whose centre is within `r` of the segment a-b.
 pub(crate) fn stamp_capsule(g: &Grid, mask: &mut [u8], bits: u8, a: Pt, b: Pt, r: f64) {
@@ -113,27 +105,6 @@ fn stamp_shape(g: &Grid, mask: &mut [u8], bits: u8, shape: &Shape, grow: f64) {
         Shape::Seg { a, b, w } => stamp_capsule(g, mask, bits, *a, *b, w / 2.0 + grow),
         Shape::Circle { c, r } => stamp_capsule(g, mask, bits, *c, *c, r + grow),
         Shape::Poly { rings } => stamp_polygon(g, mask, bits, rings, grow),
-    }
-}
-
-/// True if a point lies on a shape.
-pub(crate) fn inside(shape: &Shape, p: Pt) -> bool {
-    match shape {
-        Shape::Seg { a, b, w } => dist2_segment(p, *a, *b) <= (w / 2.0) * (w / 2.0),
-        Shape::Circle { c, r } => (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= r * r,
-        Shape::Poly { rings } => {
-            let mut within = false;
-            for ring in rings {
-                let n = ring.len();
-                for k in 0..n {
-                    let (a, b) = (ring[k], ring[(k + 1) % n]);
-                    if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
-                        within = !within;
-                    }
-                }
-            }
-            within
-        }
     }
 }
 

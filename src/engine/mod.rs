@@ -207,7 +207,7 @@ impl<'a> Engine<'a> {
                             continue;
                         }
                         let q = grid.xy(c);
-                        let far = ((q[0] - t.xy[0]).powi(2) + (q[1] - t.xy[1]).powi(2)).sqrt();
+                        let far = crate::geom::dist(q, t.xy);
                         if best.is_some_and(|b| far >= b.0) {
                             continue;
                         }
@@ -215,8 +215,8 @@ impl<'a> Engine<'a> {
                         let mut on = 0u8;
                         for piece in &p.copper {
                             if piece.net.as_deref() == Some(net.net.as_str())
-                                && crate::mask::inside(&piece.shape, t.xy)
-                                && crate::mask::inside(&piece.shape, q)
+                                && crate::geom::inside(&piece.shape, t.xy)
+                                && crate::geom::inside(&piece.shape, q)
                             {
                                 on |= crate::mask::layer_bits(&p.layers, &piece.layers);
                             }

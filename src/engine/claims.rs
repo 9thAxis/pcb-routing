@@ -1,6 +1,7 @@
 //! Claims: the ground each laid net takes from the others, and where a net stands in ground another claims.
 
 use super::*;
+use crate::geom::dist2_segment;
 use crate::grid::EPS;
 
 impl Engine<'_> {
@@ -12,15 +13,11 @@ impl Engine<'_> {
         let hi = |v: f64, o: f64, n: usize| (((v + r - o) / g.step).ceil() as i64).min(n as i64 - 1);
         let (i0, i1) = (lo(a[0].min(b[0]), g.x0), hi(a[0].max(b[0]), g.x0, g.w));
         let (j0, j1) = (lo(a[1].min(b[1]), g.y0), hi(a[1].max(b[1]), g.y0, g.h));
-        let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
-        let l2 = vx * vx + vy * vy;
         let mut out = Vec::new();
         for j in j0..=j1 {
             for i in i0..=i1 {
                 let (x, y) = (g.x0 + i as f64 * g.step, g.y0 + j as f64 * g.step);
-                let t = if l2 > 0.0 { (((x - a[0]) * vx + (y - a[1]) * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-                let (dx, dy) = (x - a[0] - t * vx, y - a[1] - t * vy);
-                if dx * dx + dy * dy <= (r + EPS) * (r + EPS) {
+                if dist2_segment([x, y], a, b) <= (r + EPS) * (r + EPS) {
                     out.push(j as usize * g.w + i as usize);
                 }
             }

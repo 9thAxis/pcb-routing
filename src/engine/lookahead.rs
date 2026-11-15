@@ -8,6 +8,7 @@
 
 use super::shared::CopperFloor;
 use super::*;
+use crate::geom::octile;
 use crate::mask::VIA_BIT;
 use crate::queue::BucketQueue;
 
@@ -82,7 +83,7 @@ impl Straight {
         let mut best = f32::INFINITY;
         for &(tj, ti, layers) in &self.targets {
             let (a, b) = ((j - tj).abs() as f32, (i - ti).abs() as f32);
-            let run = (a.max(b) + (std::f32::consts::SQRT_2 - 1.0) * a.min(b)) * self.unit;
+            let run = octile(a, b) * self.unit;
             best = best.min(if layers & (1 << layer) != 0 { run } else { run + self.change });
         }
         best
@@ -105,7 +106,7 @@ impl Around {
         let (j, i) = ((cell / self.w) as i32, (cell % self.w) as i32);
         let a = (self.rows.0 - j).max(j - self.rows.1).max(0) as f32;
         let b = (self.columns.0 - i).max(i - self.columns.1).max(0) as f32;
-        (a.max(b) + (std::f32::consts::SQRT_2 - 1.0) * a.min(b)) * self.unit
+        octile(a, b) * self.unit
     }
 }
 
@@ -127,7 +128,7 @@ const TILE_BITS: usize = 4;
 fn to_box(j: i32, i: i32, b: &[i32; 4]) -> f32 {
     let a = (b[0] - j).max(j - b[1]).max(0) as f32;
     let c = (b[2] - i).max(i - b[3]).max(0) as f32;
-    a.max(c) + (std::f32::consts::SQRT_2 - 1.0) * a.min(c)
+    octile(a, c)
 }
 
 impl Tiles {
@@ -275,7 +276,7 @@ impl Engine<'_> {
             let apart = |b: &[i32; 4]| {
                 let a = (b[0] - j1).max(j0 - b[1]).max(0) as f32;
                 let c = (b[2] - i1).max(i0 - b[3]).max(0) as f32;
-                a.max(c) + (std::f32::consts::SQRT_2 - 1.0) * a.min(c)
+                octile(a, c)
             };
             let least = boxes.iter().map(apart).fold(f32::INFINITY, f32::min);
             near.push(
