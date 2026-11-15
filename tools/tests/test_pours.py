@@ -113,7 +113,8 @@ class Pours(WithEngine):
         outcome = self.route(board)
         first, second, third = self.runs()
         self.assertEqual([n["key"] for n in third["nets"]], ["SIG", "GND ~ 1"])
-        self.assertEqual(third["nets"][1]["terminals"], second["nets"][0]["terminals"])  # the pieces as they were cut
+        # the pads of the pieces as they were cut, not points of the pour
+        self.assertEqual(third["nets"][1]["terminals"], [dict(xy=[2, 2], layers=["F.Cu"]), dict(xy=[8, 8], layers=["F.Cu"])])
         self.assertEqual(third["copper"], first["copper"])  # against the board as it was before the signal
         self.assertEqual(board.written, [["SIG", "GND ~ 1"]])  # the first run's copper is gone
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 2, 0))

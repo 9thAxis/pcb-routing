@@ -999,11 +999,15 @@ def route(board, settings, run, only=None, options=None, say=print):
                 continue
             if rejoining and main is not None:
                 # A cut pour could not be joined again past the tracks that cut it (they may have shut a piece
-                # of it in). Everything laid since is taken back, and the lot is laid again with the pieces of
-                # the pour as they were cut to be joined by a track: the others then leave the way for it.
+                # of it in). Everything laid since is taken back, and the lot is laid again with the pads of
+                # the pieces as they were cut to be joined by a track, pad to pad: the others then leave the
+                # way for it. (Not from a point of the pour to another: on the pour whole again those are a
+                # step apart, and a track between them holds nothing together.)
                 taken = board.rewind(main[1])
                 outcome.tracks, outcome.vias = outcome.tracks - taken[0], outcome.vias - taken[1]
-                bridges += [dict(entry, key=f"{entry['net']} ~ {len(bridges) + k + 1}") for k, entry in enumerate(problem["nets"])]
+                by_pads = build_problem(picture, Rules.of(picture, replace(at_step, pours=False)), only=set(keys), narrow=narrow,
+                                        options=options, unlinked=set(keys))
+                bridges += [dict(entry, key=f"{entry['net']} ~ {len(bridges) + k + 1}") for k, entry in enumerate(by_pads["nets"])]
                 say(f"no way to join them past the new tracks: those are laid again, with the pieces of the pour held together: {', '.join(keys)}")
                 lot, reread, rejoining, again = list(dict.fromkeys(n["net"] for n in main[0]["nets"])), False, False, True
                 continue
