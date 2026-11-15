@@ -341,7 +341,7 @@ pub enum Status {
     Routed,
     /// Every net is laid but some are still too close to each other; see [`Solution::conflicts`].
     Conflicts,
-    /// A terminal cannot be reached at all; see [`Solution::message`].
+    /// Some terminal cannot be reached; see [`Solution::unrouted`]. The rest is laid.
     Unroutable,
 }
 
@@ -372,8 +372,12 @@ pub struct Solution {
     pub nets: Vec<NetResult>,
     /// Where nets are still too close.
     pub conflicts: Vec<Conflict>,
-    /// For an unroutable result: which net and terminal, and why.
+    /// For an unroutable result: the first of `unrouted`.
     pub message: String,
+    /// Every terminal or net that could not be joined, with the reason. Everything else is laid all the same:
+    /// a net of several terminals keeps the connections that could be made.
+    #[serde(default)]
+    pub unrouted: Vec<String>,
     /// Every attempt in brief (the solution itself is the best of them), to show what the choices were.
     #[serde(default)]
     pub attempts: Vec<Attempt>,

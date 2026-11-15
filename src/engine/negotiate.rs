@@ -102,6 +102,7 @@ impl Engine<'_> {
             score: None,
             nets: Vec::new(),
             conflicts: Vec::new(),
+            unrouted: vec![message.clone()],
             message,
             attempts: Vec::new(),
             stats: Stats::default(),
@@ -110,7 +111,7 @@ impl Engine<'_> {
             for &n in order {
                 match self.route_net(n, 0.0, true) {
                     Ok(state) => self.place(n, state),
-                    Err(e) => return fail(e, 1),
+                    Err(e) => self.unlaid.push(e),
                 }
             }
             return self.report(Status::Routed, 1, variant, String::new());
@@ -213,7 +214,7 @@ impl Engine<'_> {
         for n in rest {
             match self.route_net(n, 0.0, true) {
                 Ok(state) => self.place(n, state),
-                Err(e) => return fail(format!("with the other nets settled: {e}"), rounds),
+                Err(e) => self.unlaid.push(format!("with the other nets settled: {e}")),
             }
         }
         self.report(Status::Routed, rounds, variant, String::new())

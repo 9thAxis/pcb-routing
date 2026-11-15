@@ -171,7 +171,16 @@ impl Engine<'_> {
                 }
             }
         }
-        let status = if conflicts.is_empty() || status == Status::Unroutable { status } else { Status::Conflicts };
+        let mut unrouted: Vec<String> = self.nets.iter().flat_map(|n| n.failed.iter().cloned()).collect();
+        unrouted.extend(self.unlaid.iter().cloned());
+        let status = if !unrouted.is_empty() {
+            Status::Unroutable
+        } else if conflicts.is_empty() || status == Status::Unroutable {
+            status
+        } else {
+            Status::Conflicts
+        };
+        let message = if message.is_empty() { unrouted.first().cloned().unwrap_or_default() } else { message };
         let score = if status == Status::Routed { Some(round6(score)) } else { None };
         Solution {
             status,
@@ -181,6 +190,7 @@ impl Engine<'_> {
             nets,
             conflicts,
             message,
+            unrouted,
             attempts: Vec::new(),
             stats: Stats::default(),
         }

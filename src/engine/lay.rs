@@ -3,7 +3,7 @@
 use super::search::From;
 use super::worker::{Worker, SHUT_COST, TAKEN};
 use super::*;
-use crate::mask::{layer_bits, VIA_BIT};
+use crate::mask::VIA_BIT;
 
 impl Engine<'_> {
     /// Lay one net against the claims of the others as they stand: grow a tree from its first terminal to the
@@ -30,7 +30,11 @@ impl Engine<'_> {
             }
         }
         w.give_back(&self.shared);
-        result
+        match result {
+            // with the others fixed, a net is laid whole or not at all
+            Ok(state) if hard && !state.failed.is_empty() => Err(state.failed[0].clone()),
+            other => other,
+        }
     }
 
     pub(super) fn route_alone(&self, n: usize, present: f64, hard: bool, w: &mut Worker) -> Result<NetState, String> {
@@ -89,25 +93,21 @@ impl Engine<'_> {
             }
             w.price_holes(own_hole, net.no_vias);
         }
+        let mut state = NetState::default();
         let mut terms: Vec<(u32, u8)> = Vec::new();
-        for t in &net.terminals {
-            let cell =
-                self.grid.cell(t.xy).ok_or_else(|| format!("{}: terminal {:?} is outside the window", net.key, t.xy))?
-                    as u32;
-            let bits = layer_bits(&p.layers, &t.layers) & !self.shared.masks[n][cell as usize];
-            if bits == 0 {
-                return Err(format!(
-                    "{}: terminal {:?} is closed by fixed copper or a closed region on {:?}",
-                    net.key, t.xy, t.layers
-                ));
+        for (t, at) in self.terms[n].iter().enumerate() {
+            match at {
+                Ok(term) => terms.push(*term),
+                Err(why) => state.failed.push(format!("{}: terminal {:?} {why}", net.key, net.terminals[t].xy)),
             }
-            terms.push((cell, bits));
         }
         terms.extend_from_slice(&self.extra_terms[n]);
         if terms.len() < 2 {
-            return Err(format!("{}: fewer than two terminals", net.key));
+            if state.failed.is_empty() {
+                state.failed.push(format!("{}: fewer than two terminals", net.key));
+            }
+            return Ok(state);
         }
-        let mut state = NetState::default();
         let mut tree: Vec<u32> = Vec::new();
         let add_term = |tree: &mut Vec<u32>, t: (u32, u8)| {
             for l in 0..nl {
@@ -119,9 +119,17 @@ impl Engine<'_> {
         add_term(&mut tree, terms[0]);
         let mut joined: Vec<(u32, u8)> = vec![terms[0]];
         let mut left: Vec<(u32, u8)> = terms[1..].to_vec();
+        // connections laid before the tree was last begun anew: a later one branches from the present tree only
+        let mut islands = 0usize;
+        let mut first_of_tree = 0usize;
+        let mut begun = 0usize;
         while !left.is_empty() {
             // the sources are just terminals for the first connection, and for later ones unless the net may branch anywhere
-            let from = if net.branch_anywhere && !state.conns.is_empty() {
+            if islands > begun {
+                begun = islands;
+                first_of_tree = state.conns.len();
+            }
+            let from = if net.branch_anywhere && state.conns.len() > first_of_tree {
                 From::Copper
             } else {
                 From::Terminals(&joined[..])
@@ -129,13 +137,21 @@ impl Engine<'_> {
             let path = match self.find(n, &tree, &left, from, &holes, w) {
                 Some(path) => path,
                 None => {
+                    // What is left cannot be joined to what has been laid. It is said so, and the rest is
+                    // joined among itself as far as it goes, starting from the next terminal.
                     let at: Vec<Pt> = left.iter().map(|t| self.grid.xy(t.0 as usize)).collect();
-                    return Err(format!(
+                    state.failed.push(format!(
                         "{}: no path to {:?}{}",
                         net.key,
                         at,
                         if hard { " with the other nets fixed" } else { " past the fixed copper" }
                     ));
+                    let next = left.remove(0);
+                    tree.clear();
+                    add_term(&mut tree, next);
+                    joined = vec![next];
+                    islands += 1;
+                    continue;
                 }
             };
             let end = *path.last().unwrap();

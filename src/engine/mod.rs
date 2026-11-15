@@ -68,6 +68,8 @@ struct NetState {
     cost: f64,
     /// Track length in grid steps.
     steps: f64,
+    /// Terminals that could not be joined, each with the reason.
+    failed: Vec<String>,
     /// Copper the entry holds besides its paths, as real shapes: (layer, from, to, half width). The leg of a
     /// pair, held by the stub at its first end (see `split`).
     shapes: Vec<(usize, Pt, Pt, f64)>,
@@ -100,6 +102,10 @@ pub(crate) struct Engine<'a> {
     siblings: Vec<Vec<usize>>,
     /// Terminals an entry has besides those of the problem, as (cell, layers): the end of a pair's leg, for a stub.
     extra_terms: Vec<Vec<(u32, u8)>>,
+    /// Per net and terminal: its cell and layers, or why it cannot be reached at all.
+    terms: Vec<Vec<Result<(u32, u8), String>>>,
+    /// Nets laid with the others fixed that could not be laid, each with the reason.
+    unlaid: Vec<String>,
     /// How often each look-ahead has been asked for in this attempt: (net, goals, holes).
     asked: std::cell::RefCell<HashMap<LookKey, u32>>,
     /// Per pair, once split: the layer and the two legs as lines.
@@ -168,6 +174,68 @@ impl<'a> Engine<'a> {
             exact.push(ex);
             fixed_free.push(free);
         }
+        // Where each terminal is reached. Its own cell if a track of the net may end there; else the nearest
+        // cell on the same piece of the net's copper (a pad too near the board edge or another pad is entered
+        // where there is room), and the track then ends on that cell, not at the terminal's own point.
+        let mut terms = Vec::new();
+        for (n, net) in p.nets.iter().enumerate() {
+            let mask = &shared.masks[n];
+            let mut list = Vec::new();
+            for t in &net.terminals {
+                let wanted = crate::mask::layer_bits(&p.layers, &t.layers);
+                let Some(cell) = grid.cell(t.xy) else {
+                    list.push(Err("is outside the window".to_string()));
+                    continue;
+                };
+                let bits = wanted & !mask[cell];
+                if bits != 0 {
+                    list.push(Ok((cell as u32, bits)));
+                    continue;
+                }
+                let mut best: Option<(f64, u32, u8)> = None;
+                let reach = (2.0 / p.step).ceil() as i32;
+                let (cj, ci) = ((cell / grid.w) as i32, (cell % grid.w) as i32);
+                for dj in -reach..=reach {
+                    for di in -reach..=reach {
+                        let (j, i) = (cj + dj, ci + di);
+                        if j < 0 || i < 0 || j >= grid.h as i32 || i >= grid.w as i32 {
+                            continue;
+                        }
+                        let c = j as usize * grid.w + i as usize;
+                        let open = wanted & !mask[c];
+                        if open == 0 {
+                            continue;
+                        }
+                        let q = grid.xy(c);
+                        let far = ((q[0] - t.xy[0]).powi(2) + (q[1] - t.xy[1]).powi(2)).sqrt();
+                        if best.is_some_and(|b| far >= b.0) {
+                            continue;
+                        }
+                        // on a layer where one piece of the net's copper holds both the terminal and this cell
+                        let mut on = 0u8;
+                        for piece in &p.copper {
+                            if piece.net.as_deref() == Some(net.net.as_str())
+                                && crate::mask::inside(&piece.shape, t.xy)
+                                && crate::mask::inside(&piece.shape, q)
+                            {
+                                on |= crate::mask::layer_bits(&p.layers, &piece.layers);
+                            }
+                        }
+                        if open & on != 0 {
+                            best = Some((far, c as u32, open & on));
+                        }
+                    }
+                }
+                match best {
+                    Some((_, c, bits)) => {
+                        exact[n].remove(&(cell as u32));
+                        list.push(Ok((c, bits)));
+                    }
+                    None => list.push(Err(format!("is closed by fixed copper or a closed region on {:?}", t.layers))),
+                }
+            }
+            terms.push(list);
+        }
         Engine {
             p,
             nl,
@@ -194,6 +262,8 @@ impl<'a> Engine<'a> {
                 .collect(),
             grid,
             extra_terms: vec![Vec::new(); p.nets.len()],
+            terms,
+            unlaid: Vec::new(),
             asked: Default::default(),
             legs: vec![None; p.pairs.len()],
         }

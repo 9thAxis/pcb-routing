@@ -129,7 +129,7 @@ fn attempts(p: &Problem, variants: usize, only: Option<usize>, diagnostics: Diag
         None => (0..variants).into_par_iter().map(run).collect(),
     };
     // complete before incomplete, then fewer conflicts, then the lower score; of equals the earlier attempt
-    let rank = |s: &Solution| (s.status as u8, s.conflicts.len(), s.score.unwrap_or(f64::INFINITY));
+    let rank = |s: &Solution| (s.status as u8, s.unrouted.len() + s.conflicts.len(), s.score.unwrap_or(f64::INFINITY));
     let mut best = 0;
     for k in 1..results.len() {
         let (a, b) = (rank(&results[k]), rank(&results[best]));
