@@ -124,31 +124,51 @@ impl Engine<'_> {
         Ok(vec![stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]])
     }
 
+    /// The stub entries of pair `k`, those of the first end first.
+    pub(super) fn stubs_of(&self, k: usize) -> Vec<usize> {
+        self.p.pairs[k].stubs.iter().flatten().filter_map(|key| self.index(key).ok()).collect()
+    }
+
+    /// Take pair `k` out after its trunk could not be split: the trunk and whatever the split had begun give
+    /// up their ground, so that the nets laid after stand as if the pair were not there.
+    pub(super) fn take_out(&mut self, k: usize) {
+        if let Ok(trunk) = self.index(&self.p.pairs[k].trunk) {
+            self.place(trunk, NetState::default());
+        }
+        for n in self.stubs_of(k) {
+            self.unclaim(n);
+            self.laid.nets[n] = NetState::default();
+            self.pairs.extra_terms[n].clear();
+        }
+        self.pairs.legs[k] = None;
+    }
+
     /// Lay the four stubs of a pair, one after the other, each fixed for the next. Which goes first can decide
-    /// whether all four fit, so the orders are tried in turn until one does; if none does, the reason the last
-    /// one failed.
-    pub(super) fn lay_stubs(&mut self, four: &[usize]) -> Result<(), String> {
-        let mut last_error = String::new();
+    /// whether all four fit, so the orders are tried in turn until one does. If none does, they are laid in
+    /// the order given as far as each goes, and what is missing is listed with each.
+    pub(super) fn lay_stubs(&mut self, four: &[usize]) {
         for code in 0..24 {
             let mut ok = true;
             for n in nth_order(four, code) {
-                match self.lay_fixed(n) {
+                match self.lay_whole(n) {
                     Ok(state) => self.place(n, state),
-                    Err(e) => {
-                        last_error = e;
+                    Err(_) => {
                         ok = false;
                         break;
                     }
                 }
             }
             if ok {
-                return Ok(());
+                return;
             }
             for &n in four {
                 self.place(n, NetState::default()); // the leg an entry holds stays with it
             }
         }
-        Err(last_error)
+        for &n in four {
+            let state = self.lay_fixed(n);
+            self.place(n, state);
+        }
     }
 }
 

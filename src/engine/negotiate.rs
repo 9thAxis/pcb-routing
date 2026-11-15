@@ -5,7 +5,9 @@ use crate::Event;
 
 impl Engine<'_> {
     /// One attempt at the whole problem. `order` is the order in which the nets are laid within a round.
-    pub(crate) fn attempt(&mut self, order: &[usize], variant: usize) -> Solution {
+    ///
+    /// Returns the solution and what attempts that end alike are ranked by.
+    pub(crate) fn attempt(&mut self, order: &[usize], variant: usize) -> (Solution, f64) {
         let p = self.p;
         if !p.options.negotiate {
             return self.lay_in_turn(order, variant);
@@ -15,30 +17,23 @@ impl Engine<'_> {
         let mut rounds = 0;
         if !self.settle(&first, &mut rounds, variant) {
             if !p.options.drop_conflicts {
-                return self.report(Status::Conflicts, rounds, variant, String::new());
+                return self.report(Status::Conflicts, rounds, variant);
             }
             self.drop_conflicts(&first);
         }
         self.refine(&first);
-        let stubs = match self.lay_pairs() {
-            Ok(stubs) => stubs,
-            Err(Stuck::Split(message)) => return fail(message, rounds, variant),
-            // what was laid is given back with the failure, to show where the stubs were shut in
-            Err(Stuck::Stubs(message)) => return self.report(Status::Unroutable, rounds, variant, message),
-        };
+        let stubs = self.lay_pairs();
         self.lay_last(order, &stubs);
-        self.report(Status::Routed, rounds, variant, String::new())
+        self.report(Status::Routed, rounds, variant)
     }
 
     /// Without negotiation: each net once, in the given order, with those before it fixed.
-    fn lay_in_turn(&mut self, order: &[usize], variant: usize) -> Solution {
+    fn lay_in_turn(&mut self, order: &[usize], variant: usize) -> (Solution, f64) {
         for &n in order {
-            match self.lay_fixed(n) {
-                Ok(state) => self.place(n, state),
-                Err(e) => self.laid.unlaid.push(e),
-            }
+            let state = self.lay_fixed(n);
+            self.place(n, state);
         }
-        self.report(Status::Routed, 1, variant, String::new())
+        self.report(Status::Routed, 1, variant)
     }
 
     /// Rounds of laying the nets in conflict again until none is; true if they settled. `order` is the order of
@@ -128,7 +123,7 @@ impl Engine<'_> {
 
     /// The rounds ended with nets still too close. So that what is returned can be used, the net that stands
     /// in the most claimed ground is taken out, and so on until none is in conflict; each is then tried once
-    /// more with the others fixed, and those that still do not fit are listed.
+    /// more with the others fixed; what still does not fit is listed, and what of it does fit is kept.
     fn drop_conflicts(&mut self, order: &[usize]) {
         let mut out: Vec<usize> = Vec::new();
         loop {
@@ -145,28 +140,28 @@ impl Engine<'_> {
             out.push(n);
         }
         for n in out {
-            match self.lay_fixed(n) {
-                Ok(state) => self.place(n, state),
-                Err(e) => self.laid.unlaid.push(format!("no room left by the other nets: {e}")),
-            }
+            let state = self.lay_fixed(n);
+            self.place(n, state);
         }
     }
 
     /// Closing passes: each net is laid once more with all the others fixed, and the new path is kept only if
-    /// it is cheaper and stands in nobody's ground. Repeated until nothing improves.
+    /// it joins more of the net, or as much for less, and stands in nobody's ground. Repeated until nothing
+    /// improves; a net that found no room before is so tried again once the others have moved.
     fn refine(&mut self, order: &[usize]) {
         for _ in 0..self.p.options.refine_passes {
             let mut better = false;
             for &n in order {
-                if let Ok(state) = self.lay_fixed(n) {
-                    if state.cost < self.laid.nets[n].cost - 1e-6 {
-                        let old = self.laid.nets[n].clone();
-                        self.place(n, state);
-                        if self.trouble(n).any() {
-                            self.place(n, old);
-                        } else {
-                            better = true;
-                        }
+                let state = self.lay_fixed(n);
+                let now = &self.laid.nets[n];
+                let (missing, was_missing) = (state.failed.len(), now.failed.len());
+                if missing < was_missing || (missing == was_missing && state.cost < now.cost - 1e-6) {
+                    let old = now.clone();
+                    self.place(n, state);
+                    if self.trouble(n).any() {
+                        self.place(n, old);
+                    } else {
+                        better = true;
                     }
                 }
             }
@@ -177,24 +172,25 @@ impl Engine<'_> {
     }
 
     /// Pairs: each settled trunk becomes two legs, and the stubs that join the legs to their pads are laid
-    /// first of the nets kept for last. Returns the stub entries of all pairs.
-    fn lay_pairs(&mut self) -> Result<Vec<usize>, Stuck> {
+    /// first of the nets kept for last. A pair whose trunk cannot be split is taken out and said so; the
+    /// others go on. Returns the stub entries of all pairs.
+    fn lay_pairs(&mut self) -> Vec<usize> {
         let mut stubs: Vec<usize> = Vec::new();
         let mut fours: Vec<Vec<usize>> = Vec::new();
         for k in 0..self.p.pairs.len() {
-            let four = self.split(k).map_err(Stuck::Split)?;
-            stubs.extend_from_slice(&four);
-            fours.push(four);
+            stubs.extend(self.stubs_of(k));
+            match self.split(k) {
+                Ok(four) => fours.push(four),
+                Err(why) => {
+                    self.take_out(k);
+                    self.laid.unlaid.push(why);
+                }
+            }
         }
-        for (k, four) in fours.iter().enumerate() {
-            self.lay_stubs(four).map_err(|last_error| {
-                Stuck::Stubs(format!(
-                    "pair {}: its stubs cannot all be laid in any order; last: {last_error}",
-                    self.p.pairs[k].key
-                ))
-            })?;
+        for four in &fours {
+            self.lay_stubs(four);
         }
-        Ok(stubs)
+        stubs
     }
 
     /// The nets marked `last` (of `order`, and but for the stubs, which are laid already): each once, with
@@ -202,34 +198,8 @@ impl Engine<'_> {
     fn lay_last(&mut self, order: &[usize], stubs: &[usize]) {
         let rest: Vec<usize> = order.iter().copied().filter(|n| self.p.nets[*n].last && !stubs.contains(n)).collect();
         for n in rest {
-            match self.lay_fixed(n) {
-                Ok(state) => self.place(n, state),
-                Err(e) => self.laid.unlaid.push(format!("with the other nets settled: {e}")),
-            }
+            let state = self.lay_fixed(n);
+            self.place(n, state);
         }
-    }
-}
-
-/// Why the pairs could not be laid.
-enum Stuck {
-    /// A trunk could not be split into its legs: nothing is returned.
-    Split(String),
-    /// The stubs of a pair fit in no order.
-    Stubs(String),
-}
-
-/// An attempt that ends with nothing to show.
-fn fail(message: String, iterations: usize, variant: usize) -> Solution {
-    Solution {
-        status: Status::Unroutable,
-        iterations,
-        variant,
-        score: None,
-        nets: Vec::new(),
-        conflicts: Vec::new(),
-        unrouted: vec![message.clone()],
-        message,
-        attempts: Vec::new(),
-        stats: Stats::default(),
     }
 }

@@ -204,6 +204,10 @@ impl Engine<'_> {
             .filter(|(_, l)| self.p.nets[n].layers.contains(l))
             .map(|(c, _)| *c)
             .fold(f64::INFINITY, f64::min);
+        // A layer change is counted as free only if the net has a hole to change on for nothing. This rests on
+        // every such hole being known here: it is in `fixed_free` or in `holes`, or (for a net that may branch
+        // anywhere) it is a source of the search on every open layer, so that no path needs to change on it.
+        // A hole that was none of these would make the look-ahead too high.
         let free = !self.plan.fixed_free[n].is_empty() || !holes.is_empty();
         let change = if free && self.p.options.own_hole_free {
             0.0

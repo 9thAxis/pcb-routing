@@ -206,3 +206,54 @@ fn every_solution_survives_json() {
     let again: Problem = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
     assert_eq!(route(&again).unwrap().nets, route(&p).unwrap().nets);
 }
+
+/// With the others fixed a net used to be laid whole or not at all: one terminal out of reach cost the net
+/// the connections it could make. And the failure named only the far side, whichever side was shut in.
+#[test]
+fn what_can_be_joined_of_a_net_is_kept_when_a_terminal_is_out_of_reach() {
+    let mut a = net("a", [2.0, 3.0], [4.0, 3.0], &["F"]);
+    a["terminals"].as_array_mut().unwrap().push(json!({"xy": [8.0, 3.0], "layers": ["F"]}));
+    let mut v = small(vec![a]);
+    v["copper"] =
+        json!([{"t": "seg", "a": [5.0, -1.0], "b": [5.0, 7.0], "w": 0.2, "net": "WALL", "layers": ["F", "B"]}]);
+    for negotiate in [true, false] {
+        v["options"] = json!({"negotiate": negotiate});
+        let s = route(&problem(v.clone())).unwrap();
+        assert_eq!(s.status, Status::Unroutable);
+        assert_eq!(s.unrouted.len(), 1, "{:?}", s.unrouted);
+        assert!((s.nets[0].length_mm - 2.0).abs() < 1e-6, "negotiate {negotiate}: {} mm", s.nets[0].length_mm);
+        for side in ["[2.0, 3.0]", "[4.0, 3.0]", "[8.0, 3.0]"] {
+            assert!(s.unrouted[0].contains(side), "{} does not name {side}", s.unrouted[0]);
+        }
+    }
+}
+
+/// A net of which nothing is laid has length 0, not the -0.0 that the sum of no numbers is.
+#[test]
+fn nothing_laid_has_length_zero() {
+    let mut v = small(vec![net("a", [2.0, 3.0], [8.0, 3.0], &["F"])]);
+    v["copper"] =
+        json!([{"t": "seg", "a": [5.0, -1.0], "b": [5.0, 7.0], "w": 0.2, "net": "WALL", "layers": ["F", "B"]}]);
+    let s = route(&problem(v)).unwrap();
+    assert!(!serde_json::to_string(&s).unwrap().contains("-0.0"));
+}
+
+/// A pair whose trunk could not be laid used to end the attempt with nothing at all to show. Now the pair is
+/// said to be missing and the other nets are laid as if it were not there.
+#[test]
+fn a_pair_that_cannot_be_laid_does_not_take_the_other_nets_with_it() {
+    let mut p = pair_problem(0.05, [[1.0, 1.5], [1.0, 3.0], [9.0, 3.0], [9.0, 4.5]], [[2.0, 3.6], [8.0, 2.4]]);
+    p.copper.push(
+        serde_json::from_value(
+            json!({"t": "seg", "a": [5.0, -1.0], "b": [5.0, 7.0], "w": 0.2, "net": "WALL", "layers": ["F", "B"]}),
+        )
+        .unwrap(),
+    );
+    p.nets.push(serde_json::from_value(net("other", [1.0, 5.2], [4.0, 5.2], &["F"])).unwrap());
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Unroutable);
+    assert!(!s.unrouted.is_empty());
+    let other = s.nets.iter().find(|n| n.key == "other").expect("the other net is reported");
+    assert!((other.length_mm - 3.0).abs() < 1e-6, "{} mm", other.length_mm);
+    assert!(s.nets.iter().all(|n| n.key == "other" || n.tracks.is_empty()), "copper of the pair is left");
+}

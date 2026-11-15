@@ -129,24 +129,34 @@ fn rank(status: Status) -> u8 {
     }
 }
 
+/// Whether attempt `a` ended better than `b`: by how it ended, then the fewer connections not made and places
+/// too close, then the lower measure (see `Engine::report`).
+fn better(a: &(Solution, f64), b: &(Solution, f64)) -> bool {
+    let left = |s: &Solution| (rank(s.status), s.unrouted.len() + s.conflicts.len());
+    match left(&a.0).cmp(&left(&b.0)) {
+        std::cmp::Ordering::Less => true,
+        std::cmp::Ordering::Greater => false,
+        std::cmp::Ordering::Equal => a.1 < b.1,
+    }
+}
+
 fn attempts(p: &Problem, variants: usize, only: Option<usize>, diagnostics: Diagnostics) -> Solution {
     use rayon::prelude::*;
     let shared = Shared::new(p, diagnostics);
     let run = |v: usize| Engine::new(p, &shared).attempt(&order(p.nets.len(), v), v);
-    let results: Vec<Solution> = match only {
+    let ended: Vec<(Solution, f64)> = match only {
         Some(v) => vec![run(v)],
         None if variants == 1 => vec![run(0)],
         None => (0..variants).into_par_iter().map(run).collect(),
     };
-    // complete before incomplete, then fewer conflicts, then the lower score; of equals the earlier attempt
-    let rank = |s: &Solution| (rank(s.status), s.unrouted.len() + s.conflicts.len(), s.score.unwrap_or(f64::INFINITY));
+    // of equals the earlier attempt
     let mut best = 0;
-    for k in 1..results.len() {
-        let (a, b) = (rank(&results[k]), rank(&results[best]));
-        if (a.0, a.1) < (b.0, b.1) || ((a.0, a.1) == (b.0, b.1) && a.2 < b.2) {
+    for k in 1..ended.len() {
+        if better(&ended[k], &ended[best]) {
             best = k;
         }
     }
+    let results: Vec<Solution> = ended.into_iter().map(|(solution, _)| solution).collect();
     let brief: Vec<Attempt> = results
         .iter()
         .map(|s| Attempt {
@@ -172,6 +182,25 @@ mod tests {
     fn a_better_ending_ranks_lower() {
         assert!(rank(Status::Routed) < rank(Status::Conflicts));
         assert!(rank(Status::Conflicts) < rank(Status::Unroutable));
+    }
+
+    #[test]
+    fn attempts_that_end_alike_are_ranked_by_what_is_missing_and_then_by_the_measure() {
+        let ended = |status: Status, missing: usize, measure: f64| {
+            let mut s: Solution = serde_json::from_value(serde_json::json!({
+                "status": "routed", "iterations": 1, "variant": 0, "score": null, "nets": [], "conflicts": [], "message": ""
+            }))
+            .unwrap();
+            s.status = status;
+            s.unrouted = vec![String::new(); missing];
+            (s, measure)
+        };
+        // complete beats incomplete whatever the measure
+        assert!(better(&ended(Status::Routed, 0, 900.0), &ended(Status::Unroutable, 1, 10.0)));
+        // of two incomplete ones, the one with less missing; then the lower measure, though neither has a score
+        assert!(better(&ended(Status::Unroutable, 1, 900.0), &ended(Status::Unroutable, 2, 10.0)));
+        assert!(better(&ended(Status::Unroutable, 2, 10.0), &ended(Status::Unroutable, 2, 11.0)));
+        assert!(!better(&ended(Status::Unroutable, 2, 10.0), &ended(Status::Unroutable, 2, 10.0)));
     }
 
     #[test]

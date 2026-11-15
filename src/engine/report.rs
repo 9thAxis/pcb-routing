@@ -8,7 +8,9 @@ use crate::grid::round6;
 type Part = Option<(usize, Option<usize>)>;
 
 impl Engine<'_> {
-    pub(super) fn report(&mut self, status: Status, iterations: usize, variant: usize, message: String) -> Solution {
+    /// What the attempt has laid, as a solution, and what attempts that end alike are ranked by (the score,
+    /// which the solution itself carries only if it is complete).
+    pub(super) fn report(&mut self, status: Status, iterations: usize, variant: usize) -> (Solution, f64) {
         let p = self.p;
         let mut nets = Vec::new();
         let mut conflicts = Vec::new();
@@ -35,7 +37,8 @@ impl Engine<'_> {
                     pieces[k][leg].0.extend(tracks);
                     pieces[k][leg].1.extend(vias);
                 }
-                Some((_, None)) if split => {}
+                // a trunk stands for nothing by itself once split, or once taken out because it could not be
+                Some((_, None)) if split || self.laid.nets[n].conns.is_empty() => {}
                 _ => nets.push(NetResult {
                     key: net.key.clone(),
                     net: net.net.clone(),
@@ -55,20 +58,21 @@ impl Engine<'_> {
         } else {
             Status::Conflicts
         };
-        let message = if message.is_empty() { unrouted.first().cloned().unwrap_or_default() } else { message };
-        let score = if status == Status::Routed { Some(round6(score)) } else { None };
-        Solution {
+        let message = unrouted.first().cloned().unwrap_or_default();
+        let measure = round6(score);
+        let solution = Solution {
             status,
             iterations,
             variant,
-            score,
+            score: (status == Status::Routed).then_some(measure),
             nets,
             conflicts,
             message,
             unrouted,
             attempts: Vec::new(),
             stats: Stats::default(),
-        }
+        };
+        (solution, measure)
     }
 
     /// Per entry: what it is of a pair.
@@ -199,7 +203,8 @@ impl Engine<'_> {
 
 /// Length of some tracks together.
 fn length(tracks: &[Track]) -> f64 {
-    tracks.iter().map(|t| t.points.windows(2).map(|s| dist(s[0], s[1])).sum::<f64>()).sum()
+    // (the sum of no numbers is -0.0, which would be written so)
+    tracks.iter().map(|t| t.points.windows(2).map(|s| dist(s[0], s[1])).sum::<f64>()).sum::<f64>() + 0.0
 }
 
 /// Append a point, dropping repeats and the middle point of three in a straight line (same direction).

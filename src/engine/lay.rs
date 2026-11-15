@@ -12,9 +12,15 @@ impl Engine<'_> {
         self.lay(n, present, false)
     }
 
-    /// Lay one net with the others fixed: ground they claim is closed. The net is laid whole or not at all.
-    pub(super) fn lay_fixed(&self, n: usize) -> Result<NetState, String> {
-        let state = self.lay(n, 0.0, true);
+    /// Lay one net with the others fixed: ground they claim is closed. What could not be joined is listed in
+    /// the result, and what could be is in it all the same.
+    pub(super) fn lay_fixed(&self, n: usize) -> NetState {
+        self.lay(n, 0.0, true)
+    }
+
+    /// Lay one net with the others fixed, whole or not at all.
+    pub(super) fn lay_whole(&self, n: usize) -> Result<NetState, String> {
+        let state = self.lay_fixed(n);
         match state.failed.first() {
             Some(why) => Err(why.clone()),
             None => Ok(state),
@@ -108,14 +114,18 @@ impl Engine<'_> {
             let path = match self.find(query, w) {
                 Some(path) => path,
                 None => {
-                    // What is left cannot be joined to what has been laid. It is said so, and the rest is
-                    // joined among itself as far as it goes, starting from the next terminal.
-                    let at: Vec<Pt> = left.iter().map(|t| self.plan.grid.xy(t.cell as usize)).collect();
+                    // What is left cannot be joined to what has been laid. It is said so, with both sides (either
+                    // may be the one shut in), and the rest is joined among itself as far as it goes, starting
+                    // from the next terminal.
+                    let places = |terms: &[Term]| -> Vec<Pt> {
+                        terms.iter().map(|t| self.plan.grid.xy(t.cell as usize)).collect()
+                    };
                     state.failed.push(format!(
-                        "{}: no path to {:?}{}",
+                        "{}: no path from {:?} to any of {:?} past the fixed copper{}",
                         net.key,
-                        at,
-                        if hard { " with the other nets fixed" } else { " past the fixed copper" }
+                        places(&joined),
+                        places(&left),
+                        if hard { " and the other nets" } else { "" }
                     ));
                     let next = left.remove(0);
                     tree.clear();
