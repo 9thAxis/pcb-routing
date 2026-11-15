@@ -25,6 +25,16 @@ pub(crate) fn dist_segment(p: Pt, a: Pt, b: Pt) -> f64 {
     dist2_segment(p, a, b).sqrt()
 }
 
+/// Distance between the segments a-b and c-d (either may be a point); 0 where they cross.
+pub(crate) fn dist_segments(a: Pt, b: Pt, c: Pt, d: Pt) -> f64 {
+    let side = |p: Pt, q: Pt, r: Pt| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    let (s1, s2, s3, s4) = (side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b));
+    if s1 * s2 < 0.0 && s3 * s4 < 0.0 {
+        return 0.0;
+    }
+    dist2_segment(a, c, d).min(dist2_segment(b, c, d)).min(dist2_segment(c, a, b)).min(dist2_segment(d, a, b)).sqrt()
+}
+
 /// True if a point lies on a shape.
 pub(crate) fn inside(shape: &Shape, p: Pt) -> bool {
     match shape {
@@ -65,6 +75,18 @@ mod tests {
         assert_eq!(dist_segment([7.0, -4.0], a, b), 5.0); // beyond the second end
         assert_eq!(dist_segment([1.0, 0.0], a, b), 0.0); // on it
         assert_eq!(dist2_segment([2.0, 3.0], a, b), 9.0);
+    }
+
+    #[test]
+    fn distance_between_segments_is_between_their_nearest_points() {
+        let (a, b) = ([0.0, 0.0], [4.0, 0.0]);
+        assert_eq!(dist_segments(a, b, [1.0, 2.0], [3.0, 2.0]), 2.0); // side by side
+        assert_eq!(dist_segments(a, b, [2.0, -1.0], [2.0, 1.0]), 0.0); // crossing
+        assert_eq!(dist_segments(a, b, [2.0, 1.0], [2.0, 5.0]), 1.0); // end on
+        assert_eq!(dist_segments(a, b, [7.0, 4.0], [9.0, 9.0]), 5.0); // end to end
+        assert_eq!(dist_segments(a, b, [2.0, 3.0], [2.0, 3.0]), 3.0); // a point
+        assert_eq!(dist_segments([1.0, 1.0], [1.0, 1.0], [4.0, 5.0], [4.0, 5.0]), 5.0);
+        // two points
     }
 
     #[test]

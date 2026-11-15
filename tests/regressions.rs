@@ -279,3 +279,38 @@ fn the_end_of_a_track_at_a_pad_keeps_its_distance_from_the_next_pad() {
         }
     }
 }
+
+/// Pads that do not stand on the grid: a track used to reach each with a crooked stub from the last cell,
+/// shorter than the track is wide. Its last corner now slides so that it ends on the pad and every stretch
+/// keeps one of the eight directions; a second net beside it keeps its distance all the same.
+#[test]
+fn a_track_ends_on_a_pad_off_the_grid_without_a_stub() {
+    let a = net("a", [1.013, 1.021], [6.037, 4.018], &["F"]);
+    let b = net("b", [1.013, 1.521], [5.537, 4.518], &["F"]);
+    let s = route(&problem(small(vec![a, b]))).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    for (n, ends) in s.nets.iter().zip([[[1.013, 1.021], [6.037, 4.018]], [[1.013, 1.521], [5.537, 4.518]]]) {
+        let points = &n.tracks[0].points;
+        assert_eq!(n.tracks.len(), 1);
+        assert!(ends.contains(&points[0]) && ends.contains(points.last().unwrap()), "{points:?}");
+        for s in points.windows(2) {
+            let (dx, dy) = ((s[1][0] - s[0][0]).abs(), (s[1][1] - s[0][1]).abs());
+            assert!(dx.hypot(dy) > 0.15, "a stub in {points:?}");
+            assert!(dx < 1e-9 || dy < 1e-9 || (dx - dy).abs() < 1e-9, "a crooked stretch in {points:?}");
+        }
+    }
+    // the two tracks keep their clearance where they have moved off the grid
+    let (ta, tb) = (&s.nets[0].tracks[0].points, &s.nets[1].tracks[0].points);
+    for sa in ta.windows(2) {
+        for sb in tb.windows(2) {
+            for k in 0..=20 {
+                let f = k as f64 / 20.0;
+                let q = [sb[0][0] + (sb[1][0] - sb[0][0]) * f, sb[0][1] + (sb[1][1] - sb[0][1]) * f];
+                let (vx, vy) = (sa[1][0] - sa[0][0], sa[1][1] - sa[0][1]);
+                let t = (((q[0] - sa[0][0]) * vx + (q[1] - sa[0][1]) * vy) / (vx * vx + vy * vy)).clamp(0.0, 1.0);
+                let d = (q[0] - sa[0][0] - t * vx).hypot(q[1] - sa[0][1] - t * vy);
+                assert!(d >= 0.15 + 0.17 - 1e-9, "the tracks come within {d:.4} mm");
+            }
+        }
+    }
+}

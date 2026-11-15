@@ -1,5 +1,6 @@
 //! From the engine's cells to the tracks and vias of a solution.
 
+use super::ends::Run;
 use super::*;
 use crate::geom::dist;
 use crate::grid::round6;
@@ -20,14 +21,20 @@ impl Engine<'_> {
         // per pair and leg: the tracks and vias of its stubs
         let mut pieces: Vec<[(Vec<Track>, Vec<Pt>); 2]> =
             p.pairs.iter().map(|_| [(Vec::new(), Vec::new()), (Vec::new(), Vec::new())]).collect();
-        for (n, net) in p.nets.iter().enumerate() {
-            let tracks = self.tracks(n);
+        // a trunk that has been split has given up its claim: its legs stand for it
+        let split: Vec<bool> =
+            part.iter().map(|part| matches!(part, Some((k, None)) if self.pairs.legs[*k].is_some())).collect();
+        let mut runs: Vec<Vec<Run>> = (0..p.nets.len()).map(|n| self.runs(n)).collect();
+        let live: Vec<bool> = split.iter().map(|split| !split).collect();
+        self.meet_exactly(&mut runs, &live);
+        for ((n, net), runs) in p.nets.iter().enumerate().zip(runs) {
+            let split = split[n];
+            let tracks: Vec<Track> =
+                runs.into_iter().map(|run| Track { layer: p.layers[run.layer].clone(), points: run.points }).collect();
             let length = length(&tracks);
             // lower is better: weighted length, a via as 1 mm, and each mm over the wanted length as 100 mm
             score += net.weight * (length + 100.0 * net.max_mm.map_or(0.0, |m| (length - m).max(0.0)))
                 + self.laid.nets[n].vias.len() as f64;
-            // a trunk that has been split has given up its claim: its legs stand for it
-            let split = matches!(part[n], Some((k, None)) if self.pairs.legs[k].is_some());
             if !split {
                 self.list_conflicts(n, &mut conflicts);
             }
@@ -93,45 +100,40 @@ impl Engine<'_> {
         part
     }
 
-    /// The connections of a laid net as tracks: one per stretch on one layer, through the cell centres, ending
-    /// at the exact point of a terminal or hole where the net has one.
-    fn tracks(&self, n: usize) -> Vec<Track> {
-        let (space, p, grid) = (self.plan.space, self.p, &self.plan.grid);
+    /// The connections of a laid net as runs: one per stretch on one layer, through the cell centres, each
+    /// end with the exact point of the terminal or hole the net has there, if it has one.
+    fn runs(&self, n: usize) -> Vec<Run> {
+        let (space, grid) = (self.plan.space, &self.plan.grid);
         let fixed = &self.plan.fixed_free[n];
         let exact = &self.exact[n];
-        let point = |cell: u32| exact.get(&cell).copied();
-        let mut tracks: Vec<Track> = Vec::new();
+        // (a cell that stands on its exact point needs nothing)
+        let point = |cell: u32| exact.get(&cell).copied().filter(|e| dist(*e, grid.xy(cell as usize)) > 1e-9);
+        let mut runs: Vec<Run> = Vec::new();
         for conn in &self.laid.nets[n].conns {
             let (mut layer, first) = space.split(conn[0] as usize);
-            let mut run: Vec<Pt> = Vec::new();
-            if let Some(e) = point(first as u32) {
-                run.push(e);
-            }
-            push(&mut run, grid.xy(first));
+            let mut from = point(first as u32);
+            let mut points: Vec<Pt> = vec![grid.xy(first)];
             for pair in conn.windows(2) {
                 let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
                 if la != lb {
-                    let cell = ca as u32;
-                    let at = if fixed.contains(&cell) { point(cell).unwrap_or(grid.xy(ca)) } else { grid.xy(ca) };
-                    push(&mut run, at);
-                    if run.len() > 1 {
-                        tracks.push(Track { layer: p.layers[layer].clone(), points: std::mem::take(&mut run) });
+                    // through a hole of the net the tracks of both layers end on its exact place
+                    let at = if fixed.contains(&(ca as u32)) { point(ca as u32) } else { None };
+                    if points.len() > 1 {
+                        runs.push(Run { layer, points: std::mem::take(&mut points), want: [from, at] });
                     }
-                    run = vec![at];
+                    points = vec![grid.xy(ca)];
+                    from = at;
                     layer = lb;
                 } else {
-                    push(&mut run, grid.xy(cb));
+                    push(&mut points, grid.xy(cb));
                 }
             }
             let last = space.split(*conn.last().unwrap() as usize).1;
-            if let Some(e) = point(last as u32) {
-                push(&mut run, e);
-            }
-            if run.len() > 1 {
-                tracks.push(Track { layer: p.layers[layer].clone(), points: run });
+            if points.len() > 1 {
+                runs.push(Run { layer, points, want: [from, point(last as u32)] });
             }
         }
-        tracks
+        runs
     }
 
     /// Add where net `n` stands in ground another claims, with the nets that claim it; a track conflict once

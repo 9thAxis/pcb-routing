@@ -11,6 +11,7 @@
 //! centre of its own track or via stands in a cell claimed by another net.
 
 mod claims;
+mod ends;
 mod fixed;
 mod lay;
 mod lookahead;
