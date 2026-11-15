@@ -61,10 +61,10 @@ class WithEngine(unittest.TestCase):
         files = sorted((self.dir / "runs").glob("*.json"), key=lambda f: int(f.stem)) if (self.dir / "runs").exists() else []
         return [json.loads(f.read_text()) for f in files]
 
-    def route(self, board, **more):
+    def route(self, board, settings=None, **more):
         run = lambda problem, first: k.run_engine(problem, ENGINE)
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, k.Settings(), run, say=self.said.append, **more)
+            return k.route(board, settings or k.Settings(), run, say=self.said.append, **more)
 
 
 class TwoTries(WithEngine):

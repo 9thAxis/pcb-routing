@@ -878,7 +878,7 @@ def route(board, settings, run, only=None, options=None, say=print):
                 problem = build_problem(picture, rules, only=set(lot), narrow=narrow, options=options, unlinked=unlinked)
             keys = list(dict.fromkeys(n["net"] for n in problem["nets"]))  # (a net may have several entries)
             if not number_of_try and reread is False and not unlinked:
-                wanted += keys
+                wanted += [n for n in keys if n not in wanted]
             if not keys:
                 break
             if number_of_try and reread:
