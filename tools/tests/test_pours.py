@@ -2,7 +2,7 @@
 import unittest
 
 import support
-from test_route import WithEngine
+from test_route import FakeBoard, WithEngine
 
 k = support.bridge()
 
@@ -17,8 +17,8 @@ class PouredBoard:
     `erodes`: the point of the pour that the pad beside it is taken to is gone once the signal is laid.
     """
 
-    def __init__(self, beside=False, cuts=False, erodes=False):
-        self.beside, self.cuts, self.erodes = beside, cuts, erodes
+    def __init__(self, beside=False, cuts=False, erodes=False, more=()):
+        self.beside, self.cuts, self.erodes, self.more = beside, cuts, erodes, list(more)
         self.written, self.reads, self.taken, self.segments = [], 0, [], {}
 
     def laid(self, net):
@@ -33,6 +33,9 @@ class PouredBoard:
         pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 8, 8, part="U2"),
                 support.land(k, "SIG", 2, 12, part="U1"), support.land(k, "SIG", 8, 12, part="U2")]
         pads += [support.land(k, "GND", 14, 5, part="J1")] if self.beside else []
+        first_more = len(pads)
+        for n, net in enumerate(self.more):  # (other nets of two pads each, off to the side)
+            pads += [support.land(k, net, 2, 20 + 2 * n), support.land(k, net, 8, 20 + 2 * n)]
         halves = [[[0.0, 0.0], [10.0, 0.0], [10.0, 4.5], [0.0, 4.5]], [[0.0, 5.5], [10.0, 5.5], [10.0, 10.0], [0.0, 10.0]]]
         pours = [k.Pour("GND", "F.Cu", [ring]) for ring in (halves if self.parted() else [SQUARE])]
         on_pour = [[0], [1]] if self.parted() else [[0, 1]]
@@ -40,10 +43,13 @@ class PouredBoard:
         if self.beside and not beside:
             on_pour[-1].append(4)
         groups = {"GND": on_pour + beside, "SIG": [[2, 3]] if self.laid("SIG") else [[2], [3]]}
+        for n, net in enumerate(self.more):
+            a = first_more + 2 * n
+            groups[net] = [[a, a + 1]] if self.laid(net) else [[a], [a + 1]]
         picture = support.picture(k, pads, groups)
         picture.pours = {"GND": {g: [pour] for g, pour in enumerate(pours)}}
         picture.fills = pours
-        picture.box = [-1.0, -1.0, 16.0, 14.0]
+        picture.box = [-1.0, -1.0, 16.0, 30.0]
         return picture
 
     def write(self, solution, sizes):
@@ -58,6 +64,7 @@ class PouredBoard:
         return sorted(n for n, g in groups.items() if len(g) > 1 and (nets is None or n in nets))
 
     def on_pour(self, net, layer, at):
+        assert (net, layer) == ("GND", "F.Cu") and 0 <= at[0] <= 10 and 0 <= at[1] <= 10, (net, layer, at)
         return not (self.erodes and len(self.laid("SIG")) == 1 and not self.taken)
 
     def take_back(self, keys):
@@ -121,6 +128,46 @@ class Pours(WithEngine):
         self.assertEqual(outcome.tracks, board.segments["SIG"] + board.segments["GND ~ 1"])
 
 
+    def test_a_pour_cut_in_a_run_that_left_another_net_unjoined_counts_as_left(self):
+        board = PouredBoard(cuts=True, more=["BAD"])
+        self.stubborn(["BAD", "GND"])
+        outcome = self.route(board)
+        self.assertEqual(sorted(board.unjoined()), ["BAD", "GND"])
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 3, 2))  # GND was joined, and is not
+
+    def test_without_pours_nothing_is_rewound(self):
+        board = PouredBoard(cuts=True)
+        board.mark = board.rewind = None  # (not to be asked for)
+        self.stubborn(["GND"])
+        outcome = WithEngine.route(self, board)  # as --no-pours: GND is four pads to join, and cannot be
+        self.assertEqual((outcome.status, outcome.left), ("unroutable", 1))
+
+
+class ManyNets(FakeBoard):
+    """Nets enough for two batches, on a board without zones, with what a board with pours is asked."""
+
+    def mark(self):
+        return len(self.writes)
+
+    def rewind(self, mark):
+        raise AssertionError("nothing is to be taken back")
+
+    take_back = rewind
+
+    def on_pour(self, net, layer, at):
+        return True
+
+
+class Batches(WithEngine):
+    def test_a_net_an_earlier_batch_left_is_not_taken_for_one_parted_by_a_later(self):
+        board = ManyNets(300)
+        self.stubborn(["N000"])
+        outcome = super().route(board, settings=k.Settings(pours=True))
+        self.assertEqual([len(p["nets"]) for p in self.runs()], [150, 1, 150])  # the batch, its second try, the next batch
+        self.assertFalse([line for line in self.said if "parted" in line])
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 300, 1))
+
+
 class Parts(unittest.TestCase):
     """The copper of one entry, as the pieces that hang together."""
 
@@ -136,6 +183,19 @@ class Parts(unittest.TestCase):
         first, second = k.parts_of(laid)
         self.assertEqual((first["key"], first["of"], len(first["tracks"]), first["vias"]), ("GND # 1", "GND", 1, []))
         self.assertEqual((second["key"], len(second["tracks"]), second["vias"]), ("GND # 2", 2, [[5, 4]]))  # joined by the via
+
+    def test_a_via_in_the_middle_of_a_track_joins_it(self):
+        laid = self.laid([("F.Cu", [[0, 0], [5, 0], [10, 0]]), ("B.Cu", [[5, 0], [5, 5]])], vias=[[5, 0]])
+        self.assertEqual(len(k.parts_of(laid)), 1)
+
+    def test_a_point_of_a_pour_under_a_pad_on_the_other_side_is_an_end_on_the_pour(self):
+        picture = support.picture(k, [support.land(k, "GND", 0, 0), support.land(k, "GND", 5, 0)])  # both on F.Cu
+        terminals = [dict(xy=[0, 0], layers=["F.Cu"]), dict(xy=[5, 0], layers=["F.Cu"], piece=0), dict(xy=[5, 0], layers=["B.Cu"], piece=0)]
+        problem = dict(nets=[dict(key="GND", net="GND", terminals=terminals)])
+        on_the_pad = self.laid([("F.Cu", [[0, 0], [5, 0]])])
+        under_it = self.laid([("B.Cu", [[0, 0], [5, 0]])], vias=[[0, 0]])
+        self.assertEqual(k.pour_ends(picture, problem, k.parts_of(on_the_pad)), {})
+        self.assertEqual(k.pour_ends(picture, problem, k.parts_of(under_it)), {"GND": [("GND", "B.Cu", [5, 0])]})
 
     def test_tracks_that_cross_on_different_layers_are_apart(self):
         laid = self.laid([("F.Cu", [[0, 0], [5, 0]]), ("B.Cu", [[5, 0], [5, 5]])])
@@ -158,11 +218,11 @@ class StarvedBoard:
     ZONE = [[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], [[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]]]
     LINE = [[4.25, 4.25], [5.75, 4.25], [5.75, 5.75], [4.25, 5.75]]
 
-    def __init__(self):
-        self.written = []
+    def __init__(self, half=0.5):
+        self.written, self.half = [], half
 
     def read(self, nets=None):
-        picture = support.picture(k, [support.land(k, "GND", 5, 5, part="U1"), support.land(k, "GND", 8, 8, part="U2")], {"GND": [[0, 1]]})
+        picture = support.picture(k, [support.land(k, "GND", 5, 5, part="U1", half=self.half), support.land(k, "GND", 8, 8, part="U2")], {"GND": [[0, 1]]})
         tied = any(self.written)
         picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 2 if tied else 1, outline=[] if tied else self.LINE, fill=[] if tied else [self.ZONE]),
                             k.Thermal("GND", 1, "F.Cu", 2, 4)]
@@ -201,6 +261,20 @@ class Spokes(WithEngine):
         self.assertEqual(board.written, [])
         self.assertEqual((outcome.tied, outcome.starved), (0, ["U1 (GND, F.Cu)"]))
         self.assertEqual(self.said, ["too few spokes to their zone, and no room for a track to it: U1 (GND, F.Cu)"])
+
+    def test_a_narrower_track_is_tried_where_the_nets_own_finds_no_way(self):
+        board = StarvedBoard(half=0.15)  # a pad 0.3 mm wide; the class's track is 0.25 mm
+        self.stubborn(["GND + 0"], below=0.25)
+        outcome = self.route(board)
+        first, second = self.runs()
+        self.assertEqual((first["nets"][0]["width"], second["nets"][0]["width"]), (0.25, 0.2))
+        self.assertEqual(second["nets"][0]["terminals"], first["nets"][0]["terminals"])  # the same points again
+        self.assertEqual((outcome.tied, outcome.starved), (1, []))
+
+    def test_a_pad_the_board_came_with_starved_is_left_alone_when_other_nets_are_named(self):
+        board = StarvedBoard()
+        outcome = super().route(board, settings=k.Settings(pours=True), only={"SIG"})
+        self.assertEqual((self.runs(), outcome.tied, outcome.starved), ([], 0, []))
 
     def test_a_board_without_pours_is_not_looked_at(self):
         board = StarvedBoard()

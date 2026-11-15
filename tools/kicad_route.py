@@ -459,6 +459,10 @@ def _within(rings, p):
     return inside
 
 
+# --------------------------------------------------------------------------------------------------------------
+# Pours and spokes, as plain geometry: where a pour may be reached, which copper hangs on it, how a pad is
+# tied to it. Nothing here touches KiCad.
+
 def _apart(a, b):
     """How far apart two boxes [x0, y0, x1, y1] are; 0 if they touch or overlap."""
     return math.hypot(max(a[0] - b[2], b[0] - a[2], 0.0), max(a[1] - b[3], b[1] - a[3], 0.0))
@@ -646,7 +650,7 @@ def _on_track(p, points):
 def parts_of(laid):
     """The copper laid for one entry as the pieces that hang together: each a copy of the entry with its own
     tracks and vias, keyed `KEY # n`, with `of` the entry's key. Two tracks hang together where one ends on the
-    other on the same layer, a track and a via where the track ends on the via."""
+    other on the same layer, a track and a via where the via stands on the track."""
     tracks, vias = laid["tracks"], laid["vias"]
     leader = list(range(len(tracks) + len(vias)))
 
@@ -662,7 +666,7 @@ def parts_of(laid):
                                                      any(_on_track(p, track["points"]) for p in ends(other))):
                 leader[find(i)] = find(j)
         for j, via in enumerate(vias):
-            if any(math.dist(p, via) < 1e-6 for p in ends(track)):
+            if _on_track(via, track["points"]):
                 leader[find(i)] = find(len(tracks) + j)
     heads = sorted({find(i) for i in range(len(leader))})
     if len(heads) < 2:
@@ -676,7 +680,7 @@ def pour_ends(picture, problem, nets):
     """For each piece of laid copper (see `parts_of`) that came to end on a point of a pour (not on a pad):
     those points, as {key: [(net, layer, point)]}. A track that ends there, or a via there, is joined to the
     net only as long as the pour is."""
-    at_pads = {(pad.net, _r(pad.at[0]), _r(pad.at[1])) for pad in picture.pads}
+    at_pads = {(pad.net, _r(pad.at[0]), _r(pad.at[1]), layer) for pad in picture.pads for layer in pad.layers}
     entries = {entry["key"]: entry for entry in problem["nets"]}
     out = {}
     for copper in nets:
@@ -684,13 +688,17 @@ def pour_ends(picture, problem, nets):
         points = lambda layer: [p for track in copper["tracks"] if track["layer"] == layer for p in (track["points"][0], track["points"][-1])] + copper["vias"]
         for terminal in entry["terminals"]:
             at = terminal["xy"]
-            if "piece" not in terminal or (entry["net"], _r(at[0]), _r(at[1])) in at_pads:
+            if "piece" not in terminal:
                 continue
             for layer in terminal["layers"]:
-                if any(math.dist(at, p) < 1e-6 for p in points(layer)):
+                # (a pad of the net there on that layer is no point of a pour; under a pad on another layer is)
+                if (entry["net"], _r(at[0]), _r(at[1]), layer) not in at_pads and any(math.dist(at, p) < 1e-6 for p in points(layer)):
                     out.setdefault(copper["key"], []).append((entry["net"], layer, at))
     return out
 
+
+# --------------------------------------------------------------------------------------------------------------
+# The problem itself.
 
 TIE_ROUNDS = 3  # how often pads with too few spokes are given a track of their own to their zone
 POUR_REPEATS = 3  # how often nets that new tracks have parted from their pour are joined again
@@ -920,6 +928,8 @@ def route(board, settings, run, only=None, options=None, say=print):
     picture = board.read(only)
     names = picture.unjoined(only)
     open_before = set(board.unjoined())  # nets that are not this run's to join, or were not joined to begin with
+    starved_before = {(t.pad, t.layer) for t in picture.thermals if t.spokes < t.least}
+    given_up = set()  # nets that an earlier batch left unjoined
     lots = batches(names)
     if len(lots) > 1:
         say(f"{len(names)} nets to join, more than the engine takes in one run: routed in {len(lots)} batches of at most "
@@ -934,13 +944,13 @@ def route(board, settings, run, only=None, options=None, say=print):
         # For pours that new tracks cut: the last run of the lot's own nets, as (its problem, where the board's
         # record stood before it, its picture); whether the present run is one that joins a cut pour again;
         # the entries that hold cut pours together; and whether the lot's run is to be done again with those.
-        main, rejoining, bridges, again = None, False, [], False
+        base, rejoining, bridges, again = None, False, [], False
         while number_of_try < len(tries):
             step, narrow = tries[number_of_try]
             at_step = replace(settings, step=step)
             if again:
-                picture = main[2]
-                problem = dict(main[0], nets=[n for n in main[0]["nets"] if " ~ " not in n["key"]] + bridges)
+                picture = base[2]
+                problem = dict(base[0], nets=[n for n in base[0]["nets"] if " ~ " not in n["key"]] + bridges)
             else:
                 if reread:
                     # what could not be joined is tried once more against the board as it now stands
@@ -997,37 +1007,41 @@ def route(board, settings, run, only=None, options=None, say=print):
                 # The new tracks may have cut a pour and parted pads it joined: those nets are joined again,
                 # against the board as it now stands.
                 # (any net of this lot so far, or one that was joined before the run began)
-                cut = [n for n in board.unjoined() if n in wanted or n not in open_before] if repeats < POUR_REPEATS else []
+                cut = [n for n in board.unjoined() if (n in wanted or n not in open_before) and n not in given_up] if repeats < POUR_REPEATS else []
                 if not cut:
                     break
                 if not rejoining:
-                    main = (problem, mark, picture)
+                    base = (problem, mark, picture)
                 say(f"parted by the new tracks, joined again: {', '.join(cut)}")
                 wanted += [n for n in cut if n not in wanted]
                 lot, reread, repeats, rejoining, again = cut, True, repeats + 1, True, False
                 continue
-            if rejoining and main is not None:
+            if rejoining and base is not None and settings.pours and len(base[0]["nets"]) + len(bridges) + len(problem["nets"]) < ENGINE_NETS:
                 # A cut pour could not be joined again past the tracks that cut it (they may have shut a piece
                 # of it in). Everything laid since is taken back, and the lot is laid again with the pads of
                 # the pieces as they were cut to be joined by a track, pad to pad: the others then leave the
                 # way for it. (Not from a point of the pour to another: on the pour whole again those are a
                 # step apart, and a track between them holds nothing together.)
-                taken = board.rewind(main[1])
+                taken = board.rewind(base[1])
                 outcome.tracks, outcome.vias = outcome.tracks - taken[0], outcome.vias - taken[1]
                 by_pads = build_problem(picture, Rules.of(picture, replace(at_step, pours=False)), only=set(keys), narrow=narrow,
                                         options=options, unlinked=set(keys))
                 bridges += [dict(entry, key=f"{entry['net']} ~ {len(bridges) + k + 1}") for k, entry in enumerate(by_pads["nets"])]
                 say(f"no way to join them past the new tracks: those are laid again, with the pieces of the pour held together: {', '.join(keys)}")
-                lot, reread, rejoining, again = list(dict.fromkeys(n["net"] for n in main[0]["nets"])), False, False, True
+                lot, reread, rejoining, again = list(dict.fromkeys(n["net"] for n in base[0]["nets"])), False, False, True
                 continue
-            again = False
+            # (the next try is for what is left, against the board as it stands: nothing of this one is laid again)
+            base, rejoining, bridges, again = None, False, [], False
             last = solution["status"]
             lot = keys
             number_of_try, reread = number_of_try + 1, True
         if outcome.failure:
             break
+        given_up = set(board.unjoined(set(wanted))) if wanted else set()
     if settings.pours and not outcome.failure:
-        tie_starved(board, settings, run, outcome, only, options, say)
+        tie_starved(board, settings, run, outcome, only, starved_before, options, say)
+    # (a net that was joined and that the new tracks parted for good is one left unjoined, as much as any)
+    wanted += [n for n in board.unjoined() if n not in open_before and n not in wanted] if wanted else []
     outcome.wanted = len(wanted)
     # the board has the last word: a net is joined when its pads are
     outcome.left = len(board.unjoined(set(wanted))) if wanted else 0
@@ -1035,26 +1049,29 @@ def route(board, settings, run, only=None, options=None, say=print):
     return outcome
 
 
-def tie_starved(board, settings, run, outcome, only=None, options=None, say=print):
-    """Give every pad that is tied to its zone by fewer spokes than the board asks for (of the nets named in
-    `only`, if given) a straight track from its middle into the zone, where one fits: that is a tie as good
-    as a spoke, and counted as one. Tracks of other nets across its spokes are what starve a pad; one that
-    the board came with is tied as well. What was done and what could not be is noted in `outcome`."""
+def tie_starved(board, settings, run, outcome, only=None, before=frozenset(), options=None, say=print):
+    """Give every pad that is tied to its zone by fewer spokes than the board asks for a straight track from
+    its middle into the zone, where one fits: that is a tie as good as a spoke, and counted as one. Tracks of
+    other nets across its spokes are what starve a pad: one that this run starved is tied whatever its net;
+    one that the board came with (`before`: those, as (pad, layer)) is tied as well, if its net is among
+    those named in `only` or none are named. What was done and what could not be is noted in `outcome`."""
     name = lambda picture, thermal: f"{picture.pads[thermal.pad].part or '?'} ({thermal.net}, {thermal.layer})"
-    starved_of = lambda picture: [t for t in picture.thermals if t.spokes < t.least and (only is None or t.net in only)]
+    ours = lambda t: (t.pad, t.layer) not in before or only is None or t.net in only
+    routed_on = lambda picture: Rules.of(picture, settings).routing_layers(picture.layers)
+    starved_of = lambda picture: [t for t in picture.thermals if t.spokes < t.least and ours(t) and t.layer in routed_on(picture)]
     tried = collections.defaultdict(list)  # (pad, layer) -> the points of its zone already tried
     for round_ in range(TIE_ROUNDS + 1):
-        picture = board.read(only)
+        picture = board.read()
         starved = starved_of(picture)
         if not starved or round_ == TIE_ROUNDS:
             break
         rules = Rules.of(picture, settings)
         rules = Rules.of(picture, replace(settings, step=rules.step({t.net for t in starved})))
         stubs = []
-        for thermal in starved[:ENGINE_NETS - 1]:
+        for thermal in starved:
             inset = _r(rules.track_width(thermal.net) / 2 + 0.1)
             targets = stub_targets(thermal, picture.pads[thermal.pad].at, inset, tried[thermal.pad, thermal.layer])
-            if targets:
+            if targets and len(stubs) < ENGINE_NETS - 1:
                 stubs.append((f"{thermal.net} + {len(stubs)}", thermal, targets))
         if not stubs:
             break  # (nothing left to try: `starved` is what stays so)
@@ -1072,8 +1089,11 @@ def tie_starved(board, settings, run, outcome, only=None, options=None, say=prin
             tracks = laid.get(key, {}).get("tracks", [])
             if len(tracks) == 1 and not laid[key].get("vias") and ties(thermal, tracks[0]["points"]):
                 kept.append(laid[key])
-            tried[thermal.pad, thermal.layer] += [tracks[0]["points"][-1]] if tracks else targets
-            tried[thermal.pad, thermal.layer] += [t for t in targets if tracks and math.dist(t, tracks[0]["points"][-1]) < 2 * rules.settings.step]
+            # A point is not given again once a track has been laid to it that does not tie, nor any once a
+            # narrower track has found no way to any of them. (A track's ends, whichever way round it is.)
+            ends = [p for track in tracks for p in (track["points"][0], track["points"][-1])]
+            reached = [t for t in targets if any(math.dist(t, p) < 2 * rules.settings.step for p in ends)]
+            tried[thermal.pad, thermal.layer] += reached if tracks else targets if round_ > 0 else []
         if kept:
             added = board.write(dict(solution, nets=kept), {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
             outcome.tracks, outcome.tied = outcome.tracks + added[0], outcome.tied + len(kept)
@@ -1408,8 +1428,11 @@ def thermals(board, index):
                     alone[i] = count < 2
                 return alone[i]
 
+            whole = fill.BBox()
             for pad in pads.get(net, []):
                 if not (pad.IsOnLayer(l) and pad.FlashLayer(l)) or zone_connection(zone, pad) != pcbnew.ZONE_CONNECTION_THERMAL:
+                    continue
+                if not islands or not whole.Intersects(pad.GetBoundingBox()):
                     continue
                 gap = thermal_gap(zone, pad)
                 if gap <= 0 or pad.m_Uuid.AsString() not in index:

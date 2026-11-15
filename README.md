@@ -24,7 +24,7 @@ The bridge ([`tools/kicad_route.py`](https://github.com/9thAxis/pcb-routing/blob
 repository, not in the crate on crates.io. It runs under the Python that ships with KiCad (9 or 10; the path
 above is the macOS one). It reads pads, tracks, vias, holes, the outline, rule areas and the net classes, routes every
 net whose pads are not yet joined, writes the tracks and vias back and refills the zones. What is already
-routed is kept and routed around. `--nets A,B` routes only those nets; `--layers F.Cu,B.Cu` restricts the
+routed is kept and routed around, and what a filled zone joins is left to the zone (see below). `--nets A,B` routes only those nets; `--layers F.Cu,B.Cu` restricts the
 layers; `--coarse-first` trades a little quality for about three times the speed. `--help` lists the rest.
 
 ## How it compares
@@ -164,8 +164,8 @@ Things other routers have and this one does not, roughly in order of how often t
   minimisation as a pass, no smoothing off the grid. FreeRouting has an optimiser.
 * **Routing off the grid, arcs, teardrops.** But for their ends on pads, tracks run through cell centres
   (0.025 to 0.1 mm apart), so a crowded board loses a little room that a gridless router keeps.
-* **KiCad's custom rule language and planes.** The bridge reads net classes, board minima, pad clearances and
-  rule areas, not custom rules; a net meant to be joined by a zone is routed as tracks unless left out.
+* **KiCad's custom rule language.** The bridge reads net classes, board minima, pad clearances, rule areas
+  and zones, not custom rules.
 * **A design rule check of its own.** Use the CAD program's.
 * **Size.** At most seven routing layers and 249 nets per run (the bridge routes larger boards in batches),
   and memory grows with the grid: about 200 bytes per cell and layer for each attempt running at once.
@@ -214,11 +214,13 @@ Every field is documented on the types in `src/model.rs`. In short:
 
 * `window`, `step`, routing `layers` (at most seven);
 * `copper` already on the board (shapes `seg`, `circle`, `poly`, with net and layers; `pad` for solder lands);
-* `holes` already on the board; `regions` closed to tracks and/or vias;
+* `holes` already on the board; `regions` closed to tracks and/or vias; `dear` ground, open but at a price
+  (a factor on the length of track in it; nothing more for the net it belongs to);
 * `rules`: hole spacing, clearance between new nets, a larger clearance between `quiet` nets and others,
   whether a via may stand in a land of its own net;
-* `nets`: key, electrical net, width, via, layers, clearance to existing copper, terminals, via penalty, layer
-  costs, `yield` (how readily it gives way), `max_mm` and `weight` (for ranking attempts), `last`, `no_vias`, `bus` and `bus_lane` (the
+* `nets`: key, electrical net, width, via, layers, clearance to existing copper, terminals (those that
+  share a `piece` number stand on one piece of copper already, and the net is joined to it at whichever comes
+  cheapest), via penalty, layer costs, `yield` (how readily it gives way), `max_mm` and `weight` (for ranking attempts), `last`, `no_vias`, `bus` and `bus_lane` (the
   bus it runs with and its place across it);
 * `pairs`: two nets laid side by side;
 * `options`: rounds, corner cost, number of attempts, threads, the largest grid accepted, how strongly the
