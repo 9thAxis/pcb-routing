@@ -35,6 +35,26 @@ pub(crate) fn dist_segments(a: Pt, b: Pt, c: Pt, d: Pt) -> f64 {
     dist2_segment(a, c, d).min(dist2_segment(b, c, d)).min(dist2_segment(c, a, b)).min(dist2_segment(d, a, b)).sqrt()
 }
 
+/// Append a point to a line, dropping repeats and the middle point of three in a straight line (same direction).
+pub(crate) fn push(run: &mut Vec<Pt>, p: Pt) {
+    if let Some(last) = run.last() {
+        if (last[0] - p[0]).abs() < 1e-9 && (last[1] - p[1]).abs() < 1e-9 {
+            return;
+        }
+    }
+    run.push(p);
+    while run.len() >= 3 {
+        let (a, b, c) = (run[run.len() - 3], run[run.len() - 2], run[run.len() - 1]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        if (u[0] * v[1] - u[1] * v[0]).abs() < 1e-7 && u[0] * v[0] + u[1] * v[1] > 0.0 {
+            let n = run.len();
+            run.remove(n - 2);
+        } else {
+            break;
+        }
+    }
+}
+
 /// True if a point lies on a shape.
 pub(crate) fn inside(shape: &Shape, p: Pt) -> bool {
     match shape {
@@ -75,6 +95,15 @@ mod tests {
         assert_eq!(dist_segment([7.0, -4.0], a, b), 5.0); // beyond the second end
         assert_eq!(dist_segment([1.0, 0.0], a, b), 0.0); // on it
         assert_eq!(dist2_segment([2.0, 3.0], a, b), 9.0);
+    }
+
+    #[test]
+    fn points_in_a_straight_line_are_one_segment() {
+        let mut run = Vec::new();
+        for q in [[0.0, 0.0], [0.1, 0.0], [0.1, 0.0], [0.2, 0.0], [0.3, 0.1], [0.4, 0.2], [0.4, 0.3]] {
+            push(&mut run, q);
+        }
+        assert_eq!(run, vec![[0.0, 0.0], [0.2, 0.0], [0.4, 0.2], [0.4, 0.3]]);
     }
 
     #[test]

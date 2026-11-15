@@ -2,7 +2,7 @@
 
 use super::ends::Run;
 use super::*;
-use crate::geom::dist;
+use crate::geom::{dist, push};
 use crate::grid::round6;
 
 /// What an entry is of a pair, if anything: (pair, leg) for a stub, (pair, None) for the trunk.
@@ -25,12 +25,14 @@ impl Engine<'_> {
         let split: Vec<bool> =
             part.iter().map(|part| matches!(part, Some((k, None)) if self.pairs.legs[*k].is_some())).collect();
         let mut runs: Vec<Vec<Run>> = (0..p.nets.len()).map(|n| self.runs(n)).collect();
-        let live: Vec<bool> = split.iter().map(|split| !split).collect();
-        self.meet_exactly(&mut runs, &live);
+        self.meet_exactly(&mut runs, &split);
         for ((n, net), runs) in p.nets.iter().enumerate().zip(runs) {
             let split = split[n];
-            let tracks: Vec<Track> =
-                runs.into_iter().map(|run| Track { layer: p.layers[run.layer].clone(), points: run.points }).collect();
+            let tracks: Vec<Track> = runs
+                .into_iter()
+                .filter(|run| run.points.len() > 1)
+                .map(|run| Track { layer: p.layers[run.layer].clone(), points: run.points })
+                .collect();
             let length = length(&tracks);
             // lower is better: weighted length, a via as 1 mm, and each mm over the wanted length as 100 mm
             score += net.weight * (length + 100.0 * net.max_mm.map_or(0.0, |m| (length - m).max(0.0)))
@@ -101,37 +103,44 @@ impl Engine<'_> {
     }
 
     /// The connections of a laid net as runs: one per stretch on one layer, through the cell centres, each
-    /// end with the exact point of the terminal or hole the net has there, if it has one.
+    /// end with the exact point of what the net has there on that layer (a terminal, a hole, the end of a
+    /// pair's leg), if it has one. A stretch of one cell is a run too where it has such a point: the pad the
+    /// net changes layer in.
     fn runs(&self, n: usize) -> Vec<Run> {
         let (space, grid) = (self.plan.space, &self.plan.grid);
         let fixed = &self.plan.fixed_free[n];
         let exact = &self.exact[n];
-        // (a cell that stands on its exact point needs nothing)
-        let point = |cell: u32| exact.get(&cell).copied().filter(|e| dist(*e, grid.xy(cell as usize)) > 1e-9);
+        let terms = || self.plan.terms[n].iter().flatten().chain(&self.pairs.extra_terms[n]);
+        // (a cell that stands on its exact point needs nothing; a pad of another layer is not met on this one)
+        let point = |layer: usize, cell: usize| {
+            let here = fixed.contains(&(cell as u32)) || terms().any(|t| t.cell as usize == cell && t.on(layer));
+            exact.get(&(cell as u32)).copied().filter(|e| here && dist(*e, grid.xy(cell)) > 1e-9)
+        };
         let mut runs: Vec<Run> = Vec::new();
+        let mut end = |layer: usize, points: Vec<Pt>, want: [Option<Pt>; 2]| {
+            if points.len() > 1 || want[0].is_some() {
+                runs.push(Run { layer, points, want });
+            }
+        };
         for conn in &self.laid.nets[n].conns {
             let (mut layer, first) = space.split(conn[0] as usize);
-            let mut from = point(first as u32);
+            let mut from = point(layer, first);
             let mut points: Vec<Pt> = vec![grid.xy(first)];
             for pair in conn.windows(2) {
                 let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
                 if la != lb {
-                    // through a hole of the net the tracks of both layers end on its exact place
-                    let at = if fixed.contains(&(ca as u32)) { point(ca as u32) } else { None };
-                    if points.len() > 1 {
-                        runs.push(Run { layer, points: std::mem::take(&mut points), want: [from, at] });
-                    }
+                    let last = if points.len() > 1 { point(la, ca) } else { None };
+                    end(layer, std::mem::take(&mut points), [from, last]);
                     points = vec![grid.xy(ca)];
-                    from = at;
+                    from = point(lb, ca);
                     layer = lb;
                 } else {
                     push(&mut points, grid.xy(cb));
                 }
             }
             let last = space.split(*conn.last().unwrap() as usize).1;
-            if points.len() > 1 {
-                runs.push(Run { layer, points, want: [from, point(last as u32)] });
-            }
+            let to = if points.len() > 1 { point(layer, last) } else { None };
+            end(layer, points, [from, to]);
         }
         runs
     }
@@ -209,38 +218,9 @@ fn length(tracks: &[Track]) -> f64 {
     tracks.iter().map(|t| t.points.windows(2).map(|s| dist(s[0], s[1])).sum::<f64>()).sum::<f64>() + 0.0
 }
 
-/// Append a point, dropping repeats and the middle point of three in a straight line (same direction).
-pub(super) fn push(run: &mut Vec<Pt>, p: Pt) {
-    if let Some(last) = run.last() {
-        if (last[0] - p[0]).abs() < 1e-9 && (last[1] - p[1]).abs() < 1e-9 {
-            return;
-        }
-    }
-    run.push(p);
-    while run.len() >= 3 {
-        let (a, b, c) = (run[run.len() - 3], run[run.len() - 2], run[run.len() - 1]);
-        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
-        if (u[0] * v[1] - u[1] * v[0]).abs() < 1e-7 && u[0] * v[0] + u[1] * v[1] > 0.0 {
-            let n = run.len();
-            run.remove(n - 2);
-        } else {
-            break;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn points_in_a_straight_line_are_one_segment() {
-        let mut run = Vec::new();
-        for q in [[0.0, 0.0], [0.1, 0.0], [0.1, 0.0], [0.2, 0.0], [0.3, 0.1], [0.4, 0.2], [0.4, 0.3]] {
-            push(&mut run, q);
-        }
-        assert_eq!(run, vec![[0.0, 0.0], [0.2, 0.0], [0.4, 0.2], [0.4, 0.3]]);
-    }
 
     #[test]
     fn length_is_summed_over_all_tracks() {

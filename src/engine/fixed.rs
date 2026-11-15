@@ -15,6 +15,7 @@
 
 use super::shared::Counters;
 use super::DIRS;
+use crate::geom::dist;
 use crate::grid::Grid;
 use crate::mask::{free_cells, stamp_fixed, stamp_reach, Rect, Things, VIA_BIT};
 use crate::model::*;
@@ -211,6 +212,17 @@ impl<'p> Fixed<'p> {
             },
         );
         Some(mask[0])
+    }
+
+    /// Whether a track of net `n` may run from `a` to `b`, anywhere, on all of `layers` (a bit each). Tested
+    /// every eighth of a step: between two tests the track comes no nearer anything than a hair.
+    pub(super) fn open_along(&self, n: usize, a: Pt, b: Pt, layers: u8) -> bool {
+        let pieces = (dist(a, b) / (self.grid.step / 8.0)).ceil().max(1.0) as usize;
+        (0..=pieces).all(|k| {
+            let f = k as f64 / pieces as f64;
+            let at = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+            self.mask_at(n, at).is_some_and(|mask| mask & layers == 0)
+        })
     }
 
     /// The directions in which net `n` can take a step from a cell on a layer past the fixed copper, a bit

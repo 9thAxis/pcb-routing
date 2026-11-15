@@ -37,7 +37,7 @@ pub(crate) struct Diagnostics {
 }
 
 /// The kinds of work whose time is kept.
-pub(super) const CLOCK_NAMES: [&str; 8] = [
+pub(super) const CLOCK_NAMES: [&str; 9] = [
     "cost tables",
     "look-ahead to copper",
     "first pass",
@@ -46,12 +46,13 @@ pub(super) const CLOCK_NAMES: [&str; 8] = [
     "conflict test",
     "masks",
     "fixed look-ahead",
+    "ends",
 ];
 
 /// Counters of one run, all attempts together.
 #[derive(Default)]
 pub(super) struct Counters {
-    nanos: [AtomicU64; 8],
+    nanos: [AtomicU64; 9],
     pub(super) expanded: AtomicU64,
     pub(super) swept: AtomicU64,
     pub(super) mismatches: AtomicU64,

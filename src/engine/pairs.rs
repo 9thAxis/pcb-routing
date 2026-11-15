@@ -1,7 +1,7 @@
 //! Pairs: a settled trunk becomes two legs, each joined to its pads by stubs.
 
-use super::report::push;
 use super::*;
+use crate::geom::push;
 use crate::geom::{dist, dist_segment};
 use crate::grid::round6;
 

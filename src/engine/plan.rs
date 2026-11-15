@@ -107,15 +107,7 @@ impl Plan {
 /// cells are tested at their centres only, and the last piece of a track, off the grid, can come nearer a
 /// neighbouring pad than the centre does (a track wider than its own pad, on pads at a fine pitch).
 fn reaches_clear(fixed: &Fixed, grid: &Grid, n: usize, cell: usize, xy: Pt) -> bool {
-    let from = grid.xy(cell);
-    let open = !fixed.mask(n, cell) & !VIA_BIT;
-    // tested every eighth of a step: between two tests the track comes no nearer than a hair
-    let pieces = (dist(from, xy) / (grid.step / 8.0)).ceil().max(1.0) as usize;
-    (1..=pieces).all(|k| {
-        let f = k as f64 / pieces as f64;
-        let at = [from[0] + (xy[0] - from[0]) * f, from[1] + (xy[1] - from[1]) * f];
-        fixed.mask_at(n, at).is_some_and(|mask| mask & open == 0)
-    })
+    fixed.open_along(n, grid.xy(cell), xy, !fixed.mask(n, cell) & !VIA_BIT)
 }
 
 /// Where a terminal of `net` is reached, or why it cannot be. Its own cell if a track of the net may end there

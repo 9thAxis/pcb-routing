@@ -7,23 +7,32 @@
 //! is tested against everything the track must keep away from, as it lies and off the grid; where it may not
 //! move, or something of the net joins it where it would, the stub is laid as before.
 
-use super::report::push;
 use super::*;
-use crate::geom::{dist, dist_segment, dist_segments};
+use crate::geom::{dist, dist_segment, dist_segments, push};
+use crate::grid::round6;
 
 /// A stretch of track of a net on one layer, and for each of its ends the exact place it is to end at where
-/// that is not the cell centre it ends on.
+/// that is not the cell centre it ends on. Of one point: no track yet, only the cell a point is to be met from.
 pub(super) struct Run {
     pub(super) layer: usize,
     pub(super) points: Vec<Pt>,
     pub(super) want: [Option<Pt>; 2],
 }
 
-/// The runs of all entries as they lie, and per entry whether its runs are copper of the result (those of a
-/// trunk that has been split are not).
+/// The runs of all entries as they lie, and per entry whether its runs are no copper of the result (those of
+/// a trunk that has been split).
 struct Copper<'a> {
     runs: &'a [Vec<Run>],
-    live: &'a [bool],
+    dead: &'a [bool],
+}
+
+/// A place where copper of a net begins or ends, which a track that passes there must keep passing.
+struct Join {
+    at: Pt,
+    /// The layer of a run's end; None for a via, which is on all.
+    layer: Option<usize>,
+    /// The end of a run that is itself to be ended on the exact place of its cell.
+    follows: bool,
 }
 
 /// The points with the last moved to `to` and no corner added: the last corner slid along the stretch before
@@ -40,7 +49,8 @@ fn moved(points: &[Pt], to: Pt, least: f64) -> Option<Vec<Pt>> {
     let (l1, l2) = (dist(v, c), dist(u, v));
     let (d1, d2) = ([(c[0] - v[0]) / l1, (c[1] - v[1]) / l1], [(v[0] - u[0]) / l2, (v[1] - u[1]) / l2]);
     let cross = d1[0] * d2[1] - d1[1] * d2[0];
-    if cross.abs() < 1e-9 {
+    // (stretches of the grid are 45 degrees apart at least; nearly in line, the corner would slide far)
+    if cross.abs() < 0.5 {
         return None;
     }
     // the way from the cell to the point, as so much along the last stretch and so much along the one before
@@ -50,38 +60,52 @@ fn moved(points: &[Pt], to: Pt, least: f64) -> Option<Vec<Pt>> {
     if l1 + along_last < least || l2 + along_before < least {
         return None;
     }
-    out[n - 2] = [v[0] + along_before * d2[0], v[1] + along_before * d2[1]];
+    out[n - 2] = [round6(v[0] + along_before * d2[0]), round6(v[1] + along_before * d2[1])];
     Some(out)
 }
 
-/// True if `q` lies on the segment a-b.
-fn on(q: Pt, a: Pt, b: Pt) -> bool {
-    dist_segment(q, a, b) < 1e-6
+/// True if `q` lies on the line through `points`.
+fn on(q: Pt, points: &[Pt]) -> bool {
+    points.windows(2).any(|s| dist_segment(q, s[0], s[1]) < 1e-6)
 }
 
 impl Engine<'_> {
-    /// End every run on the exact places it wants, moving it where that is allowed and with a stub where not.
-    /// `live`: per entry, whether its runs are copper of the result (those of a trunk that has been split are not).
-    pub(super) fn meet_exactly(&self, runs: &mut [Vec<Run>], live: &[bool]) {
+    /// End every run on the exact places it wants: by moving it where that is allowed, with a stub where the
+    /// stub is, and on its cell where neither is and the cell is in the pad all the same. `dead`: per entry, whether its runs are no copper of the
+    /// result; those get their stubs unasked.
+    pub(super) fn meet_exactly(&self, runs: &mut [Vec<Run>], dead: &[bool]) {
+        let _t = self.shared.timed(8);
         // a stretch shorter than this is not worth keeping for the sake of its direction
         let least = self.plan.grid.step / 2.0;
+        let joins: Vec<Vec<Join>> = (0..runs.len()).map(|n| self.joins(n, &runs[n])).collect();
         for n in 0..runs.len() {
-            // where other copper of the net joins: there a track must stay
-            let joins: Vec<Pt> = if live[n] { self.joins(n, runs) } else { Vec::new() };
+            let mine = || std::iter::once(n).chain(self.plan.siblings[n].iter().copied()).flat_map(|m| &joins[m]);
             for r in 0..runs[n].len() {
                 for end in 0..2 {
-                    let Some(to) = runs[n][r].want[end] else { continue };
+                    // (taken: what is still wanted of the other nets stands in this net's way, see `clear`)
+                    let Some(to) = runs[n][r].want[end].take() else { continue };
+                    let layer = runs[n][r].layer;
                     let mut points = runs[n][r].points.clone();
                     if end == 0 {
                         points.reverse();
                     }
-                    let layer = runs[n][r].layer;
-                    let copper = Copper { runs, live };
-                    let new = moved(&points, to, least)
-                        .filter(|new| live[n] && self.may_move(n, layer, &points, new, &joins, &copper));
+                    let copper = Copper { runs, dead };
+                    let cell = points[points.len() - 1];
+                    let was = &points[points.len().saturating_sub(3)..];
+                    let new = (points.len() > 1 && !dead[n])
+                        .then(|| moved(&points, to, least))
+                        .flatten()
+                        .filter(|new| self.may_move(n, layer, was, &new[points.len() - was.len()..], mine(), &copper));
+                    // Within a pad or on a hole the track is joined on its cell as well, and the stub is left out
+                    // where it would come too near another net. The end of a pair's leg is met in any case.
+                    let grid = &self.plan.grid;
+                    let in_pad = grid.cell(cell).is_some_and(|c| self.plan.exact[n].get(&(c as u32)) == Some(&to));
                     match new {
                         Some(new) => points = new,
-                        None => push(&mut points, to),
+                        None if dead[n] || !in_pad || self.clear(n, layer, [cell, to], was, &copper) => {
+                            push(&mut points, to)
+                        }
+                        None => {}
                     }
                     if end == 0 {
                         points.reverse();
@@ -92,72 +116,84 @@ impl Engine<'_> {
         }
     }
 
-    /// Where copper of net entry `n` or of another entry of the same net begins or ends: the ends of their runs
-    /// and their vias.
-    fn joins(&self, n: usize, runs: &[Vec<Run>]) -> Vec<Pt> {
-        let mut out = Vec::new();
-        for m in std::iter::once(n).chain(self.plan.siblings[n].iter().copied()) {
-            for run in &runs[m] {
-                out.push(run.points[0]);
-                out.push(*run.points.last().unwrap());
-            }
-            out.extend(self.laid.nets[m].vias.iter().map(|&v| self.plan.grid.xy(v as usize)));
-        }
-        out
+    /// Where copper of net entry `n` begins or ends: the ends of its runs and its vias.
+    fn joins(&self, n: usize, runs: &[Run]) -> Vec<Join> {
+        let ends = runs.iter().flat_map(|run| {
+            let k = run.points.len() - 1;
+            [(run.points[0], run.want[0]), (run.points[k], if k > 0 { run.want[1] } else { run.want[0] })]
+                .map(|(at, want)| Join { at, layer: Some(run.layer), follows: want.is_some() })
+        });
+        let vias = self.laid.nets[n].vias.iter().map(|&v| self.plan.grid.xy(v as usize));
+        ends.chain(vias.map(|at| Join { at, layer: None, follows: false })).collect()
     }
 
-    /// Whether a run of net `n` may lie as `new` in place of `old` (both end alike but for the last point and
-    /// the corner before it): nothing of the net joins it on what moves, and what has moved keeps the net's
-    /// distances from the fixed copper and from the other nets, or at least the distance it kept before.
-    fn may_move(&self, n: usize, layer: usize, old: &[Pt], new: &[Pt], joins: &[Pt], copper: &Copper) -> bool {
-        let k = old.len();
-        let (was, is) = (&old[k.saturating_sub(3)..], &new[k.saturating_sub(3)..]);
-        let (corner, cell) = (was[was.len() - 2], was[was.len() - 1]);
-        let held = |q: Pt| {
-            if k == 2 {
-                // the one stretch turns about its first point: nothing may join it between its ends
-                on(q, corner, cell) && dist(q, corner) > 1e-6 && dist(q, cell) > 1e-6
+    /// Whether the end of a run of net `n` may lie as `is` where it lay as `was` (the last points of the run,
+    /// three at most, the first of them unmoved). Nothing of the net may join it on what is taken away: at
+    /// the cell it leaves, only ends that leave with it; elsewhere, nothing that the new line does not pass
+    /// too. And what is new keeps the net's distances (see `clear`).
+    fn may_move<'a>(
+        &self,
+        n: usize,
+        layer: usize,
+        was: &[Pt],
+        is: &[Pt],
+        mut joins: impl Iterator<Item = &'a Join>,
+        copper: &Copper,
+    ) -> bool {
+        let cell = was[was.len() - 1];
+        let held = |q: &Join| {
+            if q.layer.is_some_and(|l| l != layer) {
+                false
+            } else if dist(q.at, cell) < 1e-6 {
+                !q.follows
             } else {
-                // the last stretch moves sideways, corner and all; of the one before, what is cut off goes
-                let slid = is[is.len() - 2];
-                (on(q, corner, cell) && dist(q, cell) > 1e-6) || (on(slid, was[0], corner) && on(q, corner, slid))
+                on(q.at, was) && !on(q.at, is)
             }
         };
-        !joins.iter().any(|q| held(*q)) && is.windows(2).all(|s| self.clear(n, layer, [s[0], s[1]], was, copper))
+        if joins.any(held) {
+            return false;
+        }
+        // The last stretch is new all along. The one before only where it has grown past its old corner.
+        let k = is.len();
+        let last = self.clear(n, layer, [is[k - 2], is[k - 1]], was, copper);
+        let grown = k == 3 && !on(is[1], &was[..2]);
+        last && (!grown || self.clear(n, layer, [was[1], is[1]], was, copper))
     }
 
     /// Whether a track of net `n` from `a` to `b` on a layer keeps its distances: from the fixed copper all
     /// the way, and from each other net's copper as it lies, or at least the distance `was` kept from it (the
-    /// grid lets a slanted step come a hair nearer than the rule, and what was accepted stays accepted).
+    /// grid lets a slanted step come a hair nearer than the rule, and what was accepted stays accepted). The
+    /// stubs the other nets may yet lay to the places they want count as their copper.
     fn clear(&self, n: usize, layer: usize, [a, b]: [Pt; 2], was: &[Pt], copper: &Copper) -> bool {
-        let Copper { runs, live } = *copper;
+        let Copper { runs, dead } = *copper;
         let (p, grid) = (self.p, &self.plan.grid);
-        // tested every eighth of a step: between two tests the track comes no nearer than a hair
-        let pieces = (dist(a, b) / (grid.step / 8.0)).ceil().max(1.0) as usize;
-        let open = (0..=pieces).all(|i| {
-            let f = i as f64 / pieces as f64;
-            let at = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
-            self.shared.fixed.mask_at(n, at).is_some_and(|mask| mask & (1 << layer) == 0)
-        });
-        if !open {
+        if !self.shared.fixed.open_along(n, a, b, 1 << layer) {
             return false;
         }
         let rules = &p.rules;
         let quiet = if rules.quiet_clearance_mm > 0.0 { rules.quiet_clearance_mm } else { rules.new_clearance_mm };
         let half = p.nets[n].width / 2.0;
-        // far enough from a segment of half width `other`, or no nearer than before
+        let (lo, hi) = ([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])]);
+        // far enough from the segment c-d of other copper, or no nearer than before
         let far = |c: Pt, d: Pt, need: f64| {
+            let beside = |k: usize| c[k].max(d[k]) < lo[k] - need || c[k].min(d[k]) > hi[k] + need;
+            if beside(0) || beside(1) {
+                return true;
+            }
             let now = dist_segments(a, b, c, d);
-            now >= need - 1e-9
-                || now >= was.windows(2).map(|s| dist_segments(s[0], s[1], c, d)).fold(f64::MAX, f64::min) - 1e-9
+            let before = || was.windows(2).map(|s| dist_segments(s[0], s[1], c, d)).fold(f64::MAX, f64::min);
+            now >= need - 1e-9 || now >= before() - 1e-9
         };
-        (0..runs.len()).filter(|&m| m != n && live[m] && !self.plan.siblings[n].contains(&m)).all(|m| {
+        (0..runs.len()).filter(|&m| m != n && !dead[m] && !self.plan.siblings[n].contains(&m)).all(|m| {
             let net = &p.nets[m];
             let gap = if net.quiet != p.nets[n].quiet { quiet } else { rules.new_clearance_mm };
-            let tracks = runs[m]
-                .iter()
-                .filter(|run| run.layer == layer)
-                .all(|run| run.points.windows(2).all(|s| far(s[0], s[1], half + gap + net.width / 2.0)));
+            let need = half + gap + net.width / 2.0;
+            let tracks = runs[m].iter().filter(|run| run.layer == layer).all(|run| {
+                let k = run.points.len() - 1;
+                let stubs = [(0, run.want[0]), (k, if k > 0 { run.want[1] } else { None })];
+                run.points.windows(2).all(|s| far(s[0], s[1], need))
+                    && stubs.iter().all(|&(i, want)| want.map_or(true, |to| far(run.points[i], to, need)))
+            });
             let vias = self.laid.nets[m].vias.iter().all(|&v| {
                 let at = grid.xy(v as usize);
                 far(at, at, half + gap + net.via[0] / 2.0)
