@@ -324,8 +324,9 @@ class CapacitorBoard(FakeBoard):
     def read(self, nets=None):
         self.reads.append(None if nets is None else set(nets))
         pads = [support.land(k, "VCC", 2.0, 2.0, part="U1"), support.land(k, "VCC", 4.0, 2.0, part="C1"),
-                support.land(k, "GND", 4.0, 4.0, part="C1"), support.land(k, "VCC", 18.0, 2.0, part="J1")]
-        groups = {"VCC": [[0, 1, 3]] if "VCC" in self.joined else [[0], [1], [3]], "GND": [[2]]}
+                support.land(k, "GND", 4.0, 4.0, part="C1"), support.land(k, "VCC", 18.0, 2.0, part="J1"),
+                support.land(k, "GND", 2.0, 4.0, part="U1"), support.land(k, "GND", 18.0, 4.0, part="J1")]
+        groups = {"VCC": [[0, 1, 3]] if "VCC" in self.joined else [[0], [1], [3]], "GND": [[2, 4, 5]]}
         picture = support.picture(k, pads, groups)
         picture.box = [0.0, 0.0, 20.0, 6.0]
         return picture
@@ -356,8 +357,45 @@ class Decoupling(WithEngine):
         self.assertEqual(len(second["nets"][0]["terminals"]), 3)
         self.assertEqual(board.writes, [["VCC"]])  # nothing of the first run was kept
         self.assertEqual(len(board.reads), 1)
-        self.assertEqual(self.said, ["not all joined with the capacitors linked to their pins: routed again without those links"])
+        self.assertEqual(self.said, ["not all joined with the capacitors linked to their pins: again without those links for VCC"])
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 1, 0))
+
+
+class CapacitorAmongOthers(FakeBoard):
+    """Three ordinary nets, and a supply with a capacitor by a pin."""
+
+    def read(self, nets=None):
+        plain = super().read(nets)
+        base = len(plain.pads)
+        pads = plain.pads + [support.land(k, "VCC", 2.0, 20.0, part="U1"), support.land(k, "VCC", 4.0, 20.0, part="C1"),
+                             support.land(k, "GND", 4.0, 22.0, part="C1"), support.land(k, "VCC", 18.0, 20.0, part="J1"),
+                             support.land(k, "GND", 2.0, 22.0, part="U1"), support.land(k, "GND", 18.0, 22.0, part="J1")]
+        groups = dict(plain.groups, GND=[[base + 2, base + 4, base + 5]],
+                      VCC=[[base, base + 1, base + 3]] if "VCC" in self.joined else [[base], [base + 1], [base + 3]])
+        picture = support.picture(k, pads, groups)
+        picture.box = [0.0, 0.0, 20.0, 24.0]
+        return picture
+
+    def write(self, solution, sizes):
+        added = super().write(solution, sizes)
+        if not all(n["tracks"] for n in solution["nets"] if n["net"] == "VCC"):
+            self.joined.discard("VCC")
+        return added
+
+    def unjoined(self, nets=None):
+        return [n for n in self.names + ["VCC"] if n not in self.joined and (nets is None or n in nets)]
+
+
+class LinksAndOtherNets(WithEngine):
+    def test_another_net_left_unjoined_does_not_cost_the_links(self):
+        board = CapacitorAmongOthers(3)
+        self.stubborn(["N001"])
+        outcome = self.route(board)
+        first, second = self.runs()
+        self.assertIn("VCC | C1", [n["key"] for n in first["nets"]])
+        self.assertEqual([n["key"] for n in second["nets"]], ["N001"])  # the narrower try, for the net left over
+        self.assertIn("VCC | C1", board.writes[0])
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 4, 1))
 
 
 if __name__ == "__main__":

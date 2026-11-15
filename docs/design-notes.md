@@ -86,6 +86,11 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   straight line; 1.4 % more track, since the capacitor no longer taps the nearest copper of its net. On
   one crowded board the link found no way and, tried again by itself afterwards, the net found none
   either: a run that leaves anything unjoined with links is now thrown away and done again without.
+  A third review: one net left unjoined anywhere threw the whole run away and with it every link (now
+  only the nets whose own links failed lose them); links were handed out by name until a budget far under
+  the engine's limit ran out; any capacitor by a pin counted, one in series with a signal too (now both
+  its nets must have three pads); a bus name changed results with the pull at 0 (the hundredth applied);
+  nets of a bus too far apart to be drawn together no longer paid for crossing (they do again).
 * Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,
   the designers 27 %, on seven pairs); short last stretches before a pad; copper pours.
 

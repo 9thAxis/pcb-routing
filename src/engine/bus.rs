@@ -10,13 +10,14 @@ use super::worker::{Ground, Worker, BESIDE, NEAR, OVER};
 use super::*;
 
 /// Nets of a bus more lanes apart than this are not drawn to each other: so far off, where one runs says
-/// little of where the other should, and the ground to mark grows with the square of the distance.
+/// little of where the other should, and the ground to mark grows with the square of the distance. (They
+/// still pay for passing over each other.)
 const FAR_LANES: i64 = 3;
 
 impl Engine<'_> {
     /// For a net of a bus: mark in `w` the ground beside the laid nets of its bus within a few lanes of its
-    /// own, each on its layer, and the ground over and under them on the other layers; and set what the net
-    /// pays more there and away from them. Nothing for a net of no bus, or with none of its bus laid near.
+    /// own, each on its layer, and the ground over and under all of them on the other layers; and set what
+    /// the net pays more there and away from them. Nothing for a net of no bus, or with none of its bus laid.
     ///
     /// Beside a net `k` lanes away is from `k - 1/2` to `k + 1` times the least distance between the two
     /// tracks' middles from its path: nearer, the nets between them would find no room (for a neighbour:
@@ -30,17 +31,17 @@ impl Engine<'_> {
         }
         let (grid, space, rules) = (&plan.grid, plan.space, &p.rules);
         let quiet = if rules.quiet_clearance_mm > 0.0 { rules.quiet_clearance_mm } else { rules.new_clearance_mm };
-        // per mate that is laid and near enough: how many lanes off, and the least distance between the middles
-        let near_mates: Vec<(usize, f64, f64)> = plan.mates[n]
+        // per mate that is laid: how many lanes off, and the least distance between the middles of the two tracks
+        let mates: Vec<(usize, i64, f64)> = plan.mates[n]
             .iter()
             .filter(|&&m| !self.laid.nets[m].conns.is_empty())
-            .filter_map(|&m| {
+            .map(|&m| {
                 let lanes = (p.nets[n].bus_lane as i64 - p.nets[m].bus_lane as i64).abs().max(1);
                 let gap = if p.nets[m].quiet != p.nets[n].quiet { quiet } else { rules.new_clearance_mm };
-                (lanes <= FAR_LANES).then(|| (m, lanes as f64, p.nets[n].width / 2.0 + gap + p.nets[m].width / 2.0))
+                (m, lanes, p.nets[n].width / 2.0 + gap + p.nets[m].width / 2.0)
             })
             .collect();
-        if near_mates.is_empty() {
+        if mates.is_empty() {
             return;
         }
         let _t = self.shared.timed(9);
@@ -64,7 +65,8 @@ impl Engine<'_> {
             }
             out
         };
-        for &(m, lanes, pitch) in &near_mates {
+        for &(m, lanes, pitch) in mates.iter().filter(|mate| mate.1 <= FAR_LANES) {
+            let lanes = lanes as f64;
             let (near, far) = (if lanes > 1.0 { (lanes - 0.5) * pitch } else { 0.0 }, (lanes + 1.0) * pitch);
             let (inner, outer) = (grid.disc(near), grid.disc(far));
             let cells = drawn(m, pitch);
@@ -96,7 +98,7 @@ impl Engine<'_> {
         }
         // over or under each mate on the other layers, where the net is beside none
         if ground.over > ground.apart {
-            for &(m, _, pitch) in &near_mates {
+            for &(m, _, pitch) in &mates {
                 let under = grid.disc(pitch);
                 for (layer, cell) in drawn(m, pitch) {
                     for other in (0..space.nl).filter(|&l| l != layer) {

@@ -492,3 +492,23 @@ fn lanes_of_any_size_are_taken() {
     assert_eq!(s.status, Status::Routed, "{}", s.message);
     assert!(beside(&s, 1, 0, 0.7) < 1.0, "nets lanes apart were drawn together");
 }
+
+/// With no pull, a bus name changes nothing at all.
+#[test]
+fn bus_names_without_pull_change_nothing() {
+    let run = |named: bool| {
+        let mut nets = vec![
+            net("a", [1.0, 1.0], [9.0, 1.2], &["F", "B"]),
+            net("b", [1.0, 2.4], [9.0, 3.4], &["F", "B"]),
+            net("c", [5.0, 0.5], [5.0, 5.5], &["F", "B"]),
+        ];
+        if named {
+            nets.iter_mut().for_each(|n| n["bus"] = json!("d"));
+        }
+        let v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F", "B"], "nets": nets, "options": {"bus_pull": 0.0}});
+        let mut s = route(&serde_json::from_value::<Problem>(v).unwrap()).unwrap();
+        s.stats = Default::default();
+        s
+    };
+    assert_eq!(run(true), run(false));
+}

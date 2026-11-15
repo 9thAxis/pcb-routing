@@ -133,6 +133,14 @@ class Area:
 
 
 @dataclass
+class Pour:
+    """One piece of a filled zone: copper of a net that joins what touches it."""
+    net: object
+    layer: str
+    rings: list  # its outline, then its holes
+
+
+@dataclass
 class Picture:
     """Everything read from a board."""
     layers: list  # every copper layer, top to bottom
@@ -147,6 +155,7 @@ class Picture:
     minima: Minima = field(default_factory=Minima)
     ignored: frozenset = frozenset()  # the design rule checks the project sets to 'ignore'
     groups: dict = field(default_factory=dict)  # net -> its groups of pads already joined, as indices into pads
+    pours: dict = field(default_factory=dict)  # net -> {index of a group: the pours that join it}
 
     @property
     def holes(self):
@@ -170,6 +179,7 @@ class Settings:
     slack: float = 0.002
     via_penalty: float = 10.0
     layers: object = None  # names of the layers that may carry routes; None: every copper layer
+    pours: bool = True  # pads that a filled zone joins count as joined, and the rest of the net is taken to the zone
     decoupling: bool = True  # a capacitor beside a pin of an IC on its net is joined to that pin itself
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
 
@@ -411,6 +421,76 @@ def _lanes(nets, parts):
     return {net: lane for lane, net in enumerate(order)}
 
 
+def _area(rings):
+    """The copper of a polygon given as its outline and holes, in mm2."""
+    ring = lambda r: abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(r, r[1:] + r[:1]))) / 2
+    return ring(rings[0]) - sum(ring(r) for r in rings[1:]) if rings else 0.0
+
+
+def _within(rings, p):
+    """True if a point is on a polygon given as its outline and holes (even-odd)."""
+    inside = False
+    for ring in rings:
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            if (a[1] > p[1]) != (b[1] > p[1]) and p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]):
+                inside = not inside
+    return inside
+
+
+def into_pour(rings, p, inset):
+    """The point of a pour to take a track from `p` to: `p` itself if it is on the pour, else the nearest point
+    of its edge moved `inset` further in. None if that is not on the pour (a sliver too thin to end a track on)."""
+    if _within(rings, p):
+        return list(p)
+    best = None
+    for ring in rings:
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            vx, vy = b[0] - a[0], b[1] - a[1]
+            l2 = vx * vx + vy * vy
+            t = max(0.0, min(1.0, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2)) if l2 else 0.0
+            q = (a[0] + t * vx, a[1] + t * vy)
+            d = math.dist(p, q)
+            if best is None or d < best[0]:
+                best = (d, q)
+    if best is None or best[0] == 0:
+        return None
+    d, q = best
+    q = [_r(q[0] + (q[0] - p[0]) / d * inset), _r(q[1] + (q[1] - p[1]) / d * inset)]
+    return q if _within(rings, q) else None
+
+
+def to_pours(pads, groups, pours, layers, inset):
+    """How a net with pours is joined: [(pad index, target point, target layers)], one for each group of pads
+    that is not on the net's largest pour. The pad is the group's nearest to that pour's group; the target the
+    nearest of that group's copper to it: a point of one of its pours, or one of its pads.
+
+    `groups`: the net's groups of joined pads; `pours`: {index of a group: its pours}; `layers`: the routing
+    layers. Empty if the net has no pour on a routing layer.
+    """
+    area = {g: sum(_area(pour.rings) for pour in own if pour.layer in layers) for g, own in pours.items()}
+    area = {g: a for g, a in area.items() if a > 0}
+    if not area:
+        return []
+    main = max(sorted(area), key=area.get)
+    links = []
+    for g, group in enumerate(groups):
+        if g == main:
+            continue
+        best = None
+        for i in group:
+            if not any(l in layers for l in pads[i].layers):
+                continue
+            here = pads[i].at
+            targets = [(pads[j].at, [l for l in layers if l in pads[j].layers]) for j in groups[main]]
+            targets += [(into_pour(pour.rings, here, inset), [pour.layer]) for pour in pours[main] if pour.layer in layers]
+            for at, on in targets:
+                if at is not None and on and (best is None or math.dist(here, at) < best[0]):
+                    best = (math.dist(here, at), i, at, on)
+        if best:
+            links.append(best[1:])
+    return links
+
+
 DECOUPLING_REACH = 5.0  # mm from a capacitor's pad to the pin it is taken to stand by
 DECOUPLING_VIA_PENALTY = 5.0  # times the usual: the detour accepted before the link to the pin changes layer
 
@@ -419,11 +499,17 @@ def decoupling(pads, groups):
     """The capacitors of a net that stand by a pin of an IC on it: [(group of the capacitor's pad, pad index of
     the pin)], for `groups`, the net's groups of joined pads as indices into `pads`.
 
-    A capacitor is a part C.. of two pads whose pad on the net is joined to nothing yet; the pin is the nearest
-    pad of a part U.. or IC.. on the net, in another group, within DECOUPLING_REACH.
+    A capacitor is a part C.. of two pads whose pad on the net is joined to nothing yet, and whose two nets
+    have three pads or more each (a supply and its return; not a capacitor in series with a signal). The pin
+    is the nearest pad of a part U.. or IC.. on the net, in another group, within DECOUPLING_REACH.
     """
-    size = collections.Counter(pad.part for pad in pads if pad.part)
-    is_cap = lambda pad: bool(pad.part) and re.match(r"C\d", pad.part) and size[pad.part] == 2
+    by_part, size = collections.defaultdict(list), collections.Counter(pad.net for pad in pads if pad.net)
+    for pad in pads:
+        if pad.part:
+            by_part[pad.part].append(pad)
+    def is_cap(pad):
+        both = by_part.get(pad.part, [])
+        return bool(pad.part) and re.match(r"C\d", pad.part) and len(both) == 2 and all(size[p.net] >= 3 for p in both)
     is_pin = lambda pad: bool(pad.part) and re.match(r"(U|IC)\d", pad.part)
     links = []
     for g, group in enumerate(groups):
@@ -436,10 +522,11 @@ def decoupling(pads, groups):
     return links
 
 
-def build_problem(picture, rules, only=None, narrow=False, options=None):
+def build_problem(picture, rules, only=None, narrow=False, options=None, unlinked=frozenset()):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
-    `narrow`: the second try, with narrower tracks and vias allowed in a net's own lands.
+    `narrow`: the second try, with narrower tracks and vias allowed in a net's own lands. `unlinked`: nets whose
+    capacitors get no link of their own to the pin they stand by.
     """
     every = picture.layers
     layers = rules.routing_layers(every)
@@ -484,7 +571,7 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
     unjoined = picture.unjoined(only)
     bus = buses(picture.pads, set(unjoined)) if rules.settings.bus_pull > 0 else {}
     nets = []
-    for name in unjoined:
+    for place, name in enumerate(unjoined):
         # one terminal per group of pads that existing copper already joins
         on = lambda pad: [l for l in layers if l in pad.layers]
         groups = picture.groups[name]
@@ -497,15 +584,28 @@ def build_problem(picture, rules, only=None, narrow=False, options=None):
             key=key, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=layers,
             clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
             terminals=terminals, via_penalty_mm=via_penalty)
+        # A net with a pour: each group of pads that is not on it is taken to its nearest point, by an entry of
+        # its own, so that nothing is laid where the pour already joins.
+        poured = to_pours(picture.pads, groups, picture.pours.get(name, {}), layers, _r(width / 2 + 0.1)) if rules.settings.pours else []
+        for number, (pad, at, target_layers) in enumerate(poured):
+            nets.append(entry(f"{name} > {number + 1}", [terminal(picture.pads[pad]), dict(xy=at, layers=target_layers)],
+                              rules.settings.via_penalty))
+        if poured:
+            continue
         # A capacitor beside a pin of an IC is joined to that pin, in an entry of its own that is slow to
         # change layer; the rest of the net is joined as it would be without the capacitor.
-        links = decoupling(picture.pads, groups) if rules.settings.decoupling else []
-        links = [(g, pin) for g, pin in links if on(picture.pads[pin])][:max(0, ENGINE_NETS - 1 - len(nets) - len(unjoined))]
+        links = decoupling(picture.pads, groups) if rules.settings.decoupling and name not in unlinked else []
+        # (as many as the engine has room for beside this net's own entry and one for each net still to come)
+        room = ENGINE_NETS - 1 - len(nets) - 1 - (len(unjoined) - place - 1)
+        links = [(g, pin) for g, pin in links if on(picture.pads[pin])][:max(0, room)]
         taken = {g for g, _ in links}
         rest = [terminal(picture.pads[group[0]]) for g, group in enumerate(groups) if g not in taken]
         for g, pin in links:
             cap = picture.pads[groups[g][0]]
-            nets.append(entry(f"{name} | {cap.part}", [terminal(cap), terminal(picture.pads[pin])],
+            key = f"{name} | {cap.part}"
+            while key in picture.groups or any(n["key"] == key for n in nets):
+                key += "'"  # (a net may be named just so)
+            nets.append(entry(key, [terminal(cap), terminal(picture.pads[pin])],
                               rules.settings.via_penalty * DECOUPLING_VIA_PENALTY))
         if len(rest) < 2:
             continue
@@ -607,28 +707,27 @@ def route(board, settings, run, only=None, options=None, say=print):
         if number:
             picture = board.read(lot)
             say(f"batch {number + 1} of {len(lots)}")
-        # each try: the grid step, whether narrower, whether capacitors get their own link to the pin they stand by
-        tries = [(step, narrow, settings.decoupling) for step, narrow in Rules.of(picture, settings).tries(lot)]
-        number_of_try, again = 0, False
+        tries = Rules.of(picture, settings).tries(lot)
+        number_of_try, reread, unlinked = 0, False, set()
         while number_of_try < len(tries):
-            step, narrow, links = tries[number_of_try]
-            at_step = replace(settings, step=step, decoupling=links)
-            if number_of_try and not again:
+            step, narrow = tries[number_of_try]
+            at_step = replace(settings, step=step)
+            if reread:
                 # what could not be joined is tried once more against the board as it now stands
                 picture = board.read(lot)
             rules = Rules.of(picture, at_step)
             most = (options or {}).get("max_states")
             if number_of_try and most and rules.states(picture.box, picture.layers) > most:
                 say(f"no try at a {step:g} mm step: the grid would be larger than --max-states")
-                number_of_try += 1
+                number_of_try, reread = number_of_try + 1, True
                 continue
-            problem = build_problem(picture, rules, only=set(lot), narrow=narrow, options=options)
+            problem = build_problem(picture, rules, only=set(lot), narrow=narrow, options=options, unlinked=unlinked)
             keys = list(dict.fromkeys(n["net"] for n in problem["nets"]))  # (a net may have several entries)
-            if not number_of_try and not again:
+            if not number_of_try and reread is False and not unlinked:
                 wanted += keys
             if not keys:
                 break
-            if number_of_try and not again:
+            if number_of_try and reread:
                 finer = step != tries[number_of_try - 1][0]
                 say(f"{'next try, at a %g mm step' % step if finer else 'second try, narrower'}: {', '.join(keys)}")
             try:
@@ -636,23 +735,24 @@ def route(board, settings, run, only=None, options=None, say=print):
             except EngineFailed as failure:
                 outcome.failure = str(failure)
                 break
-            first = False
-            # A link from a capacitor to its pin is a wish, not a need. Where a run with such links leaves
-            # anything unjoined, nothing of it is kept: the same nets are routed again without the links, and
-            # there are none in the tries that follow.
-            if links and solution["status"] != "routed" and any(n["key"] != n["net"] for n in problem["nets"]):
-                say("not all joined with the capacitors linked to their pins: routed again without those links")
-                tries = tries[:number_of_try] + [(s, n, False) for s, n, _ in tries[number_of_try:]]
-                again = True
+            # A link from a capacitor to its pin is a wish, not a need. Where a net with such links is not all
+            # laid, nothing of the run is kept: it is done again with that net whole, as it is from then on.
+            failed = {n["net"] for n in problem["nets"] if any(m.startswith(n["key"] + ":") for m in solution.get("unrouted", []))}
+            failed |= {n["net"] for n in problem["nets"] for c in solution.get("conflicts", []) if c.get("key") == n["key"]}
+            linked = {n["net"] for n in problem["nets"] if n["key"] != n["net"]}
+            if failed & linked:
+                say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
+                unlinked |= failed & linked
+                reread = False
                 continue
-            again = False
+            first = False
             added = board.write(solution, {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
             outcome.tracks, outcome.vias = outcome.tracks + added[0], outcome.vias + added[1]
             if solution["status"] == "routed":
                 break
             last = solution["status"]
             lot = keys
-            number_of_try += 1
+            number_of_try, reread = number_of_try + 1, True
         if outcome.failure:
             break
     outcome.wanted = len(wanted)

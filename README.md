@@ -91,7 +91,7 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.90 | 1.13 | 10.0 | 1.7 | 12 | 39 |
+| pcb-routing | 0.90 | 1.13 | 10.0 | 1.7 | 12 | 40 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
@@ -106,7 +106,7 @@ pitches of its neighbour on the same layer.
 | | Alongside its neighbour | Same number of vias | The two cross | Difference in length |
 |---|---|---|---|---|
 | The designer | 72% | 80% | 19% | 25% |
-| pcb-routing | 72% | 80% | 14% | 24% |
+| pcb-routing | 72% | 81% | 13% | 25% |
 | pcb-routing, buses left alone (`--bus-pull 0`) | 63% | 80% | 22% | 23% |
 | KiCadRoutingTools | 71% | 61% | 26% | 25% |
 | FreeRouting | 64% | 77% | 29% | 24% |
@@ -142,7 +142,7 @@ here.
 * Deterministic: the same problem gives the same answer, whatever the thread count.
 * A self-check of the search (`--verify`), a mask export for comparing with another tool, a trace per round.
 * Decoupling capacitors joined to the pin they stand by, in the KiCad bridge: a link of its own that is slow
-  to change layer, given up if the board cannot be completed with it.
+  to change layer, given up for a net that cannot be completed with it.
 * Buses kept together: nets marked as one bus (`bus` and `bus_lane` on a net; the KiCad bridge marks nets
   that leave one part and arrive at another side by side) are drawn to run beside each other on one layer,
   in the order of their pads, and are slow to cross each other.
@@ -286,7 +286,7 @@ repository) records what each of these bought when it was added, and what was tr
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 69 in the engine, 110 in the bridge, 141 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 70 in the engine, 121 in the bridge, 141 in the quality tools |
 
 ## Sources
 

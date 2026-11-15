@@ -160,7 +160,8 @@ impl Engine<'_> {
                 // old one was laid. And a gain of under a hundredth is none, or the nets of a bus would move
                 // each other about until the passes run out.
                 let (cost, was_cost) = (state.cost + state.apart, now.cost + state.was_apart);
-                let least = if self.plan.mates[n].is_empty() { 1e-6 } else { (0.01 * was_cost).max(1e-6) };
+                let drawn = self.p.options.bus_pull > 0.0 && !self.plan.mates[n].is_empty();
+                let least = if drawn { (0.01 * was_cost).max(1e-6) } else { 1e-6 };
                 if missing < was_missing || (missing == was_missing && cost < was_cost - least) {
                     let old = now.clone();
                     self.place(n, state);

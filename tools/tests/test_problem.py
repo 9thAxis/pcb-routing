@@ -388,17 +388,100 @@ class Decoupling(unittest.TestCase):
         self.assertEqual(sorted(net["key"] for net in self.board(far=True)["nets"]), ["GND", "VCC"])
         self.assertEqual(sorted(net["key"] for net in self.board(decoupling=False)["nets"]), ["GND", "VCC"])
 
-    def test_a_net_of_only_the_capacitor_and_the_pin_is_one_entry(self):
-        pads = [support.land(k, "VREF", 0, 0, part="U1"), support.land(k, "VREF", 2, 0, part="C1"), support.land(k, "GND", 2, 2, part="C1")]
-        picture = support.picture(k, pads)
-        nets = k.build_problem(picture, k.Rules.of(picture))["nets"]
-        self.assertEqual([net["key"] for net in nets], ["VREF | C1"])
+    def test_a_capacitor_on_a_net_of_two_pads_or_in_series_with_a_signal_is_no_decoupling(self):
+        pads = [support.land(k, "VREF", 0, 0, part="U1"), support.land(k, "VREF", 2, 0, part="C1"), support.land(k, "GND", 2, 2, part="C1"),
+                support.land(k, "GND", 0, 2, part="U1"), support.land(k, "GND", 9, 2, part="J1")]
+        self.assertEqual(k.decoupling(pads, [[0], [1]]), [])  # nothing to choose on a net of two pads
+        # a capacitor in series: its other net is the two-pad rest of the signal
+        pads = [support.land(k, "TX", 0, 0, part="U1"), support.land(k, "TX", 2, 0, part="C7"), support.land(k, "TX", 2, 4, part="TP1"),
+                support.land(k, "TX_OUT", 4, 0, part="C7"), support.land(k, "TX_OUT", 9, 0, part="J1")]
+        self.assertEqual(k.decoupling(pads, [[0], [1], [2]]), [])
 
     def test_a_resistor_or_a_capacitor_already_joined_is_no_decoupling(self):
         pads = [support.land(k, "VCC", 0, 0, part="U1"), support.land(k, "VCC", 2, 0, part="R1"), support.land(k, "X", 2, 2, part="R1"),
-                support.land(k, "VCC", 4, 0, part="C1"), support.land(k, "GND", 4, 2, part="C1"), support.land(k, "VCC", 20, 0, part="J1")]
+                support.land(k, "VCC", 4, 0, part="C1"), support.land(k, "GND", 4, 2, part="C1"), support.land(k, "VCC", 20, 0, part="J1"),
+                support.land(k, "GND", 0, 2, part="U1"), support.land(k, "GND", 20, 2, part="J1")]
         self.assertEqual(k.decoupling(pads, [[0], [1], [3, 5]]), [])
         self.assertEqual(k.decoupling(pads, [[0], [1], [3], [5]]), [(2, 0)])
+
+    def test_links_are_given_while_the_engine_has_room_and_a_net_named_like_a_link_is_no_trouble(self):
+        supply = lambda net, y: [support.land(k, net, 0, y, part="U1"), support.land(k, net, 2, y, part=f"C{y}"),
+                                 support.land(k, "GND", 2, y + 1, part=f"C{y}"), support.land(k, net, 30, y, part="J1")]
+        others = [support.land(k, f"N{i:03}", 40 + i % 2, i, part=f"R{i}") for i in range(280)]
+        pads = supply("+3V3", 0) + supply("VCC", 4) + [support.land(k, "GND", 30, 9, part="J1")] + others
+        picture = support.picture(k, pads)
+        keys = [net["key"] for net in k.build_problem(picture, k.Rules.of(picture), only={"+3V3", "VCC", "GND"} | {f"N{i:03}" for i in range(0, 280, 2)})["nets"]]
+        self.assertIn("+3V3 | C0", keys)
+        self.assertIn("VCC | C4", keys)  # the last net by name has its link all the same
+        named = support.picture(k, supply("V", 0) + [support.land(k, "GND", 30, 9, part="J1"), support.land(k, "GND", 0, 9, part="U1"),
+                                                      support.land(k, "V | C0", 50, 0, part="R1"), support.land(k, "V | C0", 52, 0, part="R2")])
+        keys = [net["key"] for net in k.build_problem(named, k.Rules.of(named))["nets"]]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertIn("V | C0'", keys)
+
+class Pours(unittest.TestCase):
+    """A net with a filled zone: what the zone joins is left alone, and the rest is taken to it."""
+
+    SQUARE = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+    HOLE = [[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]]
+
+    def test_a_point_on_the_pour_is_its_own_target(self):
+        self.assertEqual(k.into_pour([self.SQUARE], [3.0, 3.0], 0.2), [3.0, 3.0])
+
+    def test_a_point_outside_goes_to_the_nearest_edge_and_a_little_in(self):
+        self.assertEqual(k.into_pour([self.SQUARE], [12.0, 5.0], 0.2), [9.8, 5.0])
+        self.assertEqual(k.into_pour([self.SQUARE], [5.0, -3.0], 0.25), [5.0, 0.25])
+
+    def test_a_point_in_a_hole_goes_out_of_the_hole(self):
+        # (a pad the pour keeps clear of: the hole round it)
+        self.assertEqual(k.into_pour([self.SQUARE, self.HOLE], [5.0, 5.5], 0.2), [5.0, 6.2])
+
+    def test_a_sliver_too_thin_is_no_target(self):
+        sliver = [[0.0, 0.0], [10.0, 0.0], [10.0, 0.1], [0.0, 0.1]]
+        self.assertIsNone(k.into_pour([sliver], [5.0, -1.0], 0.2))
+
+    def test_area_is_the_outline_less_the_holes(self):
+        self.assertEqual(k._area([self.SQUARE, self.HOLE]), 96.0)
+
+    def board(self, pours=True):
+        pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 8, 8, part="U2"),  # on the pour
+                support.land(k, "GND", 14, 5, part="J1"),  # beside it
+                support.land(k, "GND", 5, 5, layer="B.Cu", part="C1"),  # under it, on the other side
+                support.land(k, "SIG", 2, 12, part="U1"), support.land(k, "SIG", 8, 12, part="U2")]
+        picture = support.picture(k, pads, {"GND": [[0, 1], [2], [3]], "SIG": [[4], [5]]})
+        picture.pours = {"GND": {0: [k.Pour("GND", "F.Cu", [self.SQUARE])]}}
+        picture.box = [-1.0, -1.0, 16.0, 14.0]
+        return k.build_problem(picture, k.Rules.of(picture, k.Settings(pours=pours)))
+
+    def test_each_group_off_the_pour_is_taken_to_its_nearest_point(self):
+        nets = {net["key"]: net for net in self.board()["nets"]}
+        self.assertEqual(sorted(nets), ["GND > 1", "GND > 2", "SIG"])
+        beside, under = nets["GND > 1"]["terminals"], nets["GND > 2"]["terminals"]
+        self.assertEqual(beside[0], dict(xy=[14, 5], layers=["F.Cu"]))
+        self.assertEqual(beside[1]["layers"], ["F.Cu"])
+        self.assertEqual(beside[1]["xy"][1], 5)
+        self.assertTrue(9.5 < beside[1]["xy"][0] < 10)  # just inside the pour's edge
+        # the pad on the other side goes straight up into the pour above it
+        self.assertEqual(under, [dict(xy=[5, 5], layers=["B.Cu"]), dict(xy=[5, 5], layers=["F.Cu"])])
+        self.assertTrue(all(net["net"] == "GND" for key, net in nets.items() if key != "SIG"))
+
+    def test_without_pours_the_net_is_joined_pad_to_pad(self):
+        nets = {net["key"]: net for net in self.board(pours=False)["nets"]}
+        self.assertEqual(sorted(nets), ["GND", "SIG"])
+        self.assertEqual(len(nets["GND"]["terminals"]), 3)
+
+    def test_the_largest_pour_is_the_one_the_others_are_taken_to(self):
+        small = [[20.0, 0.0], [22.0, 0.0], [22.0, 2.0], [20.0, 2.0]]
+        pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 21, 1, part="U2")]
+        links = k.to_pours(pads, [[0], [1]], {0: [k.Pour("GND", "F.Cu", [self.SQUARE])], 1: [k.Pour("GND", "F.Cu", [small])]}, ["F.Cu", "B.Cu"], 0.2)
+        self.assertEqual(len(links), 1)
+        pad, at, layers = links[0]
+        self.assertEqual((pad, layers), (1, ["F.Cu"]))
+        self.assertTrue(9.5 < at[0] < 10 and at[1] == 1)
+
+    def test_a_pour_on_a_layer_that_carries_no_routes_is_no_pour(self):
+        pads = [support.land(k, "GND", 2, 2, part="U1"), support.land(k, "GND", 14, 5, part="J1")]
+        self.assertEqual(k.to_pours(pads, [[0], [1]], {0: [k.Pour("GND", "In1.Cu", [self.SQUARE])]}, ["F.Cu", "B.Cu"], 0.2), [])
 
 
 if __name__ == "__main__":
