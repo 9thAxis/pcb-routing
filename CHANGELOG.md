@@ -45,12 +45,25 @@ First version as a library.
   If a net with such links is not all laid, nothing of the run is kept and it is done again with that net
   whole. On 51 such capacitors on public boards: a via between capacitor and pin for 14 to 6 %
   (the designers: 6 %), for 1.4 % more track.
-- KiCad bridge, `--pours` (not yet the default): the zones are filled first, and pads that a filled zone joins
-  count as joined. A net with a zone gets tracks only from the pads its zone does not reach, each to the
-  nearest point of the zone; a piece of zone that new tracks cut off is joined again from its own copper, as
-  by a stitching via; the thermal spokes a pad has are copper that other nets keep clear of. On the public
-  boards with their designers' zones put back: a fifth less track, but 7 of 119 boards left incomplete and
-  20 new thermal relief errors, so it stays a choice until both are none.
+- KiCad bridge: zones are followed (`--no-pours` for the old way, where a net with a zone is routed as
+  tracks). The zones are filled first, and pads that a filled zone joins count as joined; a net with a zone
+  gets tracks only from the pads its zone does not reach, each to a pad or to a point of the zone, whichever
+  comes cheapest. A track of another net pays double for its length across a zone and four times across
+  the spokes of a pad (`--pour-cost`, `--spoke-cost`). After each run the zones are filled again: copper that
+  ended on a piece of zone the other tracks cut away is taken back, pads parted from their zone are joined
+  again, and where that cannot be done past the tracks that did it, the run is taken back and done again
+  with those pads joined by a track. At the end the spokes of every pad are counted as KiCad's check
+  counts them, and a pad with too few gets a straight track into its zone, which counts as one; a pad
+  that no such track fits by is named. On the 119 public boards with their designers' zones put back: all
+  complete with no new error in KiCad's check, 26,000 mm of track and 464 vias where ignoring the zones
+  takes 33,000 mm and 388 (the vias: pads taken down to a zone on the other side).
+- Engine: terminals of an entry may name the piece of copper they stand on (`piece`). Those of one piece are
+  joined already, and the entry is joined to the piece at whichever of them comes cheapest. The bridge
+  gives every group of pads that copper already joins as one piece, with its nearest pads to choose from,
+  where it gave the group's first pad.
+- Engine: ground that costs more without being closed (`dear`): polygons with a factor on the length of
+  track in them, and on a via as a track of its diameter; the net a piece belongs to pays nothing more
+  there, and where pieces overlap a net pays the dearest that is not its own.
 - KiCad bridge: round pads and arcs are given as polygons that hold the true shape (they were drawn inside
   it, up to 0.005 mm short), and the margin added to every clearance is 0.002 mm instead of the 0.02 mm that
   had been covering for that. A board laid out at its minimum clearance has room again.

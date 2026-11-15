@@ -143,6 +143,12 @@ here.
 * A self-check of the search (`--verify`), a mask export for comparing with another tool, a trace per round.
 * Decoupling capacitors joined to the pin they stand by, in the KiCad bridge: a link of its own that is slow
   to change layer, given up for a net that cannot be completed with it.
+* Copper zones followed, in the KiCad bridge: pads that a filled zone joins are left to the zone, and a net
+  with a zone gets tracks only from the pads the zone does not reach. Other nets pay for crossing a zone
+  and more for crossing the spokes that tie a pad to it; a zone that new tracks cut is joined again; a pad
+  left with fewer spokes than the board asks for gets a track of its own into the zone. On the 119 public
+  boards with their designers' zones put back: all complete, no new error of any kind in KiCad's check
+  (thermal relief included), and 21 % less track than with the zones ignored.
 * Buses kept together: nets marked as one bus (`bus` and `bus_lane` on a net; the KiCad bridge marks nets
   that leave one part and arrive at another side by side) are drawn to run beside each other on one layer,
   in the order of their pads, and are slow to cross each other.

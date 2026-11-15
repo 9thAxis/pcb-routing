@@ -91,25 +91,37 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   the engine's limit ran out; any capacitor by a pin counted, one in series with a signal too (now both
   its nets must have three pads); a bus name changed results with the pull at 0 (the hundredth applied);
   nets of a bus too far apart to be drawn together no longer paid for crossing (they do again).
-* Pours (bridge, `--pours`, not the default). The benchmark's boards come without their zones; 86 of the
-  119 originals have them, and they can be put back on the stripped boards (the pads agree to 0.0002 mm).
-  With them, and the pads a filled zone joins counted as joined: 26,900 mm of track where there were
-  33,200 (a net with a zone gets only stubs from the pads the zone does not reach), 498 vias where there
-  were 389 (new tracks cut the zones freely, and the pieces are stitched together again). But 112 of 119
-  boards complete (119 without), 98 with no new error (119): 20 new thermal relief errors, a pad left with
-  one spoke or with spokes into a piece of zone cut off from the rest, and one clearance error. What it
-  took to get that far: the zone's own clearance is often more than a track's (0.5 against 0.2 mm), so a
-  track that keeps its distance from a spoke still has the zone cut the spoke off; a piece of zone held
-  by one through-hole pad is joined through the pad for the bridge and "isolated" for KiCad, and must be
-  stitched from its own copper, not from the pad; a stitch between two pieces of zone touches no pad and
-  was not seen as joining anything. Reserving more room round every pad with spokes took the thermal
-  errors away on some boards and closed the way out of a USB connector on another. The designers' own
-  boards fail the same check (10 of the 20 larger ones, 30 errors): that is no reason to leave it.
-  To do: a price on running through a zone, more by a pad with spokes; after filling, the spokes of
-  each pad counted as KiCad counts them, and the tracks that starved a pad laid again round it; a
-  stitch tried elsewhere when its first place is closed.
+* Zones (bridge; on by default). The benchmark's boards come without their zones; 86 of the 119 originals
+  have them, and they can be put back on the stripped boards (the pads agree to 0.0002 mm). The first
+  version counted what a filled zone joins as joined, took each remaining pad to the nearest point of the
+  zone, and kept other nets off the spokes of every pad by treating them as copper: a fifth less track,
+  but 7 of 119 boards incomplete and 20 new thermal relief errors. What it took to get to none of either:
+  * The engine joins a piece of copper at any of several points (`piece`), so a pad is taken to whichever
+    pad or point of the zone comes cheapest, and a point that turns out closed costs nothing.
+  * Zones and spokes are dear ground, not closed ground. Closing the spokes shut the way out of a USB
+    connector on one board; a price keeps tracks off them where there is another way. A factor of 2 for a
+    zone and 4 for spokes: with no price on zones one of the ten large boards was left incomplete, with 4
+    three (signals crowded off the zones onto each other).
+  * A zone is only what the last fill left of it. A track that ends on a point of a zone is joined until
+    another new track passes near and the fill draws back: such copper is found after each fill and taken
+    back, piece by piece, and its net joined again.
+  * Tracks laid in one run can ring a piece of zone in on both layers, with no way left to stitch it to
+    the rest. Then the run is taken back and done again with the pads of the two pieces as an ordinary
+    connection, pad to pad, which the other nets must leave room for. (From a point of one piece to a point
+    of the other does not do: on the zone whole again those are a step apart.)
+  * Spokes are counted as KiCad's check counts them: two crossings of the fill's edge with the line half
+    the gap from the pad are one spoke; those of a piece of fill that joins nothing else count only if the
+    pad has no others; a straight track from the pad onto the fill counts as one. A pad left with too few
+    gets that track. The count agrees with KiCad's on all 238 boards tried (stripped and routed), but
+    for a track on another layer, which KiCad counts and which ties nothing to this layer's fill.
+  With the zones: 26,000 mm of track where ignoring them takes 33,000, 464 vias for 388 (a land on one
+  side is taken down to a zone on the other), 326 s for 213 s on the 119 boards. On the nets the designers
+  routed as tracks, the tracks keep a little less distance from other copper on the large boards (a median
+  gap of 3.9 clearances for 4.8), and turn sharply less often (7 per 100 connections for 12).
+  Still open: a custom rule for the thermal gap or the number of spokes is not read; a pad no straight
+  track fits by is only named; the time a cut zone costs when a run is done again.
 * Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,
-  the designers 27 %, on seven pairs); short last stretches before a pad; copper pours.
+  the designers 27 %, on seven pairs); short last stretches before a pad.
 
 ## Tried and not kept
 
