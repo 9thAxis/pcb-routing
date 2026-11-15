@@ -256,10 +256,12 @@ def build_problem(board, args, only=None, narrow=False):
         clear = max(MM(cls.GetClearance()), min_clear)
         width = max(MM(cls.GetTrackWidth()), MM(settings.m_TrackMinWidth))
         if narrow:
-            # a second try for a net that could not be laid at its class width: as narrow as its narrowest
+            # a second try for a net that could not be laid at its class width: narrower than its narrowest
             # pad (a track wider than a fine-pitch pad cannot enter it), never under the board's minimum
             slim = min(min(MM(pad.GetSize(l).x), MM(pad.GetSize(l).y)) for pad in pads for l in enabled if pad.IsOnLayer(l))
-            width = max(min(width, slim), MM(settings.m_TrackMinWidth), 0.1)
+            # (a little under the pad's width: pads on an inch pitch do not sit on the grid, and the nearest cell
+            # to a pad's middle is then a little nearer one neighbour)
+            width = max(min(width, slim - 0.1), MM(settings.m_TrackMinWidth), 0.1)
         via = [max(MM(cls.GetViaDiameter()), MM(settings.m_ViasMinSize)), max(MM(cls.GetViaDrill()), MM(settings.m_MinThroughDrill))]
         via[0] = max(via[0], via[1] + 2 * MM(settings.m_ViasMinAnnularWidth))
         worst_clear = max(worst_clear, clear)
