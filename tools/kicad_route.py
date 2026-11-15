@@ -102,6 +102,22 @@ def ignored_checks(board_path):
     return {name for name, level in severities.items() if level == "ignore"}
 
 
+def joined_pads(connectivity, pad):
+    """The pads that copper already joins to a pad: followed from item to item through tracks and vias."""
+    found, pads, waiting = {pad.m_Uuid.AsString()}, [pad], [pad]
+    while waiting:
+        item = waiting.pop()
+        for other in list(connectivity.GetConnectedTracks(item)) + list(connectivity.GetConnectedPads(item)):
+            key = other.m_Uuid.AsString()
+            if key in found:
+                continue
+            found.add(key)
+            waiting.append(other)
+            if other.Type() == pcbnew.PCB_PAD_T:
+                pads.append(other)
+    return pads
+
+
 def build_problem(board, args, only=None, narrow=False):
     settings = board.GetDesignSettings()
     ignored = ignored_checks(args.board)
@@ -231,7 +247,7 @@ def build_problem(board, args, only=None, narrow=False):
             key = pad.m_Uuid.AsString()
             if key in seen:
                 continue
-            group = [pad] + [p for p in connectivity.GetConnectedPads(pad) if p.GetNetCode() == pad.GetNetCode()]
+            group = joined_pads(connectivity, pad)
             seen.update(p.m_Uuid.AsString() for p in group)
             groups.append(group)
         if len(groups) < 2:
@@ -266,7 +282,7 @@ def build_problem(board, args, only=None, narrow=False):
                  region_margin_mm=round(edge_clear + (slack if edge_clear > 0 else 0.0), 6), new_clearance_mm=round(max(worst_clear, min_clear) + slack, 6))
     if narrow:
         rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
-    options = dict(variants=args.variants)
+    options = dict(variants=args.variants, max_states=args.max_states)
     return dict(window=window, step=args.step, layers=layers, copper=copper, holes=holes, regions=regions, rules=rules, nets=nets, options=options)
 
 
@@ -306,6 +322,7 @@ def main():
     parser.add_argument("--slack", type=float, default=0.02, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
     parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
+    parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
     parser.add_argument("--problem", help="keep the problem file here")
     parser.add_argument("--solution", help="keep the solution file here")
     parser.add_argument("--engine", default=os.environ.get("PCB_ROUTING", "pcb-routing"), help="the pcb-routing program")
