@@ -347,7 +347,7 @@ impl Engine<'_> {
         let fixed = &self.shared.fixed;
         let lc = &self.plan.layer_cost[n];
         let via_cost = (net.via_penalty_mm / self.p.step) as f32;
-        let own_hole = if self.p.options.own_hole_free { 0.0 } else { via_cost };
+        let own_hole = self.own_hole(n);
         let off = self.plan.steps.off;
         let len: [f32; 8] = self.plan.steps.len.map(|v| v as f32);
         let mut free: Vec<u32> = self.plan.fixed_free[n].iter().chain(holes).copied().collect();

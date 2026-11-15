@@ -63,7 +63,8 @@ impl<'a> Prices<'a> {
         }
     }
 
-    /// The whole table per state. Only `d` and `seen` may be read of a state not got through [`Prices::at`].
+    /// The whole table per state. Of a state not got through [`Prices::at`] only what the first pass keeps may
+    /// be read (`d`, `seen`, `ahead`): its cost and open directions may not be drawn up yet.
     #[inline]
     pub(super) fn swept(&self) -> &'a [Swept] {
         self.swept

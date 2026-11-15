@@ -18,7 +18,7 @@ First version as a library.
   connection that could not be made.
 - The fixed masks of the nets and the costs of the ground are drawn up page by page, only where a search
   goes, and nets with the same sizes and clearances hold one page wherever none of their own copper is near.
-  Nothing is drawn up for the whole board before the first net is laid.
+  No mask is drawn up for the whole board before the first net is laid.
 - `options.exact_after` is `null` by default: no exact look-ahead tables. They cost more than they saved on
   every board measured (the largest of the hard set: 695 to 439 thousand million instructions and 3.4 to
   1.0 GB without them, the same result).

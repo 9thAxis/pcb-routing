@@ -30,7 +30,7 @@ impl Rect {
         Rect { i0: 0, j0: 0, w: g.w, h: g.h }
     }
 
-    /// The last column and row, and the first, as the stamps count them.
+    /// The first column and row, then the last, as the stamps count them.
     fn ends(&self) -> (i64, i64, i64, i64) {
         (self.i0 as i64, self.j0 as i64, (self.i0 + self.w) as i64 - 1, (self.j0 + self.h) as i64 - 1)
     }
@@ -149,7 +149,7 @@ pub(crate) fn layer_bits(layers: &[String], names: &[String]) -> u8 {
 /// How far from a piece of fixed copper, a closed region and a hole a cell can be and still be closed by it
 /// to some net of the problem: (copper, region, hole). What lies further from a cell than this need not be
 /// looked at to know the cell's mask.
-pub(crate) fn reaches(p: &Problem) -> (f64, f64, f64) {
+pub(crate) fn stamp_reach(p: &Problem) -> (f64, f64, f64) {
     let (mut copper, mut region) = (0.0f64, 0.0f64);
     for net in &p.nets {
         let clear = net.clearance.nets.values().copied().fold(net.clearance.default, f64::max);

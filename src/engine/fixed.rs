@@ -16,7 +16,7 @@
 use super::shared::Counters;
 use super::DIRS;
 use crate::grid::Grid;
-use crate::mask::{free_cells, reaches, stamp_fixed, Rect, Things, VIA_BIT};
+use crate::mask::{free_cells, stamp_fixed, stamp_reach, Rect, Things, VIA_BIT};
 use crate::model::*;
 use std::sync::{Arc, OnceLock};
 
@@ -124,7 +124,7 @@ pub(crate) struct Fixed<'p> {
 
 impl<'p> Fixed<'p> {
     pub(super) fn new(p: &'p Problem, grid: &Grid, counters: Arc<Counters>) -> Fixed<'p> {
-        let (copper_reach, region_reach, hole_reach) = reaches(p);
+        let (copper_reach, region_reach, hole_reach) = stamp_reach(p);
         let (mut copper, mut regions, mut holes) = (Bins::new(grid), Bins::new(grid), Bins::new(grid));
         for (k, c) in p.copper.iter().enumerate() {
             let (bounds, own) = shape_bounds(&c.shape);
@@ -463,5 +463,206 @@ mod tests {
         assert!(of(0).of_class && of(1).of_class && !of(2).of_class && of(3).of_class);
         assert!(Arc::ptr_eq(&of(0).mask, &of(1).mask));
         assert!(!Arc::ptr_eq(&of(0).mask, &of(3).mask));
+    }
+
+    /// A small generator of numbers that is always the same (xorshift), for the random problems below.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn f(&mut self, a: f64, b: f64) -> f64 {
+            a + (b - a) * ((self.next() >> 11) as f64 / (1u64 << 53) as f64)
+        }
+        fn u(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+        fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[self.u(v.len())]
+        }
+        fn chance(&mut self, p: f64) -> bool {
+            self.f(0.0, 1.0) < p
+        }
+    }
+
+    /// A random problem for the masks alone (its nets need not be routable): a grid narrower than a bin, than
+    /// a page, a little over one or a whole number of them; copper of every shape, pads, regions of the board
+    /// and of single nets, holes, all of them inside, across the edge of and outside the window; a few kinds
+    /// of net so that classes are shared, several entries per electrical net, clearances that name the net
+    /// itself, terminals on one layer and on all.
+    fn random_problem(r: &mut Rng) -> Problem {
+        use serde_json::Value;
+        let step = r.pick(&[0.1, 0.1, 0.05, 0.127, 0.25]);
+        let wc = r.pick(&[1usize, 2, 5, 31, 32, 33, 64, 100, 255, 256, 257, 300, 513]);
+        let hc = r.pick(&[1usize, 2, 3, 7, 31, 32, 33, 40]);
+        let (x0, y0) = (r.pick(&[0.0, -3.3, 100.0, 12.345]), r.pick(&[0.0, -7.7, 50.0]));
+        let (x1, y1) = (x0 + (wc - 1) as f64 * step, y0 + (hc - 1) as f64 * step);
+        let nl = 1 + r.u(3);
+        let layers: Vec<&str> = ["F", "In1", "B"][..nl].to_vec();
+        let names = ["a", "b", "c", "d", "WALL", "GND"];
+        // a point: well outside, exactly on the edge, exactly on a cell, or anywhere
+        let pt = |r: &mut Rng| -> [f64; 2] {
+            let mut one = |lo: f64, hi: f64| match r.u(8) {
+                0 => lo - r.f(0.0, 3.0),
+                1 => hi + r.f(0.0, 3.0),
+                2 => lo,
+                3 => hi,
+                4 => lo + r.u(((hi - lo) / step) as usize + 1) as f64 * step,
+                _ => lo + r.f(0.0, hi - lo),
+            };
+            [one(x0, x1), one(y0, y1)]
+        };
+        let some_layers = |r: &mut Rng| -> Vec<&str> {
+            // (In9 carries no routes: a via must clear copper on it all the same)
+            let mut v: Vec<&str> = ["F", "In1", "B", "In9"].iter().copied().filter(|_| r.chance(0.5)).collect();
+            if v.is_empty() {
+                v.push("F");
+            }
+            v
+        };
+        let poly = |r: &mut Rng| -> Vec<Vec<[f64; 2]>> {
+            let (c, rad, n) = (pt(r), r.f(0.05, 6.0), 3 + r.u(5));
+            let ring = |r: &mut Rng, rad: f64| -> Vec<[f64; 2]> {
+                (0..n)
+                    .map(|k| {
+                        let a = k as f64 / n as f64 * std::f64::consts::TAU;
+                        let rr = rad * r.f(0.5, 1.0);
+                        [c[0] + rr * a.cos(), c[1] + rr * a.sin()]
+                    })
+                    .collect()
+            };
+            let mut rings = vec![ring(r, rad)];
+            if r.chance(0.3) {
+                rings.push(ring(r, rad * 0.4));
+            }
+            rings
+        };
+        let region = |r: &mut Rng| -> Value {
+            let mut v = json!({"rings": poly(r), "tracks": r.chance(0.8), "vias": r.chance(0.8)});
+            if r.chance(0.5) {
+                let ls: Vec<&str> = layers.iter().copied().filter(|_| r.chance(0.6)).collect();
+                v["layers"] = json!(ls);
+            }
+            v
+        };
+        let mut copper = Vec::new();
+        for _ in 0..r.u(14) {
+            let net: Value = if r.chance(0.15) { Value::Null } else { json!(r.pick(&names)) };
+            let (ls, pad) = (some_layers(r), r.chance(0.4));
+            copper.push(match r.u(4) {
+                0 => json!({"t": "circle", "c": pt(r), "r": r.f(0.0, 1.5), "net": net, "layers": ls, "pad": pad}),
+                1 => json!({"t": "poly", "rings": poly(r), "net": net, "layers": ls, "pad": pad}),
+                _ => {
+                    let a = pt(r);
+                    let b = if r.chance(0.3) { [a[0] + r.f(-0.5, 0.5), a[1] + r.f(-0.5, 0.5)] } else { pt(r) };
+                    json!({"t": "seg", "a": a, "b": b, "w": r.f(0.0, 1.2), "net": net, "layers": ls, "pad": pad})
+                }
+            });
+        }
+        let regions: Vec<Value> = (0..r.u(3)).map(|_| region(r)).collect();
+        let holes: Vec<Value> = (0..r.u(8))
+            .map(|_| {
+                let net: Value = if r.chance(0.4) { Value::Null } else { json!(r.pick(&names)) };
+                json!({"xy": pt(r), "net": net})
+            })
+            .collect();
+        let kinds: Vec<Value> = (0..1 + r.u(3))
+            .map(|_| {
+                let mut clearances = serde_json::Map::new();
+                for name in names {
+                    if r.chance(0.3) {
+                        clearances.insert(name.to_string(), json!(r.pick(&[0.0, 0.1, 0.3, 0.8, 2.0])));
+                    }
+                }
+                let ls: Vec<&str> = layers.iter().copied().filter(|_| r.chance(0.8)).collect();
+                let ls = if ls.is_empty() { vec![layers[0]] } else { ls };
+                let own: Vec<Value> = (0..if r.chance(0.3) { 1 + r.u(2) } else { 0 }).map(|_| region(r)).collect();
+                json!({"width": r.pick(&[0.1, 0.15, 0.4, 1.0]), "via": [r.pick(&[0.45, 0.6, 1.2]), r.pick(&[0.2, 0.3])],
+                       "layers": ls, "clearance": {"default": r.pick(&[0.0, 0.17, 0.5]), "nets": clearances},
+                       "regions": own})
+            })
+            .collect();
+        let mut nets = Vec::new();
+        for k in 0..2 + r.u(4) {
+            let mut v = kinds[r.u(kinds.len())].clone();
+            v["key"] = json!(format!("n{k}"));
+            v["net"] = json!(r.pick(&names[..4]));
+            let terminals: Vec<Value> = (0..2)
+                .map(|_| {
+                    let ls: Vec<&str> = if r.chance(0.4) { layers.clone() } else { vec![layers[0]] };
+                    json!({"xy": pt(r), "layers": ls})
+                })
+                .collect();
+            v["terminals"] = json!(terminals);
+            nets.push(v);
+        }
+        serde_json::from_value(json!({
+            "window": [x0, y0, x1, y1], "step": step, "layers": layers,
+            "copper": copper, "regions": regions, "holes": holes, "nets": nets,
+            "rules": {"hole_centre_mm": r.pick(&[0.0, 0.56, 1.5]), "pad_drill_margin_mm": r.pick(&[0.0, 0.11, 1.0]),
+                      "via_in_pad": r.chance(0.5), "region_margin_mm": r.pick(&[0.0, 0.025, 0.7])}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn random_problems_give_the_masks_and_open_directions_of_the_whole_board() {
+        let mut r = Rng(0x1234_5678_9abc_def1);
+        let (mut of_class, mut own) = (0usize, 0usize);
+        for case in 0..150 {
+            let p = random_problem(&mut r);
+            let grid = Grid::new(p.window, p.step);
+            let fixed = Fixed::new(&p, &grid, Default::default());
+            let (w, h, nl) = (grid.w as i32, grid.h as i32, p.layers.len());
+            let wholes: Vec<Vec<u8>> = p.nets.iter().map(|net| net_mask(&p, &grid, net)).collect();
+            let check = |n: usize, cell: usize, directions: bool| {
+                let mask = &wholes[n];
+                if !directions {
+                    assert_eq!(fixed.mask(n, cell), mask[cell], "case {case} net {n} cell {cell} of {w}x{h}");
+                    return;
+                }
+                let closed = |j: i32, i: i32, l: usize| mask[(j * w + i) as usize] & (1 << l) != 0;
+                let (j, i) = (cell as i32 / w, cell as i32 % w);
+                for l in 0..nl {
+                    let mut bits = 0u8;
+                    for (d, &(dj, di)) in DIRS.iter().enumerate() {
+                        let (nj, ni) = (j + dj, i + di);
+                        let inside = nj >= 0 && ni >= 0 && nj < h && ni < w;
+                        if inside
+                            && !closed(nj, ni, l)
+                            && (dj == 0 || di == 0 || !(closed(j, ni, l) || closed(nj, i, l)))
+                        {
+                            bits |= 1 << d;
+                        }
+                    }
+                    assert_eq!(fixed.open(n, l, cell), bits, "case {case} net {n} layer {l} cell {cell} of {w}x{h}");
+                }
+            };
+            // first some questions in no order (nets, cells, masks and open directions mixed), so that pages
+            // and the pages of classes are first drawn up from any side
+            for _ in 0..2000 {
+                check(r.u(p.nets.len()), r.u(grid.cells()), r.chance(0.5));
+            }
+            // then everything
+            for n in 0..p.nets.len() {
+                for cell in 0..grid.cells() {
+                    check(n, cell, false);
+                    check(n, cell, true);
+                }
+                for page in 0..grid.cells().div_ceil(PAGE) {
+                    if fixed.page(n, page).of_class {
+                        of_class += 1;
+                    } else {
+                        own += 1;
+                    }
+                }
+            }
+        }
+        // the problems must be of both kinds, or the test says little about sharing
+        assert!(of_class > 1000 && own > 1000, "{of_class} pages of classes, {own} of single nets");
     }
 }

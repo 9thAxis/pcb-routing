@@ -31,7 +31,8 @@
 //!
 //! # What it guarantees, and what it does not
 //!
-//! The same problem always gives the same answer, whatever the thread count. A `routed` result has no two new
+//! The same problem always gives the same answer, whatever the thread count (with `options.exact_after` set
+//! and several attempts, paths of equal cost can be chosen differently from run to run). A `routed` result has no two new
 //! nets closer than the rules on the router's grid; the grid carries about 0.02 mm of the clearance at a
 //! 0.05 mm step. **Check every result against the real geometry before using it** (the design rule check of
 //! your CAD program, or a check of your own): the router's picture of the board is the problem file, and the

@@ -311,11 +311,10 @@ pub struct Options {
     /// [`Solution::unrouted`]) so that what is returned breaks no rule (true), or return everything as it stands
     /// with the places of conflict (false).
     pub drop_conflicts: bool,
-    /// Threads for the attempts and the masks (0: as many as the machine has).
+    /// Threads for the attempts (0: as many as the machine has). One attempt uses one thread.
     pub threads: usize,
-    /// The largest grid accepted, in (layer, cell) states. A run needs roughly 400 bytes per state for the first
-    /// attempt (the look-ahead tables, which all attempts share, are most of it) and 200 for each further attempt
-    /// running at once; the default of 10 million is about 4 GB for one attempt.
+    /// The largest grid accepted, in (layer, cell) states. A run needs roughly 200 bytes per state for each
+    /// attempt running at once (its search tables); the default of 10 million is about 2 GB for one attempt.
     pub max_states: usize,
 }
 
@@ -401,7 +400,8 @@ pub struct Solution {
 /// What a run cost, all attempts together.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Stats {
-    /// Processor seconds per kind of work, summed over the threads.
+    /// Processor seconds per kind of work, summed over the threads. The masks and the cost tables are drawn up
+    /// within the passes of a search, so their seconds are counted under those too.
     pub seconds: Vec<(String, f64)>,
     /// States taken out of the queue in the first pass of the searches.
     pub swept: u64,
