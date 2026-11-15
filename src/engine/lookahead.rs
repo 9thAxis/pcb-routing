@@ -71,15 +71,15 @@ pub(crate) struct Straight {
     unit: f32,
     /// What a layer change costs at least (0 if the net has a hole it may change layer on for nothing).
     change: f32,
-    hw: usize,
-    w: usize,
+    space: Space,
 }
 
 impl Straight {
     #[inline]
     fn get(&self, at: usize) -> f32 {
-        let (layer, cell) = (at / self.hw, at % self.hw);
-        let (j, i) = ((cell / self.w) as i32, (cell % self.w) as i32);
+        let (layer, cell) = self.space.split(at);
+        let (j, i) = self.space.rc(cell);
+        let (j, i) = (j as i32, i as i32);
         let mut best = f32::INFINITY;
         for &(tj, ti, layers) in &self.targets {
             let (a, b) = ((j - tj).abs() as f32, (i - ti).abs() as f32);
@@ -95,15 +95,14 @@ pub(crate) struct Around {
     rows: (i32, i32),
     columns: (i32, i32),
     unit: f32,
-    hw: usize,
-    w: usize,
+    space: Space,
 }
 
 impl Around {
     #[inline]
     fn get(&self, at: usize) -> f32 {
-        let cell = at % self.hw;
-        let (j, i) = ((cell / self.w) as i32, (cell % self.w) as i32);
+        let (j, i) = self.space.rc(self.space.split(at).1);
+        let (j, i) = (j as i32, i as i32);
         let a = (self.rows.0 - j).max(j - self.rows.1).max(0) as f32;
         let b = (self.columns.0 - i).max(i - self.columns.1).max(0) as f32;
         octile(a, b) * self.unit
@@ -118,8 +117,7 @@ pub(crate) struct Tiles {
     near: Vec<Vec<[i32; 4]>>,
     across: usize,
     unit: f32,
-    hw: usize,
-    w: usize,
+    space: Space,
 }
 
 const TILE_BITS: usize = 4;
@@ -134,8 +132,7 @@ fn to_box(j: i32, i: i32, b: &[i32; 4]) -> f32 {
 impl Tiles {
     #[inline]
     fn get(&self, at: usize) -> f32 {
-        let cell = at % self.hw;
-        let (j, i) = (cell / self.w, cell % self.w);
+        let (j, i) = self.space.rc(self.space.split(at).1);
         let tile = (j >> TILE_BITS) * self.across + (i >> TILE_BITS);
         let mut best = f32::INFINITY;
         for b in &self.near[tile] {
@@ -179,23 +176,15 @@ fn wanted(furthest: f32) -> f32 {
 
 impl Engine<'_> {
     /// The states of a set of terminals.
-    pub(super) fn states_of(&self, terminals: &[(u32, u8)]) -> Vec<u32> {
-        let mut states = Vec::new();
-        for &(cell, bits) in terminals {
-            for l in 0..self.nl {
-                if bits & (1 << l) != 0 {
-                    states.push((l * self.hw) as u32 + cell);
-                }
-            }
-        }
-        states
+    pub(super) fn states_of(&self, terminals: &[Term]) -> Vec<u32> {
+        terminals.iter().flat_map(|t| t.states(self.space)).collect()
     }
 
     /// What to look ahead with towards `goals`. The first times a connection is laid, the straight way: on a
     /// board where most connections are laid once, an exact table for each would cost far more than the
     /// searches themselves. A connection that is laid again and again (the nets that negotiate) gets its
     /// table from the `exact_after`-th time on, and that table is shared by all attempts.
-    pub(super) fn look(&self, n: usize, goals: &[(u32, u8)], holes: &[u32], others: &[u32]) -> Look {
+    pub(super) fn look(&self, n: usize, goals: &[Term], holes: &[u32], others: &[u32]) -> Look {
         let after = self.p.options.exact_after;
         let asked = {
             let mut asked = self.asked.borrow_mut();
@@ -207,7 +196,6 @@ impl Engine<'_> {
         if asked as usize > after && goals.len() <= 4 {
             return Look::Exact(self.floor(n, goals, holes, others));
         }
-        let w = self.grid.w;
         let unit = self.layer_cost[n]
             .iter()
             .zip(&self.p.layers)
@@ -221,11 +209,16 @@ impl Engine<'_> {
             self.p.nets[n].via_penalty_mm / self.p.step * 0.9999
         };
         Look::Straight(Straight {
-            targets: goals.iter().map(|g| ((g.0 as usize / w) as i32, (g.0 as usize % w) as i32, g.1)).collect(),
+            targets: goals
+                .iter()
+                .map(|g| {
+                    let (j, i) = self.space.rc(g.cell as usize);
+                    (j as i32, i as i32, g.layers)
+                })
+                .collect(),
             unit: (unit * 0.9999) as f32,
             change: change as f32,
-            hw: self.hw,
-            w,
+            space: self.space,
         })
     }
 
@@ -239,11 +232,11 @@ impl Engine<'_> {
     /// straight way to the box round it. The tree changes with every connection and every round, so a table
     /// of the exact cost would be worked out anew each time, at many times the cost of the search it serves.
     pub(super) fn look_around(&self, n: usize, sources: &[u32]) -> Look {
-        let w = self.grid.w;
+        let (space, w) = (self.space, self.space.w);
         let (mut rows, mut columns) = ((i32::MAX, i32::MIN), (i32::MAX, i32::MIN));
         for &s in sources {
-            let cell = s as usize % self.hw;
-            let (j, i) = ((cell / w) as i32, (cell % w) as i32);
+            let (j, i) = space.rc(space.split(s as usize).1);
+            let (j, i) = (j as i32, i as i32);
             rows = (rows.0.min(j), rows.1.max(j));
             columns = (columns.0.min(i), columns.1.max(i));
         }
@@ -251,8 +244,8 @@ impl Engine<'_> {
         let (across, down) = (w.div_ceil(size), self.grid.h.div_ceil(size));
         let mut held = vec![false; across * down];
         for &s in sources {
-            let cell = s as usize % self.hw;
-            held[((cell / w) >> TILE_BITS) * across + ((cell % w) >> TILE_BITS)] = true;
+            let (j, i) = space.rc(space.split(s as usize).1);
+            held[(j >> TILE_BITS) * across + (i >> TILE_BITS)] = true;
         }
         let boxes: Vec<[i32; 4]> = (0..across * down)
             .filter(|&t| held[t])
@@ -263,7 +256,7 @@ impl Engine<'_> {
             .collect();
         if boxes.len() * across * down > 4_000_000 {
             // too much copper on too large a board to sort the tiles for: the one box round it all
-            return Look::Around(Around { rows, columns, unit: self.unit(n), hw: self.hw, w });
+            return Look::Around(Around { rows, columns, unit: self.unit(n), space });
         }
         // A copper tile can be the nearest for some cell of a tile only if its nearest corner is no further
         // than the furthest corner of the copper tile that is nearest overall.
@@ -283,7 +276,7 @@ impl Engine<'_> {
                 boxes.iter().filter(|b| apart(b) <= least + 2.0 * across_tile + 1.0).copied().collect::<Vec<_>>(),
             );
         }
-        Look::Tiles(Tiles { near, across, unit: self.unit(n), hw: self.hw, w })
+        Look::Tiles(Tiles { near, across, unit: self.unit(n), space })
     }
 
     /// The cost from every (layer, cell) to the nearest of `goals` when only the fixed copper is in the way: no
@@ -291,7 +284,7 @@ impl Engine<'_> {
     /// open ground it is exact and the search walks straight to the goal.
     /// `holes`: cells where the net has a hole to change layer on for nothing, beyond those it has from the start.
     /// `others`: the states at the other end of the search; the table is exact far enough round them.
-    fn floor(&self, n: usize, goals: &[(u32, u8)], holes: &[u32], others: &[u32]) -> Arc<Table> {
+    fn floor(&self, n: usize, goals: &[Term], holes: &[u32], others: &[u32]) -> Arc<Table> {
         let key = (n, goals.to_vec(), holes.to_vec());
         if let Some(found) = self.shared.floors.lock().unwrap().get(&key) {
             if found.reaches(others) {
@@ -343,14 +336,14 @@ impl Engine<'_> {
     /// one of them cannot be reached at all).
     fn floor_to(&self, n: usize, states: &[u32], holes: &[u32], radius: Option<f32>, others: &[u32]) -> Table {
         let net = &self.p.nets[n];
-        let (w, hw, nl) = (self.grid.w as i32, self.hw, self.nl);
+        let (hw, nl) = (self.space.hw, self.space.nl);
         let mask = &self.shared.masks[n];
         let open = &self.shared.open[n][..];
         let lc = &self.layer_cost[n];
         let via_cost = (net.via_penalty_mm / self.p.step) as f32;
         let own_hole = if self.p.options.own_hole_free { 0.0 } else { via_cost };
-        let off: [isize; 8] = DIRS.map(|(dj, di)| (dj * w + di) as isize);
-        let len: [f32; 8] = DIRS.map(|(dj, di)| if dj != 0 && di != 0 { std::f32::consts::SQRT_2 } else { 1.0 });
+        let off = self.steps.off;
+        let len: [f32; 8] = self.steps.len.map(|v| v as f32);
         let mut free: Vec<u32> = self.fixed_free[n].iter().chain(holes).copied().collect();
         free.sort_unstable();
         let mut waiting: Vec<u32> = others.to_vec();

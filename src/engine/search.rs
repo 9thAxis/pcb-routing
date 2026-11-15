@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 /// What a search starts from, for the look-ahead towards it: a set of terminals, or more copper than that.
 #[derive(Clone, Copy)]
 pub(super) enum From<'t> {
-    Terminals(&'t [(u32, u8)]),
+    Terminals(&'t [Term]),
     Copper,
 }
 
@@ -45,7 +45,7 @@ impl Engine<'_> {
         &self,
         n: usize,
         sources: &[u32],
-        goals: &[(u32, u8)],
+        goals: &[Term],
         from: From,
         holes: &[u32],
         worker: &mut Worker,
@@ -81,18 +81,17 @@ impl Engine<'_> {
         &self,
         n: usize,
         sources: &[u32],
-        goals: &[(u32, u8)],
+        goals: &[Term],
         back: &Look,
         margin: f64,
         worker: &mut Worker,
     ) -> Option<(f64, f64)> {
         let _t = self.shared.timed(2);
-        let (w, hw, nl) = (self.grid.w as i32, self.hw, self.nl);
+        let (hw, nl) = (self.space.hw, self.space.nl);
         let lc = &self.layer_cost[n];
         let open = &self.shared.open[n][..];
         let vcost = &worker.vcost;
-        let off: [isize; 8] = DIRS.map(|(dj, di)| (dj * w + di) as isize);
-        let len: [f64; 8] = DIRS.map(|(dj, di)| if dj != 0 && di != 0 { std::f64::consts::SQRT_2 } else { 1.0 });
+        let Steps { off, len } = self.steps;
         let bend = self.p.options.bend_mm / self.p.step;
         let mut upper = f64::INFINITY;
         worker.sweep_gen = worker.sweep_gen.wrapping_add(2);
@@ -103,14 +102,12 @@ impl Engine<'_> {
         let (open_mark, closed) = (worker.sweep_gen, worker.sweep_gen + 1);
         let (a, q) = (&mut worker.swept, &mut worker.sweep_queue);
         q.clear();
-        for &(cell, bits) in goals {
-            for l in 0..nl {
-                let at = l * hw + cell as usize;
-                if bits & (1 << l) != 0 && back.get(at).is_finite() {
-                    a[at].d = 0.0;
-                    a[at].seen = open_mark;
-                    q.push((back.get(at) as f64 * 64.0) as u64, at as u32);
-                }
+        for at in goals.iter().flat_map(|g| g.states(self.space)) {
+            let at = at as usize;
+            if back.get(at).is_finite() {
+                a[at].d = 0.0;
+                a[at].seen = open_mark;
+                q.push((back.get(at) as f64 * 64.0) as u64, at as u32);
             }
         }
         let (mut limit, mut reached, mut last, mut count) = (f64::INFINITY, false, f64::INFINITY, 0u64);
@@ -232,7 +229,7 @@ impl Engine<'_> {
         &self,
         n: usize,
         sources: &[u32],
-        goals: &[(u32, u8)],
+        goals: &[Term],
         from: Option<From>,
         holes: &[u32],
         worker: &mut Worker,
@@ -277,7 +274,7 @@ impl Engine<'_> {
                 _ => floor.get(at) as f64,
             }
         };
-        let (w, hw, nl) = (self.grid.w as i32, self.hw, self.nl);
+        let (hw, nl) = (self.space.hw, self.space.nl);
         let lc = &self.layer_cost[n];
         let bend = self.p.options.bend_mm / self.p.step;
         let vcost = &worker.vcost;
@@ -294,8 +291,7 @@ impl Engine<'_> {
         let cut = upper * 1.0005 + 1.0;
         let open = &self.shared.open[n][..];
         let (corner, allowed) = turns(bend);
-        let off: [isize; 8] = DIRS.map(|(dj, di)| (dj * w + di) as isize);
-        let len: [f64; 8] = DIRS.map(|(dj, di)| if dj != 0 && di != 0 { std::f64::consts::SQRT_2 } else { 1.0 });
+        let Steps { off, len } = self.steps;
         // A state is ((layer, cell), direction of arrival), the nine directions of a cell side by side in memory.
         for &src in sources {
             let ahead = look(src as usize);
@@ -321,7 +317,7 @@ impl Engine<'_> {
             let ahead_here = look(at);
             let (l, c) = (at / hw, at % hw);
             // the look-ahead is 0 at a goal (and at little else), so this test is rarely made in full
-            if ahead_here == 0.0 && goals.iter().any(|g| g.0 as usize == c && g.1 & (1 << l) != 0) {
+            if ahead_here == 0.0 && goals.iter().any(|g| g.cell as usize == c && g.on(l)) {
                 found = u;
                 break;
             }

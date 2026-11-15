@@ -32,7 +32,7 @@ impl Engine<'_> {
         let quiet = if rules.quiet_clearance_mm > 0.0 { rules.quiet_clearance_mm } else { rules.new_clearance_mm };
         let (plain, mine) = (rules.new_clearance_mm, net.quiet);
         let shapes = self.nets[n].shapes.clone();
-        let (w, h, hw, nl) = (self.grid.w as i32, self.grid.h as i32, self.hw, self.nl);
+        let (grid, space, nl) = (self.grid.clone(), self.space, self.space.nl);
         let (half, via_r) = (net.width / 2.0, net.via[0] / 2.0);
         let conns = self.nets[n].conns.clone();
         let vias = self.nets[n].vias.clone();
@@ -47,21 +47,18 @@ impl Engine<'_> {
             let gen = self.mark_gen;
             let mut out: Vec<u32> = Vec::new();
             let mut put = |mark: &mut Vec<u32>, layer: usize, cell: usize, disc: &[(i32, i32)]| {
-                let (j, i) = (cell as i32 / w, cell as i32 % w);
-                for &(dj, di) in disc {
-                    let (jj, ii) = (j + dj, i + di);
-                    if jj >= 0 && ii >= 0 && jj < h && ii < w {
-                        let idx = layer * hw + (jj * w + ii) as usize;
-                        if mark[idx] != gen {
-                            mark[idx] = gen;
-                            out.push(idx as u32);
-                        }
+                for c in grid.around(cell, disc) {
+                    let idx = space.state(layer, c);
+                    if mark[idx] != gen {
+                        mark[idx] = gen;
+                        out.push(idx as u32);
                     }
                 }
             };
             for conn in &conns {
                 for &s in conn {
-                    put(&mut self.mark, s as usize / hw, s as usize % hw, &track);
+                    let (layer, cell) = space.split(s as usize);
+                    put(&mut self.mark, layer, cell, &track);
                 }
             }
             for &v in &vias {
@@ -92,21 +89,16 @@ impl Engine<'_> {
             let gen = self.mark_gen;
             let mut out: Vec<u32> = Vec::new();
             let mut put = |mark: &mut Vec<u32>, cell: usize, disc: &[(i32, i32)]| {
-                let (j, i) = (cell as i32 / w, cell as i32 % w);
-                for &(dj, di) in disc {
-                    let (jj, ii) = (j + dj, i + di);
-                    if jj >= 0 && ii >= 0 && jj < h && ii < w {
-                        let idx = (jj * w + ii) as usize;
-                        if mark[idx] != gen {
-                            mark[idx] = gen;
-                            out.push(idx as u32);
-                        }
+                for idx in grid.around(cell, disc) {
+                    if mark[idx] != gen {
+                        mark[idx] = gen;
+                        out.push(idx as u32);
                     }
                 }
             };
             for conn in &conns {
                 for &s in conn {
-                    put(&mut self.mark, s as usize % hw, &track);
+                    put(&mut self.mark, space.split(s as usize).1, &track);
                 }
             }
             for &v in &vias {
@@ -158,7 +150,6 @@ impl Engine<'_> {
 
     pub(super) fn trouble_alone(&self, n: usize) -> Trouble {
         let _t = self.shared.timed(5);
-        let w = self.grid.w;
         let occ_t = &self.occ_t[self.tclass[n]];
         let occ_v = &self.occ_v[self.vclass[n]];
         let st = &self.nets[n];
@@ -180,10 +171,8 @@ impl Engine<'_> {
         let need = self.p.rules.hole_centre_mm / self.grid.step;
         for (a, &va) in st.vias.iter().enumerate() {
             for &vb in &st.vias[a + 1..] {
-                let (dj, di) = (
-                    (va as usize / w) as f64 - (vb as usize / w) as f64,
-                    (va as usize % w) as f64 - (vb as usize % w) as f64,
-                );
+                let ((ja, ia), (jb, ib)) = (self.space.rc(va as usize), self.space.rc(vb as usize));
+                let (dj, di) = (ja as f64 - jb as f64, ia as f64 - ib as f64);
                 if (dj * dj + di * di).sqrt() < need - 1e-9 {
                     t.own.push(va);
                     t.own.push(vb);

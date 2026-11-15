@@ -5,7 +5,7 @@ use crate::grid::round6;
 
 impl Engine<'_> {
     pub(super) fn report(&mut self, status: Status, iterations: usize, variant: usize, message: String) -> Solution {
-        let (hw, p) = (self.hw, self.p);
+        let (space, p) = (self.space, self.p);
         let mut nets = Vec::new();
         let mut conflicts = Vec::new();
         let mut score = 0.0;
@@ -32,34 +32,33 @@ impl Engine<'_> {
             let point = |cell: u32| exact.get(&cell).copied();
             let mut tracks: Vec<Track> = Vec::new();
             for conn in &st.conns {
-                let first = conn[0];
-                let mut layer = first as usize / hw;
+                let (mut layer, first) = space.split(conn[0] as usize);
                 let mut run: Vec<Pt> = Vec::new();
-                if let Some(e) = point(first % hw as u32) {
+                if let Some(e) = point(first as u32) {
                     run.push(e);
                 }
-                push(&mut run, self.grid.xy(first as usize % hw));
+                push(&mut run, self.grid.xy(first));
                 for pair in conn.windows(2) {
-                    let (a, b) = (pair[0] as usize, pair[1] as usize);
-                    if a / hw != b / hw {
-                        let cell = (a % hw) as u32;
+                    let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
+                    if la != lb {
+                        let cell = ca as u32;
                         let at = if fixed.contains(&cell) {
-                            point(cell).unwrap_or(self.grid.xy(cell as usize))
+                            point(cell).unwrap_or(self.grid.xy(ca))
                         } else {
-                            self.grid.xy(cell as usize)
+                            self.grid.xy(ca)
                         };
                         push(&mut run, at);
                         if run.len() > 1 {
                             tracks.push(Track { layer: p.layers[layer].clone(), points: std::mem::take(&mut run) });
                         }
                         run = vec![at];
-                        layer = b / hw;
+                        layer = lb;
                     } else {
-                        push(&mut run, self.grid.xy(b % hw));
+                        push(&mut run, self.grid.xy(cb));
                     }
                 }
-                let last = *conn.last().unwrap();
-                if let Some(e) = point(last % hw as u32) {
+                let last = space.split(*conn.last().unwrap() as usize).1;
+                if let Some(e) = point(last as u32) {
                     push(&mut run, e);
                 }
                 if run.len() > 1 {
@@ -98,8 +97,8 @@ impl Engine<'_> {
                         kind: ConflictKind::Track,
                         key: net.key.clone(),
                         with,
-                        layer: Some(p.layers[s as usize / hw].clone()),
-                        xy: self.grid.xy(s as usize % hw),
+                        layer: Some(p.layers[space.split(s as usize).0].clone()),
+                        xy: self.grid.xy(space.split(s as usize).1),
                     });
                 }
             }

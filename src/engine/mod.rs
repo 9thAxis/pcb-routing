@@ -18,11 +18,13 @@ mod pairs;
 mod report;
 mod search;
 pub(crate) mod shared;
+mod space;
 mod worker;
 
 use crate::grid::Grid;
 use crate::model::*;
 use shared::Shared;
+use space::{Space, Steps, Term};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -78,8 +80,8 @@ struct NetState {
 pub(crate) struct Engine<'a> {
     p: &'a Problem,
     grid: Grid,
-    nl: usize,
-    hw: usize,
+    space: Space,
+    steps: Steps,
     shared: Arc<Shared>,
     tclass: Vec<usize>,
     vclass: Vec<usize>,
@@ -100,10 +102,10 @@ pub(crate) struct Engine<'a> {
     fixed_free: Vec<Vec<u32>>,
     /// Other entries of the same electrical net: their copper is no obstacle and their vias count as holes of the net.
     siblings: Vec<Vec<usize>>,
-    /// Terminals an entry has besides those of the problem, as (cell, layers): the end of a pair's leg, for a stub.
-    extra_terms: Vec<Vec<(u32, u8)>>,
+    /// Terminals an entry has besides those of the problem, the end of a pair's leg, for a stub.
+    extra_terms: Vec<Vec<Term>>,
     /// Per net and terminal: its cell and layers, or why it cannot be reached at all.
-    terms: Vec<Vec<Result<(u32, u8), String>>>,
+    terms: Vec<Vec<Result<Term, String>>>,
     /// Nets laid with the others fixed that could not be laid, each with the reason.
     unlaid: Vec<String>,
     /// How often each look-ahead has been asked for in this attempt: (net, goals, holes).
@@ -112,7 +114,7 @@ pub(crate) struct Engine<'a> {
     legs: Vec<Option<(usize, [Vec<Pt>; 2])>>,
 }
 
-type LookKey = (usize, Vec<(u32, u8)>, Vec<u32>);
+type LookKey = (usize, Vec<Term>, Vec<u32>);
 
 struct Trouble {
     track: Vec<u32>,
@@ -139,7 +141,8 @@ fn class_of(list: &mut Vec<(f64, bool)>, v: (f64, bool)) -> usize {
 impl<'a> Engine<'a> {
     pub(crate) fn new(p: &'a Problem, shared: Arc<Shared>) -> Engine<'a> {
         let grid = Grid::new(p.window, p.step);
-        let (nl, hw) = (p.layers.len(), grid.cells());
+        let space = Space::new(&grid, p.layers.len());
+        let (nl, hw) = (space.nl, space.hw);
         let (mut tr, mut vr) = (Vec::new(), Vec::new());
         let tclass: Vec<usize> = p.nets.iter().map(|n| class_of(&mut tr, (n.width / 2.0, n.quiet))).collect();
         let vclass: Vec<usize> = p.nets.iter().map(|n| class_of(&mut vr, (n.via[0] / 2.0, n.quiet))).collect();
@@ -189,47 +192,39 @@ impl<'a> Engine<'a> {
                 };
                 let bits = wanted & !mask[cell];
                 if bits != 0 {
-                    list.push(Ok((cell as u32, bits)));
+                    list.push(Ok(Term { cell: cell as u32, layers: bits }));
                     continue;
                 }
                 let mut best: Option<(f64, u32, u8)> = None;
                 let reach = (2.0 / p.step).ceil() as i32;
-                let (cj, ci) = ((cell / grid.w) as i32, (cell % grid.w) as i32);
-                for dj in -reach..=reach {
-                    for di in -reach..=reach {
-                        let (j, i) = (cj + dj, ci + di);
-                        if j < 0 || i < 0 || j >= grid.h as i32 || i >= grid.w as i32 {
-                            continue;
+                for c in grid.around(cell, &Grid::square(reach)) {
+                    let open = wanted & !mask[c];
+                    if open == 0 {
+                        continue;
+                    }
+                    let q = grid.xy(c);
+                    let far = crate::geom::dist(q, t.xy);
+                    if best.is_some_and(|b| far >= b.0) {
+                        continue;
+                    }
+                    // on a layer where one piece of the net's copper holds both the terminal and this cell
+                    let mut on = 0u8;
+                    for piece in &p.copper {
+                        if piece.net.as_deref() == Some(net.net.as_str())
+                            && crate::geom::inside(&piece.shape, t.xy)
+                            && crate::geom::inside(&piece.shape, q)
+                        {
+                            on |= crate::mask::layer_bits(&p.layers, &piece.layers);
                         }
-                        let c = j as usize * grid.w + i as usize;
-                        let open = wanted & !mask[c];
-                        if open == 0 {
-                            continue;
-                        }
-                        let q = grid.xy(c);
-                        let far = crate::geom::dist(q, t.xy);
-                        if best.is_some_and(|b| far >= b.0) {
-                            continue;
-                        }
-                        // on a layer where one piece of the net's copper holds both the terminal and this cell
-                        let mut on = 0u8;
-                        for piece in &p.copper {
-                            if piece.net.as_deref() == Some(net.net.as_str())
-                                && crate::geom::inside(&piece.shape, t.xy)
-                                && crate::geom::inside(&piece.shape, q)
-                            {
-                                on |= crate::mask::layer_bits(&p.layers, &piece.layers);
-                            }
-                        }
-                        if open & on != 0 {
-                            best = Some((far, c as u32, open & on));
-                        }
+                    }
+                    if open & on != 0 {
+                        best = Some((far, c as u32, open & on));
                     }
                 }
                 match best {
                     Some((_, c, bits)) => {
                         exact[n].remove(&(cell as u32));
-                        list.push(Ok((c, bits)));
+                        list.push(Ok(Term { cell: c, layers: bits }));
                     }
                     None => list.push(Err(format!("is closed by fixed copper or a closed region on {:?}", t.layers))),
                 }
@@ -238,8 +233,8 @@ impl<'a> Engine<'a> {
         }
         Engine {
             p,
-            nl,
-            hw,
+            space,
+            steps: Steps::new(grid.w),
             shared,
             tclass,
             vclass,

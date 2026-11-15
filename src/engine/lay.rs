@@ -10,7 +10,7 @@ impl Engine<'_> {
     /// nearest remaining terminal until all are joined. Nothing of the engine changes; the caller puts the result
     /// in place. `hard`: cells claimed by other nets are closed instead of dearer.
     pub(super) fn route_net(&self, n: usize, present: f64, hard: bool) -> Result<NetState, String> {
-        let mut w = Worker::take(&self.shared, self.nl * self.hw, self.hw);
+        let mut w = Worker::take(&self.shared, self.space.states(), self.space.hw);
         let mine: Vec<usize> = std::iter::once(n).chain(self.siblings[n].iter().copied()).collect();
         for &m in &mine {
             for &idx in self.nets[m].claims_t.get(self.tclass[n]).map_or(&[][..], |v| &v[..]) {
@@ -40,18 +40,17 @@ impl Engine<'_> {
     pub(super) fn route_alone(&self, n: usize, present: f64, hard: bool, w: &mut Worker) -> Result<NetState, String> {
         let p = self.p;
         let net = &p.nets[n];
-        let (hw, nl) = (self.hw, self.nl);
-        let (gw, gh) = (self.grid.w as i32, self.grid.h as i32);
+        let (space, hw, nl) = (self.space, self.space.hw, self.space.nl);
         let shut = &self.shut;
         for &c in &self.fixed_free[n] {
-            w.flag_hole(gw, gh, c, shut);
+            w.flag_hole(&self.grid, c, shut);
         }
         // Holes the net gets to change layer on for nothing that the fixed look-aheads do not know from the start:
         // vias of other entries of the same net, and its own new vias unless they become starting points below.
         let mut holes: Vec<u32> = Vec::new();
         for &m in &self.siblings[n] {
             for &v in &self.nets[m].vias {
-                w.flag_hole(gw, gh, v, shut);
+                w.flag_hole(&self.grid, v, shut);
                 holes.push(v);
             }
         }
@@ -94,7 +93,7 @@ impl Engine<'_> {
             w.price_holes(own_hole, net.no_vias);
         }
         let mut state = NetState::default();
-        let mut terms: Vec<(u32, u8)> = Vec::new();
+        let mut terms: Vec<Term> = Vec::new();
         for (t, at) in self.terms[n].iter().enumerate() {
             match at {
                 Ok(term) => terms.push(*term),
@@ -109,16 +108,10 @@ impl Engine<'_> {
             return Ok(state);
         }
         let mut tree: Vec<u32> = Vec::new();
-        let add_term = |tree: &mut Vec<u32>, t: (u32, u8)| {
-            for l in 0..nl {
-                if t.1 & (1 << l) != 0 {
-                    tree.push((l * hw) as u32 + t.0);
-                }
-            }
-        };
+        let add_term = |tree: &mut Vec<u32>, t: Term| tree.extend(t.states(space));
         add_term(&mut tree, terms[0]);
-        let mut joined: Vec<(u32, u8)> = vec![terms[0]];
-        let mut left: Vec<(u32, u8)> = terms[1..].to_vec();
+        let mut joined: Vec<Term> = vec![terms[0]];
+        let mut left: Vec<Term> = terms[1..].to_vec();
         // connections laid before the tree was last begun anew: a later one branches from the present tree only
         let mut islands = 0usize;
         let mut first_of_tree = 0usize;
@@ -139,7 +132,7 @@ impl Engine<'_> {
                 None => {
                     // What is left cannot be joined to what has been laid. It is said so, and the rest is
                     // joined among itself as far as it goes, starting from the next terminal.
-                    let at: Vec<Pt> = left.iter().map(|t| self.grid.xy(t.0 as usize)).collect();
+                    let at: Vec<Pt> = left.iter().map(|t| self.grid.xy(t.cell as usize)).collect();
                     state.failed.push(format!(
                         "{}: no path to {:?}{}",
                         net.key,
@@ -155,16 +148,15 @@ impl Engine<'_> {
                 }
             };
             let end = *path.last().unwrap();
-            let (el, ec) = (end as usize / hw, end % hw as u32);
-            let k = left.iter().position(|t| t.0 == ec && t.1 & (1 << el) != 0).unwrap();
+            let (el, ec) = space.split(end as usize);
+            let k = left.iter().position(|t| t.cell as usize == ec && t.on(el)).unwrap();
             let reached = left.remove(k);
             let lc = &self.layer_cost[n];
             let mut new_vias = Vec::new();
             let mut dir = NO_DIR;
             let bend = p.options.bend_mm / p.step;
             for pair in path.windows(2) {
-                let (a, b) = (pair[0] as usize, pair[1] as usize);
-                let (la, ca, lb, cb) = (a / hw, a % hw, b / hw, b % hw);
+                let ((la, ca), (lb, cb)) = (space.split(pair[0] as usize), space.split(pair[1] as usize));
                 if la != lb {
                     if w.via_flag[ca] != FREE && !new_vias.contains(&(ca as u32)) {
                         new_vias.push(ca as u32);
@@ -177,19 +169,20 @@ impl Engine<'_> {
                     let d = dir_of(self.grid.w, ca, cb);
                     state.cost += turn(dir, d).unwrap_or(0.0) * bend;
                     dir = d;
-                    let diag = (ca / self.grid.w != cb / self.grid.w) && (ca % self.grid.w != cb % self.grid.w);
+                    let ((ja, ia), (jb, ib)) = (space.rc(ca), space.rc(cb));
+                    let diag = ja != jb && ia != ib;
                     let len = if diag { std::f64::consts::SQRT_2 } else { 1.0 };
                     state.cost += lc[lb] * len;
                     state.steps += len;
                 }
             }
             for v in new_vias {
-                w.flag_hole(gw, gh, v, shut);
+                w.flag_hole(&self.grid, v, shut);
                 state.vias.push(v);
                 if net.branch_anywhere {
                     // a via is copper of the net on every layer: a later connection may start from it on any
                     for l in 0..nl {
-                        let at = (l * hw) as u32 + v;
+                        let at = space.state(l, v as usize) as u32;
                         if self.shared.masks[n][v as usize] & (1 << l) == 0 && !path.contains(&at) {
                             tree.push(at);
                         }

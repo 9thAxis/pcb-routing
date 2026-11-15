@@ -2,6 +2,7 @@
 
 use super::shared::Shared;
 use super::{FREE, SHUT};
+use crate::grid::Grid;
 use crate::queue::BucketQueue;
 
 /// What the search keeps per state, together so that one state costs one memory fetch.
@@ -91,16 +92,13 @@ impl Worker {
         shared.stock.lock().unwrap().push(self);
     }
 
-    pub(super) fn flag_hole(&mut self, w: i32, h: i32, cell: u32, shut: &[(i32, i32)]) {
-        let (j, i) = (cell as i32 / w, cell as i32 % w);
-        for &(dj, di) in shut {
-            let (jj, ii) = (j + dj, i + di);
-            if jj >= 0 && ii >= 0 && jj < h && ii < w {
-                let c = (jj * w + ii) as usize;
-                if self.via_flag[c] == 0 {
-                    self.via_flag[c] = SHUT;
-                    self.flagged.push(c as u32);
-                }
+    /// Note a hole of the net being laid at `cell`: a layer change there is free, and no other via may be
+    /// within the offsets `shut` of it.
+    pub(super) fn flag_hole(&mut self, grid: &Grid, cell: u32, shut: &[(i32, i32)]) {
+        for c in grid.around(cell as usize, shut) {
+            if self.via_flag[c] == 0 {
+                self.via_flag[c] = SHUT;
+                self.flagged.push(c as u32);
             }
         }
         if self.via_flag[cell as usize] == 0 {

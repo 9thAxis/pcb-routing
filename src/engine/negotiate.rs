@@ -42,20 +42,15 @@ impl Engine<'_> {
                 }
                 if o.stall_after > 0 && since >= o.stall_after && !t.track.is_empty() {
                     let disc = self.disc(self.p.nets[n].width + self.p.rules.new_clearance_mm);
-                    let (w, h, hw) = (self.grid.w as i32, self.grid.h as i32, self.hw);
                     let add = (o.history_step * (since + 1 - o.stall_after) as f64) as f32;
                     self.mark_gen += 1;
                     for &s in &t.track {
-                        let (l, c) = (s as usize / hw, s as usize % hw);
-                        let (j, i) = (c as i32 / w, c as i32 % w);
-                        for &(dj, di) in &disc {
-                            let (jj, ii) = (j + dj, i + di);
-                            if jj >= 0 && ii >= 0 && jj < h && ii < w {
-                                let k = l * hw + (jj * w + ii) as usize;
-                                if self.mark[k] != self.mark_gen {
-                                    self.mark[k] = self.mark_gen;
-                                    self.hist[k] += add;
-                                }
+                        let (l, c) = self.space.split(s as usize);
+                        for cell in self.grid.around(c, &disc) {
+                            let k = self.space.state(l, cell);
+                            if self.mark[k] != self.mark_gen {
+                                self.mark[k] = self.mark_gen;
+                                self.hist[k] += add;
                             }
                         }
                     }

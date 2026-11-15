@@ -10,7 +10,7 @@ impl Engine<'_> {
     pub(super) fn line(&self, conn: &[u32]) -> Vec<Pt> {
         let mut run = Vec::new();
         for &state in conn {
-            push(&mut run, self.grid.xy(state as usize % self.hw));
+            push(&mut run, self.grid.xy(self.space.split(state as usize).1));
         }
         run
     }
@@ -26,8 +26,8 @@ impl Engine<'_> {
             [self.index(&pair.stubs[1][0])?, self.index(&pair.stubs[1][1])?],
         ];
         let conn = self.nets[trunk].conns.first().ok_or_else(|| format!("{}: trunk not laid", pair.key))?.clone();
-        let layer = conn[0] as usize / self.hw;
-        if conn.iter().any(|&c| c as usize / self.hw != layer) {
+        let layer = self.space.split(conn[0] as usize).0;
+        if conn.iter().any(|&c| self.space.split(c as usize).0 != layer) {
             return Err(format!("{}: the trunk changes layer", pair.key));
         }
         let centre = self.line(&conn);
@@ -116,7 +116,7 @@ impl Engine<'_> {
                     }
                 }
                 let (_, cell) = best.ok_or_else(|| format!("{}: no free cell at the end of a leg at {:?} for its stub {} (the legs are closer than the rules let a stub come, or fixed copper is in the way)", pair.key, at, me.key))?;
-                self.extra_terms[n] = vec![(cell, 1 << layer)];
+                self.extra_terms[n] = vec![Term { cell, layers: 1 << layer }];
                 self.exact[n].insert(cell, at);
             }
         }

@@ -59,8 +59,44 @@ impl Grid {
         }
         out
     }
+    /// Offsets (dj, di) of the square of cells up to `n` rows and columns away, row by row.
+    pub(crate) fn square(n: i32) -> Vec<(i32, i32)> {
+        (-n..=n).flat_map(|dj| (-n..=n).map(move |di| (dj, di))).collect()
+    }
+    /// The cells at the given offsets (dj, di) from a cell that lie inside the grid, in the order of the offsets.
+    #[inline]
+    pub(crate) fn around<'a>(&self, cell: usize, offsets: &'a [(i32, i32)]) -> impl Iterator<Item = usize> + 'a {
+        let (w, h) = (self.w as i32, self.h as i32);
+        let (j, i) = (cell as i32 / w, cell as i32 % w);
+        offsets.iter().filter_map(move |&(dj, di)| {
+            let (jj, ii) = (j + dj, i + di);
+            (jj >= 0 && ii >= 0 && jj < h && ii < w).then(|| (jj * w + ii) as usize)
+        })
+    }
 }
 
 pub(crate) fn round6(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cells_round_a_cell_stop_at_the_edges() {
+        let g = Grid::new([0.0, 0.0, 0.4, 0.3], 0.1); // 5 columns, 4 rows
+        assert_eq!((g.w, g.h), (5, 4));
+        let disc = g.disc(0.1);
+        assert_eq!(disc, vec![(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]);
+        assert_eq!(g.around(7, &disc).collect::<Vec<_>>(), vec![2, 6, 7, 8, 12]);
+        assert_eq!(g.around(0, &disc).collect::<Vec<_>>(), vec![0, 1, 5]); // lower left corner
+        assert_eq!(g.around(19, &disc).collect::<Vec<_>>(), vec![14, 18, 19]); // upper right corner
+        assert_eq!(g.around(9, &disc).collect::<Vec<_>>(), vec![4, 8, 9, 14]); // no wrap to the next row
+        let square = Grid::square(1);
+        assert_eq!(square.len(), 9);
+        assert_eq!(square[0], (-1, -1));
+        assert_eq!(square[1], (-1, 0));
+        assert_eq!(g.around(0, &square).collect::<Vec<_>>(), vec![0, 1, 5, 6]);
+    }
 }
