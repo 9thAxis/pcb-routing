@@ -12,6 +12,8 @@
 use crate::board::{Pad, Place};
 use crate::error::{invalid, Error};
 use crate::geom::dist;
+use crate::grid::round6;
+use crate::model::Pt;
 use serde::{Deserialize, Serialize};
 
 /// Two pads further apart than this, in mm, are not an end of a pair.
@@ -62,85 +64,97 @@ pub fn plan(a: &[Pad], b: &[Pad], pitch: f64, layers: &[String], step: f64) -> R
             return Err(invalid(field, format!("is {value}: more than 0")));
         }
     }
-    // the ends: pads that are each the other's nearest
-    let nearest = |p: &Pad, others: &[Pad]| {
-        (0..others.len()).min_by(|&i, &j| dist(p.at, others[i].at).total_cmp(&dist(p.at, others[j].at)))
-    };
-    let mut ends: Vec<[usize; 2]> = Vec::new();
-    for (i, pad) in a.iter().enumerate() {
-        if let Some(j) = nearest(pad, b).filter(|&j| nearest(&b[j], a) == Some(i) && dist(pad.at, b[j].at) <= END_REACH)
-        {
-            ends.push([i, j]);
-        }
-    }
+    let ends = ends_of(a, b);
     let loose = [
         (0..a.len()).filter(|i| ends.iter().all(|end| end[0] != *i)).collect(),
         (0..b.len()).filter(|j| ends.iter().all(|end| end[1] != *j)).collect(),
     ];
-    let middle =
-        |end: [usize; 2]| [(a[end[0]].at[0] + b[end[1]].at[0]) / 2.0, (a[end[0]].at[1] + b[end[1]].at[1]) / 2.0];
-    let apart = |end: [usize; 2]| dist(a[end[0]].at, b[end[1]].at);
-    // (how far off the pads a trunk begins at the least: room for the stubs to come in from the pads' distance
-    // to the legs' at 45 degrees)
-    let off = |end: [usize; 2]| apart(end) / 2.0 + pitch;
-    // the trunks: the ends joined by the shortest way, each new end to the nearest already joined
-    let mut joined = vec![0usize];
-    let mut between: Vec<[usize; 2]> = Vec::new();
-    while joined.len() < ends.len() {
-        let far = |&(i, j): &(usize, usize)| dist(middle(ends[i]), middle(ends[j]));
-        let pairs = joined.iter().flat_map(|&i| (0..ends.len()).filter(|j| !joined.contains(j)).map(move |j| (i, j)));
-        let (i, j) = pairs.min_by(|x, y| far(x).total_cmp(&far(y))).expect("an end is left");
-        between.push([i, j]);
-        joined.push(j);
-    }
-    let on = |pad: &Pad| -> Vec<&String> { layers.iter().filter(|l| pad.layers.contains(l)).collect() };
+    let middle = |end: [usize; 2]| between(a[end[0]].at, b[end[1]].at);
+    // How far off its pads a trunk begins at the least: room for the stubs to come in at 45 degrees from the
+    // pads' distance to the legs'.
+    let off = |end: [usize; 2]| dist(a[end[0]].at, b[end[1]].at) / 2.0 + pitch;
+    let middles: Vec<Pt> = ends.iter().map(|&end| middle(end)).collect();
     let mut trunks = Vec::new();
-    for [i, j] in between {
-        let (from, to) = (middle(ends[i]), middle(ends[j]));
-        // (between the places where it gathers and where it parts, a trunk is as long again as both are off
-        // their pads at the least: so the furthest places are offered only where the ends are far enough apart)
-        let room = |further: f64| dist(from, to) >= (further + 1.0) * (off(ends[i]) + off(ends[j]));
-        if !room(FURTHER[0]) {
-            continue; // too close for a stretch side by side: these two ends are joined as the pads of any net are
-        }
-        // on the layers all four pads are on; failing that, on those of either end
-        let of_end = |end: [usize; 2]| -> Vec<&String> {
-            on(&a[end[0]]).into_iter().filter(|l| b[end[1]].layers.contains(l)).collect()
-        };
-        let common: Vec<&String> = of_end(ends[i]).into_iter().filter(|l| of_end(ends[j]).contains(l)).collect();
-        let either: Vec<&String> =
-            layers.iter().filter(|l| of_end(ends[i]).contains(l) || of_end(ends[j]).contains(l)).collect();
-        let on_layers: Vec<String> = if common.is_empty() { either } else { common }.into_iter().cloned().collect();
-        if on_layers.is_empty() {
+    for [i, j] in shortest_tree(&middles) {
+        let (from, to) = (middles[i], middles[j]);
+        // Between the places where it gathers and where it parts, a trunk is as long again as both are off
+        // their pads at the least: so the furthest places are offered only where the ends are far enough apart,
+        // and two ends too close for the nearest are joined as the pads of any net are.
+        let reach = off(ends[i]) + off(ends[j]);
+        let lots: Vec<f64> = FURTHER.into_iter().filter(|further| dist(from, to) >= (further + 1.0) * reach).collect();
+        let on = trunk_layers([&a[ends[i][0]], &b[ends[i][1]]], [&a[ends[j][0]], &b[ends[j][1]]], layers);
+        if lots.is_empty() || on.is_empty() {
             continue;
         }
-        let places = |end: [usize; 2], from: [f64; 2], to: [f64; 2]| -> Vec<Vec<Place>> {
-            // towards the other end, in the nearest of the eight directions and the two beside it
-            let towards = (to[1] - from[1]).atan2(to[0] - from[0]);
-            let eighth = std::f64::consts::FRAC_PI_4;
-            let straight = (towards / eighth).round();
-            let nearer = if towards >= straight * eighth { 1.0 } else { -1.0 }; // (the side the true direction lies on)
-            let mut found: Vec<Vec<Place>> = Vec::new();
-            for further in FURTHER.into_iter().filter(|&further| room(further)) {
-                found.push(Vec::new());
-                for turn in [0.0, nearer, -nearer] {
-                    let angle = (straight + turn) * eighth;
-                    let far = further * off(end);
-                    let at = [from[0] + far * angle.cos(), from[1] + far * angle.sin()];
-                    let xy = [
-                        crate::grid::round6((at[0] / step).round() * step),
-                        crate::grid::round6((at[1] / step).round() * step),
-                    ];
-                    if !found.iter().flatten().any(|place| place.xy == xy) {
-                        found.last_mut().expect("a lot was begun").push(Place { xy, layers: on_layers.clone() });
-                    }
-                }
-            }
-            found
-        };
-        trunks.push(Trunk { ends: [i, j], gather: [places(ends[i], from, to), places(ends[j], to, from)] });
+        let gather = |end: usize, from: Pt, to: Pt| places(from, to, off(ends[end]), &lots, &on, step);
+        trunks.push(Trunk { ends: [i, j], gather: [gather(i, from, to), gather(j, to, from)] });
     }
     Ok(Plan { ends, trunks, loose })
+}
+
+/// The point half way between two.
+fn between(p: Pt, q: Pt) -> Pt {
+    [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0]
+}
+
+/// The ends of a pair: a pad of each net that are each the other's nearest, no more than [`END_REACH`] apart.
+fn ends_of(a: &[Pad], b: &[Pad]) -> Vec<[usize; 2]> {
+    let nearest = |p: &Pad, others: &[Pad]| {
+        (0..others.len()).min_by(|&i, &j| dist(p.at, others[i].at).total_cmp(&dist(p.at, others[j].at)))
+    };
+    let faces = |i: usize, j: usize| nearest(&b[j], a) == Some(i) && dist(a[i].at, b[j].at) <= END_REACH;
+    (0..a.len()).filter_map(|i| nearest(&a[i], b).filter(|&j| faces(i, j)).map(|j| [i, j])).collect()
+}
+
+/// The points joined by the shortest way: each to the nearest of those joined before it, beginning with the
+/// first. As pairs of their indices, the one joined earlier first.
+fn shortest_tree(points: &[Pt]) -> Vec<[usize; 2]> {
+    let mut joined: Vec<usize> = (0..points.len()).take(1).collect();
+    let mut tree = Vec::new();
+    while joined.len() < points.len() {
+        let apart = |&[i, j]: &[usize; 2]| dist(points[i], points[j]);
+        let left = (0..points.len()).filter(|j| !joined.contains(j));
+        let next = left.flat_map(|j| joined.iter().map(move |&i| [i, j])).min_by(|x, y| apart(x).total_cmp(&apart(y)));
+        let Some([i, j]) = next else { break };
+        tree.push([i, j]);
+        joined.push(j);
+    }
+    tree
+}
+
+/// The routing layers a trunk between two ends (the two pads of each) is offered on: those all four pads are
+/// on; failing that, those the pads of either end are both on.
+fn trunk_layers(one: [&Pad; 2], other: [&Pad; 2], layers: &[String]) -> Vec<String> {
+    let of_end = |end: [&Pad; 2], layer: &String| end.iter().all(|pad| pad.layers.contains(layer));
+    let both: Vec<String> = layers.iter().filter(|l| of_end(one, l) && of_end(other, l)).cloned().collect();
+    if !both.is_empty() {
+        return both;
+    }
+    layers.iter().filter(|l| of_end(one, l) || of_end(other, l)).cloned().collect()
+}
+
+/// The places a trunk may begin at, off the middle `from` of one of its ends towards the middle `to` of the
+/// other: for each of `lots`, `off` times that far, in the nearest of the eight directions and the two beside
+/// it (first the one on the side the true direction lies). On the grid of `step`, each place once.
+fn places(from: Pt, to: Pt, off: f64, lots: &[f64], on: &[String], step: f64) -> Vec<Vec<Place>> {
+    let eighth = std::f64::consts::FRAC_PI_4;
+    let towards = (to[1] - from[1]).atan2(to[0] - from[0]);
+    let straight = (towards / eighth).round();
+    let nearer = if towards >= straight * eighth { 1.0 } else { -1.0 };
+    let on_grid = |v: f64| round6((v / step).round() * step);
+    let mut found: Vec<Vec<Place>> = Vec::new();
+    for further in lots {
+        let mut lot: Vec<Place> = Vec::new();
+        for turn in [0.0, nearer, -nearer] {
+            let (angle, far) = ((straight + turn) * eighth, further * off);
+            let xy = [on_grid(from[0] + far * angle.cos()), on_grid(from[1] + far * angle.sin())];
+            if !found.iter().flatten().chain(&lot).any(|place| place.xy == xy) {
+                lot.push(Place { xy, layers: on.to_vec() });
+            }
+        }
+        found.push(lot);
+    }
+    found
 }
 
 #[cfg(test)]
