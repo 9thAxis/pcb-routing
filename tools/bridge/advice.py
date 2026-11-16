@@ -4,30 +4,18 @@ bridge moves no part."""
 import fnmatch
 import math
 
-EDGE = 3.0  # a part with a pad this near the board's edge stays as it stands: a connector faces outwards
+from .names import FACING_PART
+
 IN_LINE = 0.5  # the pads of an end stand across the pair's way if the sine of the angle between is more
 
 
-def at_edge(picture, part):
-    """Whether a pad of this part stands within EDGE of the board's outline (its box, where it has none)."""
-    x0, y0, x1, y1 = picture.box
-    rings = ([ring for polygon in picture.outline for ring in polygon] if picture.outline
-             else [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]])
-    def far(at, a, b):
-        along = [b[0] - a[0], b[1] - a[1]]
-        length = along[0] ** 2 + along[1] ** 2
-        t = 0.0 if length < 1e-18 else min(1.0, max(0.0, ((at[0] - a[0]) * along[0] + (at[1] - a[1]) * along[1]) / length))
-        return math.dist(at, [a[0] + t * along[0], a[1] + t * along[1]])
-    pads = [pad for pad in picture.pads if pad.part == part]
-    return any(far(pad.at, a, b) < EDGE for pad in pads for ring in rings for a, b in zip(ring, ring[1:] + ring[:1]))
-
-
-def stays(picture, hints, part):
+def stays(picture, hints, part, guesses=True):
     """Whether a part is to stay as it stands: as the hints say of it (`parts`, `turn`: the last pattern that
-    names it), else if it stands at the board's edge."""
+    names it); else, if guesses are made, a part that by its reference is a connector or a switch: it faces
+    whoever uses the board."""
     said = [what["turn"] for pattern, what in (hints.parts if hints else [])
             if "turn" in what and fnmatch.fnmatchcase(part or "", pattern)]
-    return not said[-1] if said else at_edge(picture, part)
+    return not said[-1] if said else bool(guesses and FACING_PART.match(part or ""))
 
 
 def changed_over(picture, pair):
@@ -77,7 +65,7 @@ def done(picture, two):
             "the part has them on its other side)")
 
 
-def pair_advice(picture, hints, pair):
+def pair_advice(picture, hints, pair, guesses=True):
     """What to say of one pair: for each line of its ends where some stand changed over against the others
     (the pair then goes round an end, or crosses over on another layer), the part that would have to be turned.
     Of several that would do, those that may be turned (see stays); nothing where none may."""
@@ -89,16 +77,16 @@ def pair_advice(picture, hints, pair):
         first, second = pads(end)
         parts = sorted({first.part, second.part} - {None})
         against = sorted({pad.part for other in over[end] for pad in pads(other)} - {None})
-        if not parts or any(stays(picture, hints, part) for part in parts) or tuple(parts) in said:
+        if not parts or any(stays(picture, hints, part, guesses) for part in parts) or tuple(parts) in said:
             continue
         # (said once of two ends that are each changed over against the other: either would do)
         either = [other for other in over[end] if end in over.get(other, [])]
         others = sorted({pad.part for other in either for pad in pads(other)} - {None})
-        free = [part for part in others if not stays(picture, hints, part)]
+        free = [part for part in others if not stays(picture, hints, part, guesses)]
         said.update({tuple(parts), tuple(free)})
         where = f"at {' and '.join(parts)} than at {', '.join(against)}" if against else f"at {' and '.join(parts)}"
         what = f"{a} = {b}: its two nets are the other way round {where}, so the pair goes round an end or crosses over. "
         cures = [done(picture, pads(end))] + [done(picture, pads(other)) for other in either
-                                              if not any(stays(picture, hints, pad.part) for pad in pads(other))]
+                                              if not any(stays(picture, hints, pad.part, guesses) for pad in pads(other))]
         lines.append(f"{what}With {'; or with '.join(dict.fromkeys(cures))}, it would run straight on.")
     return lines

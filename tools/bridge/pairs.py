@@ -51,7 +51,7 @@ def pairs_of(picture, rules, names, ask, notes=None):
     found = [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans)
              if plan["trunks"] or plan.get("through")]
     if notes is not None:
-        notes += [line for pair in found for line in pair_advice(picture, rules.settings.hints, pair)]
+        notes += [line for pair in found for line in pair_advice(picture, rules.settings.hints, pair, rules.settings.guesses)]
     return found
 
 

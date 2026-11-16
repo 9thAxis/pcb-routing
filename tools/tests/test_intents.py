@@ -375,8 +375,8 @@ class Pairs(WithEngine):
         self.assertEqual([pair["key"] for pair in again["pairs"]], ["D_N = D_P"])
 
     def twisted(self, **near):
-        """A pair whose two nets are the other way round at its near end (the part R1, 5 mm into the board;
-        `near` changes its pads) than at its far end (J1, at the board's edge)."""
+        """A pair whose two nets are the other way round at its near end (the part R1; `near` changes its
+        pads) than at its far end (J1, a connector by its reference)."""
         pads = [support.land(k, "D_P", 5.0, 5.0, half=0.3, part="R1", **near),
                 support.land(k, "D_N", 5.0, 4.0, half=0.3, part="R1", **near),
                 support.land(k, "D_P", 18.0, 4.0, half=0.3, part="J1"), support.land(k, "D_N", 18.0, 5.0, half=0.3, part="J1")]
@@ -387,18 +387,21 @@ class Pairs(WithEngine):
     def advice(self, picture, **settings):
         return [note for note in self.problem(picture, **settings)[1] if "other way round" in note]
 
-    def test_a_part_that_stands_the_wrong_way_round_for_a_pair_is_said_so_and_one_at_the_edge_is_left_alone(self):
-        # the part in the board may be turned; the connector at the edge is not offered
+    def test_a_part_that_stands_the_wrong_way_round_for_a_pair_is_said_so_and_a_connector_is_left_alone(self):
+        # the resistor may be turned; the connector is not offered, wherever it stands
         (said,) = self.advice(self.twisted())
         self.assertEqual(said, "D_N = D_P: its two nets are the other way round at R1 than at J1, so the pair goes round "
                                "an end or crosses over. With R1 turned by 180 degrees, it would run straight on.")
         # nothing is said of a pair that is the same way round at both ends
         self.assertEqual(self.advice(self.picture()), [])
-        # the hints keep a part as it stands, or let a part at the edge be turned
+        # the hints keep a part as it stands, or let a connector be turned; so does making no guesses
         self.assertEqual(self.advice(self.twisted(), hints=hints(parts={"R*": dict(turn=False)})), [])
         (said,) = self.advice(self.twisted(), hints=hints(parts={"J1": dict(turn=True)}))
         self.assertTrue(said.endswith("With R1 turned by 180 degrees; or with J1 turned by 180 degrees, it would run straight on."),
                         said)
+        named = hints(pairs=[dict(nets=["D_P", "D_N"])])  # (without guesses a pair is one the hints name)
+        (said,) = self.advice(self.twisted(), guesses=False, hints=named)
+        self.assertTrue(said.endswith("or with J1 turned by 180 degrees, it would run straight on."), said)
         with self.assertRaises(ValueError):
             hints(parts={"J1": dict(turn="no")})
         self.assertEqual(k.unheeded(self.twisted(), hints(parts={"U9": dict(turn=False)})),

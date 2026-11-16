@@ -25,6 +25,7 @@ are laid once more without pairs and without what was only guessed, and that is 
 | `CLK`, `SCK`, `SCL`, `MCLK`, `BCLK`, `REFCLK`, `TCK` ... as a word of the name | clock | twice as slow to take a via |
 | `SW`, `LX`, `PHASE`, `BOOT`, `GATE`, `PWM` ... as a word of the name | noisy (a switch node, a gate drive) | nothing, unless the hints say so too |
 | `AREF`, `AIN`, `ADC`, `SENSE`, `MIC`, `ANT`, `RF`, `NTC`, `RTD` ... as a word of the name | sensitive | nothing, unless the hints say so too |
+| a part `J1`, `P2`, `CN3`, `CON1`, `X1`, `USB1`, `RJ1`, `SW1`, `S1`, `BTN1`, `PB1` | a connector or a switch | never advised to be turned (below) |
 | names that differ only in an ending `_P`/`_N`, `-P`/`-N`, `P`/`N`, `+`/`-`, `DP`/`DM` | a differential pair | laid side by side (below) |
 
 A guessed role does less than the same role in the hints file. Measured on 20 public boards, guessed clocks,
@@ -126,8 +127,10 @@ A part whose two pads stand either side of its middle is to be turned by 180 deg
 of a larger part are to be swapped in the schematic, if the part allows (turned, it would have them on its
 other side); two parts are to change places. Where either end would do, both are named.
 
-A part with a pad within 3 mm of the board's edge is never offered: a connector faces outwards. `parts` in
-the hints file overrides that either way, by reference, with `*` and `?` as for nets: `{"turn": false}`
-keeps a part as it stands, `{"turn": true}` lets one at the edge be offered. It is about this advice only.
+A connector or a switch is never offered: it faces whoever uses the board. Which parts those are is guessed
+from their references (`J1`, `P2`, `CN3`, `CON1`, `X1`, `USB1`, `RJ1`, `SW1`, `S1`, `BTN1`, `PB1`; not `JP1`, a
+jumper). `parts` in the hints file overrides the guess either way, by reference, with `*` and `?` as for
+nets: `{"turn": false}` keeps a part as it stands, `{"turn": true}` lets a connector be offered. It is about
+this advice only.
 A part in the middle of a pair that stands the wrong way round is not passed (see above); the pair ends
 at it.
