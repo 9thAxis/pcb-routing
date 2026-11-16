@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A last step of a cell or two onto a via is taken out of the track, as it is before a pad; and runs of a
+  net that meet end to end and go straight on are one track. Segments under 0.1 mm away from pads on the
+  119 public boards: 45 to 31.
 - Pairs are laid the right way round. A pair cannot be turned over on one layer, and a trunk that reached
   its place from the side ended with one leg behind the other. Now: a terminal may have a `heading` (a track
   sets out that way and comes in against it) and a `hand` (an entry is joined at terminals of one hand

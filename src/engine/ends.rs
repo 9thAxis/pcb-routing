@@ -109,16 +109,27 @@ impl Engine<'_> {
         let least = self.plan.grid.step / 2.0;
         let joins: Vec<Vec<Join>> = (0..runs.len()).map(|n| self.joins(n, &runs[n])).collect();
         for n in 0..runs.len() {
-            let mine = || std::iter::once(n).chain(self.plan.siblings[n].iter().copied()).flat_map(|m| &joins[m]);
+            let mine_nets = |n: usize| std::iter::once(n).chain(self.plan.siblings[n].iter().copied());
+            let mine = || mine_nets(n).flat_map(|m| &joins[m]);
             for r in 0..runs[n].len() {
                 for end in 0..2 {
                     // (taken: what is still wanted of the other nets stands in this net's way, see `clear`)
-                    let Some(to) = runs[n][r].want[end].take() else { continue };
+                    let wanted = runs[n][r].want[end].take();
                     let layer = runs[n][r].layer;
                     let mut points = runs[n][r].points.clone();
                     if end == 0 {
                         points.reverse();
                     }
+                    // An end on a via of the net wants no other place than its cell; but a last step of a
+                    // cell or two onto the via is taken out of it as it is before a pad.
+                    let on_via = || {
+                        let at = points[points.len() - 1];
+                        let vias = mine_nets(n).flat_map(|m| &self.laid.nets[m].vias);
+                        points.len() > 2
+                            && !dead[n]
+                            && vias.into_iter().any(|&v| dist(self.plan.grid.xy(v as usize), at) < 1e-9)
+                    };
+                    let Some(to) = wanted.or_else(|| on_via().then(|| points[points.len() - 1])) else { continue };
                     let copper = Copper { runs, dead };
                     let cell = points[points.len() - 1];
                     let k = points.len();
@@ -141,9 +152,22 @@ impl Engine<'_> {
                             .filter(|new| self.may_move(n, layer, was, &new[k - was.len()..], mine(), &copper))
                     };
                     // Else the last corner slides; and where it cannot, the end of the last stretch turns.
-                    let new = (k > 1 && !dead[n])
-                        .then(|| stepped.then(|| turned(true)).flatten().or_else(slid).or_else(|| turned(false)))
-                        .flatten();
+                    let new = match wanted {
+                        Some(_) => (k > 1 && !dead[n])
+                            .then(|| stepped.then(|| turned(true)).flatten().or_else(slid).or_else(|| turned(false)))
+                            .flatten(),
+                        // (at a via: only the step is taken out, and nothing is laid where it cannot be)
+                        None => {
+                            if let Some(new) = stepped.then(|| turned(true)).flatten() {
+                                points = new;
+                            }
+                            if end == 0 {
+                                points.reverse();
+                            }
+                            runs[n][r].points = points;
+                            continue;
+                        }
+                    };
                     // Where the cell's centre is on the pad too, the track is joined there as well, and the stub
                     // is left out if it would come too near another net. The end of a pair's leg is met in any case.
                     let in_pad = self.in_pad(n, layer, cell, to);
@@ -207,7 +231,8 @@ impl Engine<'_> {
             if q.layer.is_some_and(|l| l != layer) {
                 false
             } else if dist(q.at, cell) < 1e-6 {
-                !q.follows
+                // (what stands on the cell holds the end there, unless it leaves with it or the end stays)
+                !q.follows && dist(is[is.len() - 1], cell) > 1e-6
             } else {
                 on(q.at, was) && !on(q.at, is)
             }
