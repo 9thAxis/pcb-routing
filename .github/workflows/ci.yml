@@ -22,6 +22,19 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  bridge:
+    # The KiCad bridge and the quality tools, without KiCad: the engine itself answers the bridge's questions.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy shapely
+      - run: cargo build --release
+      - run: python -m unittest discover -s tools/tests
+
   msrv:
     runs-on: ubuntu-latest
     steps:

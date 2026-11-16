@@ -305,8 +305,8 @@ repository) records what each of these bought when it was added, and what was tr
   and a diagonal step can come nearer by about 0.002 mm at a 0.05 mm step. The KiCad bridge adds 0.002 mm to
   every clearance for this (`--slack`).
 * The legs of a pair are not tested against fixed copper themselves. The trunk they are split from is, at
-  its own width, and the legs lie within it: on the outside of a corner too sharp for what the trunk is
-  wider than the two legs, a leg is cut straight across.
+  its own width, and a pair is laid only if its legs come out within the trunk and no nearer each other
+  than their pitch; else it is reported as not laid.
 * Memory is about 200 bytes per (layer, cell) state for each attempt running at once. A problem beyond
   `options.max_states` (default 10 million) is refused.
 * At most seven routing layers and 249 net entries per run.

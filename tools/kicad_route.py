@@ -220,7 +220,7 @@ NAMED = [("crystal", _WORD("XTAL|XTALIN|XTALOUT|OSC|OSCIN|OSCOUT|XIN|XOUT|OSC32|
          ("clock", _WORD("CLK|CLOCK|SCK|SCLK|SCL|MCLK|BCLK|LRCLK|XCLK|PCLK|REFCLK|TCK")),
          ("noisy", _WORD("SW|LX|PHASE|BOOT|BST|GATE|HDRV|LDRV|PWM")),
          ("sensitive", _WORD("VREF|AREF|REFP|REFN|AIN|AINP|AINN|ADC|SENSE|VSENSE|ISENSE|SENSEP|SENSEN|MIC|ANT|RF|NTC|RTD|THERM"))]
-CRYSTAL_PART = re.compile(r"^(Y|X|XTAL)\d")
+CRYSTAL_PART = re.compile(r"^(Y|XTAL)\d")  # (not X: that is a connector as often)
 ROLES = ("supply", "ground", "clock", "crystal", "sensitive", "noisy")
 # How a role leans a net: (how readily it gives way, its weight among results, its via penalty as a factor).
 # A role the hints give leans it all the way. One that is only guessed makes it slower to take a via and no
@@ -229,6 +229,8 @@ LEANING = dict(clock=(0.5, 2.0, 2.0), crystal=(0.2, 3.0, 5.0), noisy=(0.3, 3.0, 
 GUESSED = dict(clock=(1.0, 1.0, 2.0), crystal=(1.0, 1.0, 5.0))
 HINTS = dict(role=str, width=float, clearance=float, amps=float, volts=float, max_mm=float, vias=str, layers=list, pair=(str, bool),
              gap=float, bus=(str, bool), priority=str, ohms=float, match=str)
+# The most a hint may ask: beyond it, it is a slip of a unit (and the router would draw up a board of it).
+MOST = dict(width=20.0, clearance=20.0, gap=20.0, amps=30.0, volts=5000.0)
 NOT_ACTED_ON = ("ohms", "match")  # taken down and said back, but nothing in the router follows them yet
 
 
@@ -275,31 +277,66 @@ def read_hints(path):
     except (OSError, ValueError) as error:
         raise ValueError(f"{name}: {error}")
     wrong = lambda where, why: ValueError(f"{name}: {where}: {why}")
+    number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
     if not isinstance(data, dict) or set(data) - {"nets", "pairs"}:
         raise wrong("the file", "an object with `nets` and `pairs`, nothing else")
+    if not isinstance(data.get("nets", {}), dict) or not isinstance(data.get("pairs", []), list):
+        raise wrong("the file", "`nets` is an object (a pattern, and what is said of the nets it names), `pairs` a list")
     hints = Hints(name=name)
-    for pattern, said in (data.get("nets") or {}).items():
+    for pattern, said in data.get("nets", {}).items():
         if not isinstance(said, dict):
             raise wrong(f"nets[{pattern}]", "an object")
         for what, value in said.items():
             kinds = HINTS.get(what)
             if kinds is None:
                 raise wrong(f"nets[{pattern}].{what}", f"not known; one of {', '.join(sorted(HINTS))}")
-            numeric = kinds is float and isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-            if not (numeric or (kinds is not float and isinstance(value, kinds))):
-                raise wrong(f"nets[{pattern}].{what}", "a number more than 0" if kinds is float else "of the wrong kind")
+            if kinds is float and not number(value):
+                raise wrong(f"nets[{pattern}].{what}", "a number more than 0")
+            if kinds is not float and not isinstance(value, kinds):
+                raise wrong(f"nets[{pattern}].{what}", "of the wrong kind")
+            if what in MOST and value > MOST[what]:
+                raise wrong(f"nets[{pattern}].{what}", f"is {value}: {MOST[what]:g} at the most (mm, A, V)")
         for what, among in (("role", ROLES), ("vias", ("none", "few")), ("priority", ("high",))):
             if what in said and said[what] not in among:
                 raise wrong(f"nets[{pattern}].{what}", f"one of {', '.join(among)}")
+        if "layers" in said and not (said["layers"] and all(isinstance(layer, str) for layer in said["layers"])):
+            raise wrong(f"nets[{pattern}].layers", "a list of layer names")
+        for what in ("pair", "bus"):  # (a name, or false for none: true says nothing)
+            if said.get(what) is True or said.get(what) == "":
+                raise wrong(f"nets[{pattern}].{what}", "a name, or false")
         hints.nets.append((pattern, dict(said)))
-    for k, pair in enumerate(data.get("pairs") or []):
+    for k, pair in enumerate(data.get("pairs", [])):
         legs = pair.get("nets") if isinstance(pair, dict) else None
         if not (isinstance(legs, list) and len(legs) == 2 and all(isinstance(leg, str) for leg in legs) and legs[0] != legs[1]):
             raise wrong(f"pairs[{k}].nets", "the two nets of the pair")
-        if set(pair) - {"nets", "width", "gap", "ohms"} or not all(isinstance(pair[w], (int, float)) and pair[w] > 0 for w in pair if w != "nets"):
-            raise wrong(f"pairs[{k}]", "`nets`, and `width`, `gap`, `ohms` as numbers more than 0")
+        if set(pair) - {"nets", "width", "gap", "ohms"} or not all(number(pair[w]) and pair[w] <= MOST.get(w, math.inf) for w in pair if w != "nets"):
+            raise wrong(f"pairs[{k}]", "`nets`, and `width`, `gap`, `ohms` as numbers more than 0 (20 mm at the most)")
         hints.pairs.append(dict(pair))
     return hints
+
+
+def unheeded(picture, hints):
+    """What a hints file says that nothing on the board answers to, as lines to say: a pattern that names no
+    net, a pair with a net that is not there, a layer the board has not."""
+    nets = sorted(picture.groups)
+    named = lambda pattern: [net for net in nets if fnmatch.fnmatchcase(net, pattern) or fnmatch.fnmatchcase(net.lstrip("/"), pattern)]
+    lines = []
+    for pattern, said in (hints.nets if hints else []):
+        if not named(pattern):
+            lines.append(f"{hints.name}: {pattern} names no net of the board")
+        other = said.get("pair")
+        if isinstance(other, str) and other not in nets:
+            lines.append(f"{hints.name}: {pattern} is to be a pair with {other}, which is no net of the board")
+        if isinstance(other, str) and named(pattern) == [other]:
+            lines.append(f"{hints.name}: {pattern} is to be a pair with itself")
+        for layer in said.get("layers", []):
+            if layer not in picture.layers:
+                lines.append(f"{hints.name}: {pattern} is given the layer {layer}, which the board has not")
+    for pair in (hints.pairs if hints else []):
+        for leg in pair["nets"]:
+            if leg not in nets:
+                lines.append(f"{hints.name}: the pair {' = '.join(pair['nets'])} names {leg}, which is no net of the board")
+    return lines
 
 
 def pair_names(nets):
@@ -454,7 +491,11 @@ class Rules:
     @classmethod
     def of(cls, picture, settings=None):
         settings = settings or Settings()
-        return cls(picture.minima, picture.classes, picture.ignored, settings, intents_of(picture, settings.hints, settings.guesses))
+        known = picture.__dict__.setdefault("_intents", {})  # (worked out once for a picture, hints and guesses)
+        key = (id(settings.hints), settings.guesses)
+        if key not in known:
+            known[key] = intents_of(picture, settings.hints, settings.guesses)
+        return cls(picture.minima, picture.classes, picture.ignored, settings, known[key])
 
     def intent(self, net):
         return self.intents.get(net) or Intent()
@@ -494,10 +535,16 @@ class Rules:
         quiet = any(self.leaning(net).get("quiet") for net in nets)
         return _r(2 * self.new_clearance(nets)) if quiet else None
 
-    def leaning(self, net, layers=None):
+    def trunk_width(self, width, pitch):
+        """How wide the trunk of a pair is laid: its two legs side by side, and what a leg takes on the
+        outside of a turn of 45 degrees (so that such a corner is a corner), 0.04 mm at the least."""
+        return _r(max(pitch + width + 0.04, pitch / math.cos(math.pi / 8) + width + 0.005))
+
+    def leaning(self, net):
         """What a net's entry is given beyond its sizes, for what the net is for: fields of the engine's entry,
         and `via_penalty` as a factor on the usual. A role leans it (how readily it gives way, its weight, its
-        vias: less so where it is only guessed); the hints bind it (no vias, layers among `layers`, a greatest length, a distance kept as a quiet net)."""
+        vias: less so where it is only guessed); the hints bind it (no vias, the layers it may use, a greatest
+        length, a distance kept as a quiet net)."""
         intent, out = self.intent(net), {}
         hinted = lambda what: intent.source.get(what, "names") != "names"
         give, weight, vias = (LEANING if hinted("role") else GUESSED).get(intent.role, (1.0, 1.0, 1.0))
@@ -512,8 +559,8 @@ class Rules:
             out["max_mm"] = intent.max_mm
         if intent.role == "sensitive" and hinted("role"):
             out["quiet"] = True
-        if intent.layers and layers is not None and any(l in intent.layers for l in layers):
-            out["layers"] = [l for l in layers if l in intent.layers]
+        if intent.layers:
+            out["layers"] = list(intent.layers)
         return out
 
     def new_clearance(self, nets):
@@ -825,21 +872,30 @@ def pairs_of(picture, rules, names, ask, notes=None):
     leg width, pitch, plan)], the plan as the engine gives it (src/pairs.rs: the ends of the pair, the trunks
     between them and where each may begin and end, the pads at no end).
 
-    Two nets are a pair if their names or the hints say so (see intents_of), none of their pads is joined to
-    another yet, they have the same number of pads (four at most), and the engine finds them pads side by side
-    at two ends or more, far enough apart to run together between. Why a pair by name is laid as two nets is added to `notes`, if given.
+    Two nets are a pair if their names or the hints say so (see intents_of), neither has more than four pads,
+    a zone, or a pad joined to another yet, both or neither are held apart as sensitive, and the engine finds
+    them pads side by side at two ends or more, far enough apart to run together between. Why a pair by
+    name is laid as two nets is added to `notes`, if given.
     """
     note = lambda a, b, why: notes.append(f"{a} = {b} is laid as two nets: {why}") if notes is not None else None
-    lone = lambda net: all(len(group) == 1 for group in picture.groups[net])
     other = lambda net: rules.intent(net).pair
-    named = [(a, other(a)) for a in names if other(a) in names and a < other(a)]
-    few = lambda a, b: len(picture.groups[a]) == len(picture.groups[b]) <= PAIR_PADS
-    for a, b in named:
-        if not few(a, b):
-            note(a, b, f"they have not the same number of pads, or more than {PAIR_PADS} each")
-        elif not (lone(a) and lone(b)):
-            note(a, b, "some of their pads are joined already")
-    named = [(a, b) for a, b in named if few(a, b) and lone(a) and lone(b)]
+    quiet = lambda net: bool(rules.leaning(net).get("quiet"))
+    def why_not(a, b):
+        if max(len(picture.groups[a]), len(picture.groups[b])) > PAIR_PADS:
+            return f"one of them has more than {PAIR_PADS} pads"
+        if a in picture.pours or b in picture.pours:
+            return "one of them has a zone"
+        if not all(len(group) == 1 for net in (a, b) for group in picture.groups[net]):
+            return "some of their pads are joined already"
+        if quiet(a) != quiet(b):
+            return "one of them is sensitive by the hints and the other is not"
+    named = []
+    for a, b in [(a, other(a)) for a in names if other(a) in names and a < other(a)]:
+        why = why_not(a, b)
+        if why:
+            note(a, b, why)
+        else:
+            named.append((a, b))
     if not named:
         return []
     spots = lambda net: _spots(picture.pads[group[0]] for group in picture.groups[net])
@@ -852,6 +908,48 @@ def pairs_of(picture, rules, names, ask, notes=None):
     return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans) if plan["trunks"]]
 
 
+def pair_entries(picture, rules, pair, entry, unpaired, taken):
+    """The entries for one differential pair (see pairs_of) and what the problem's `pairs` says of it:
+    (entries, pairs); nothing if every stretch of it has been given up as a pair (`unpaired`: their keys).
+
+    For each stretch between two of its ends, a trunk: laid as one wide track of a net of its own between
+    places a little off the pads (those of one end are one piece: the engine takes the nearest that are open), and four
+    stubs that join the legs it is split into to the pads. What the trunks do not join is joined as the pads
+    of any net are: the pads at the ends that trunks join stand for one piece, a pad at no end stands alone.
+    `entry` makes an entry (see build_problem); `taken`: the keys in use.
+    """
+    a, b, width, pitch, plan = pair
+    layers = rules.routing_layers(picture.layers)
+    terminal = lambda pad: dict(xy=pad.at, layers=[l for l in layers if l in pad.layers])
+    pads = {net: [picture.pads[group[0]] for group in picture.groups[net]] for net in (a, b)}
+    name = f"{a} = {b}"
+    while any(key == name or key.startswith(name + " ") for key in taken):
+        name += "'"  # (a net may be named just so)
+    key_of = lambda number: name + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
+    trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"]) if key_of(number) not in unpaired]
+    entries, said = [], []
+    held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
+    for key, trunk in trunks:
+        # (the places of an end by how far off its pads they are: the nearer take their turn first)
+        places = [dict(xy=place["xy"], layers=place["layers"], piece=end, **(dict(turn=turn) if turn else {}))
+                  for end in (0, 1) for turn, lot in enumerate(trunk["gather"][end]) for place in lot]
+        clearance = dict(default=_r(max(rules.clearance(a), rules.clearance(b))), nets={n: _r(c) for net in (a, b) for n, c in rules.stricter(net).items()})
+        entries.append(dict(entry(f"{key} trunk", a, places, no_vias=True), net=f"~{key}", width=rules.trunk_width(width, pitch), clearance=clearance))
+        stubs = [[], []]
+        for end in (0, 1):
+            for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
+                entries.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], last=True), width=width))
+                stubs[end].append(entries[-1]["key"])
+        said.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs))
+        first, second = (held[end] for end in trunk["ends"])
+        held = [min(first, second) if h in (first, second) else h for h in held]
+    for side, net in enumerate((a, b)):
+        at_ends = [dict(terminal(pads[net][end[side]]), piece=held[k]) for k, end in enumerate(plan["ends"])]
+        if trunks and len(set(held)) + len(plan["loose"][side]) > 1:
+            entries.append(entry(net, net, [terminal(pads[net][i]) for i in plan["loose"][side]] + at_ends))
+    return entries, said
+
+
 def problem_of(picture, rules, ask, only=None, unpaired=frozenset(), narrow=False, notes=None, **more):
     """build_problem for the unjoined nets of a picture, with what the engine works out for it (`ask` puts the
     questions to it): where each net may be reached (see reach_of), and which nets are laid as pairs (see
@@ -859,17 +957,18 @@ def problem_of(picture, rules, ask, only=None, unpaired=frozenset(), narrow=Fals
     worth telling the user is added to."""
     names = picture.unjoined(only)
     pairs = pairs_of(picture, rules, names, ask, notes) if rules.settings.pairs and not narrow else []
-    return build_problem(picture, rules, reach_of(picture, rules, names, ask), only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, **more)
+    return build_problem(picture, rules, reach_of(picture, rules, names, ask), only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, notes=notes, **more)
 
 
-def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=frozenset()):
+def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=frozenset(), notes=None):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
     `reached`: where each of those nets may be reached (see reach_of). `narrow`: the second try, with
     narrower tracks and vias allowed in a net's own lands. `unlinked`: nets whose capacitors get no link of
     their own to the pin they stand by. `stubs`: instead of the unjoined nets, a track for each of these pads
     from its middle to its zone: [(key, Thermal, points of the zone to end on)]. `pairs`: the nets to lay as
-    differential pairs (see pairs_of), `unpaired`: the keys of the pairs given up as such.
+    differential pairs (see pairs_of), `unpaired`: the keys of the pairs given up as such. `notes`: a list
+    that what is worth telling the user is added to.
     """
     every = picture.layers
     layers = rules.routing_layers(every)
@@ -920,10 +1019,18 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     unjoined = picture.unjoined(only) if stubs is None else []
     bus = buses(picture.pads, set(unjoined)) if rules.settings.bus_pull > 0 else {}
     nets = []
-    def entry(key, name, terminals, via_penalty, **more):
+    note = lambda text: notes.append(text) if notes is not None else None
+    narrowed = set()  # nets laid narrower than the current the hints give them takes
+    def entry(key, name, terminals, via_penalty=rules.settings.via_penalty, **more):
         width = rules.narrow_width(name, smallest.get(name)) if narrow else rules.track_width(name)
-        lean = rules.leaning(name, layers)  # (what the net is for: see Rules.leaning)
-        return dict(key=key, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=lean.pop("layers", layers),
+        if rules.intent(name).amps and width < amps_width(rules.intent(name).amps) and name not in narrowed:
+            narrowed.add(name)
+            note(f"{name} is laid {width:.2f} mm wide to enter its pads, narrower than the {amps_width(rules.intent(name).amps):.2f} mm its current takes")
+        lean = rules.leaning(name)  # (what the net is for: see Rules.leaning)
+        # the layers the hints give it, and those of any terminal that is on none of them: a pad is where it is
+        asked = lean.pop("layers", None)
+        within = [l for l in layers if asked is None or l in asked or any(l in t["layers"] and not set(t["layers"]) & set(asked) for t in terminals)]
+        return dict(key=key, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=within or layers,
                     clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
                     terminals=terminals, via_penalty_mm=via_penalty * lean.pop("via_penalty", 1.0), **dict(lean, **more))
     for key, thermal, targets in stubs or []:
@@ -932,37 +1039,18 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
         nets.append(entry(key, thermal.net, [start] + ends, rules.settings.via_penalty, no_vias=True))
     on = lambda pad: [l for l in layers if l in pad.layers]
     terminal = lambda pad: dict(xy=pad.at, layers=on(pad))
-    # A differential pair: for each stretch between two of its ends a trunk, laid as one wide track of a net
-    # of its own between places a little off the pads (those of one end are one piece: the engine takes
-    # whichever suits), and four stubs that join the legs it is split into to the pads. A pad of either net
-    # at no end is joined to its net as any pad is, the pads at the ends standing for one piece.
     paired, problem_pairs = set(), []
-    for a, b, width, pitch, plan in pairs:
-        pads = {net: [picture.pads[group[0]] for group in picture.groups[net]] for net in (a, b)}
-        key_of = lambda number: f"{a} = {b}" + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
-        trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"]) if key_of(number) not in unpaired]
-        if not trunks or len(nets) + 5 * len(trunks) + 2 + len(unjoined) >= ENGINE_NETS or not all(on(pad) for net in pads for pad in pads[net]):
-            continue  # (given up as a pair, no room for it in this run, or a pad on no routing layer: laid as two nets)
-        paired |= {a, b}
-        held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
-        for key, trunk in trunks:
-            places = [dict(xy=place["xy"], layers=place["layers"], piece=end) for end in (0, 1) for place in trunk["gather"][end]]
-            nets.append(dict(entry(f"{key} trunk", a, places, rules.settings.via_penalty, no_vias=True), net=f"~{key}", width=_r(pitch + width + 0.04)))
-            nets[-1]["clearance"] = dict(default=_r(max(rules.clearance(a), rules.clearance(b))), nets={n: _r(c) for net in (a, b) for n, c in rules.stricter(net).items()})
-            stubs_of = [[], []]
-            for end in (0, 1):
-                for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
-                    nets.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], rules.settings.via_penalty, last=True), width=width))
-                    stubs_of[end].append(nets[-1]["key"])
-            problem_pairs.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs_of))
-            first, second = (held[end] for end in trunk["ends"])
-            held = [min(first, second) if h in (first, second) else h for h in held]
-        # What the trunks do not join is joined as the pads of any net are: the pads at the ends that trunks
-        # join stand for one piece, a pad at no end stands alone.
-        for side, net in enumerate((a, b)):
-            at_ends = [dict(terminal(pads[net][end[side]]), piece=held[k]) for k, end in enumerate(plan["ends"])]
-            if len(set(held)) + len(plan["loose"][side]) > 1:
-                nets.append(entry(net, net, [terminal(pads[net][i]) for i in plan["loose"][side]] + at_ends, rules.settings.via_penalty))
+    for pair in pairs:
+        a, b = pair[:2]
+        entries, said = pair_entries(picture, rules, pair, entry, unpaired, set(picture.groups) | {n["key"] for n in nets})
+        if said and len(nets) + len(entries) + len(unjoined) >= ENGINE_NETS:
+            note(f"{a} = {b} is laid as two nets: there is no room for it among the {ENGINE_NETS - 1} entries of a run")
+        elif said and not all(on(picture.pads[group[0]]) for net in (a, b) for group in picture.groups[net]):
+            note(f"{a} = {b} is laid as two nets: a pad of it is on no routing layer")
+        elif said:
+            paired |= {a, b}
+            nets += entries
+            problem_pairs += said
     for place, name in enumerate(unjoined):
         if name in paired:
             continue
@@ -1083,7 +1171,7 @@ class Engine:
         return run_engine(problem, self.program, self.threads, self.problem_path if first else None, self.solution_path if first else None)
 
     def ask(self, question):
-        """Put a question about the board's zones (see src/pours) and return the answer; EngineFailed if it gives none."""
+        """Put a question (see src/ask.rs) and return the answer; EngineFailed if it gives none."""
         return ask_engine(question, self.program, self.threads)
 
 
@@ -1121,7 +1209,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
     a board with pours, `take_back(keys)` removes what the last solution written laid for those entries, `mark()` gives the place
     in the record of what has been written and `rewind(mark)` removes all written since (both return the
     numbers of track segments and vias removed).
-    `engine` runs problems and answers questions about zones (see `Engine`).
+    `engine` runs problems and answers the bridge's questions (see `Engine`).
     """
     outcome = Outcome()
     picture = board.read(only)
@@ -1130,7 +1218,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
     starved_before = {(t.pad, t.layer) for t in picture.thermals if t.spokes < t.least}
     given_up = set()  # nets that an earlier batch left unjoined
     noted = set()  # what has been said of the pairs
-    for line in told(Rules.of(picture, settings).intents, set(names)):
+    for line in told(Rules.of(picture, settings).intents, set(names)) + unheeded(picture, settings.hints):
         say(line)
     lots = batches(names)
     if len(lots) > 1:
@@ -1146,13 +1234,15 @@ def route(board, settings, engine, only=None, options=None, say=print):
                 say(f"batch {number + 1} of {len(lots)}")
             tries = Rules.of(picture, settings).tries(lot)
             number_of_try, reread, unlinked, unpaired, repeats = 0, False, set(), set(), 0
+            weighing, weighed = None, False  # a run with pairs kept to be weighed against one without; and whether that was done
             # For pours that new tracks cut: the last run of the lot's own nets, as (its problem, where the board's
             # record stood before it, its picture); whether the present run is one that joins a cut pour again;
             # the entries that hold cut pours together; and whether the lot's run is to be done again with those.
             base, rejoining, bridges, again, agains = None, False, [], False, 0
             while number_of_try < len(tries):
                 step, narrow = tries[number_of_try]
-                at_step = replace(settings, step=step)
+                # (no pairs among nets that are only being joined again after a pour was cut)
+                at_step = replace(settings, step=step, pairs=settings.pairs and not rejoining)
                 if again:
                     picture = base[2]
                     problem = dict(base[0], nets=[n for n in base[0]["nets"] if " ~ " not in n["key"]] + bridges)
@@ -1191,22 +1281,37 @@ def route(board, settings, engine, only=None, options=None, say=print):
                 failed = {n["net"] for n in problem["nets"] if any(m.startswith(n["key"] + ":") for m in solution.get("unrouted", []))}
                 failed |= {n["net"] for n in problem["nets"] for c in solution.get("conflicts", []) if c.get("key") == n["key"]}
                 linked = {n["net"] for n in problem["nets"] if n["key"].startswith(n["net"] + " | ")} - unlinked
-                # So is laying two nets as a pair: where a pair is not all laid, it is done again as two nets; and
-                # where anything is left unjoined with pairs laid, once more without any (they take room).
+                # So is laying two nets as a pair. First the links are given up, and the pairs stay.
+                if failed & linked and not again:
+                    say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
+                    unlinked |= failed & linked
+                    reread = False
+                    continue
+                # Then a pair that is not all laid is done again as two nets; and where something else is left
+                # unjoined with pairs laid, the run is done once more without any (they take room), and the
+                # pairs are kept all the same if that leaves no less unjoined.
                 said = solution.get("unrouted", []) + [c.get("key", "") + ":" for c in solution.get("conflicts", [])]
                 of_pair = lambda pair: [pair["key"], pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
                 broken = {pair["key"] for pair in problem.get("pairs", []) if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
-                if solution["status"] != "routed" and not broken:
-                    broken = {pair["key"] for pair in problem.get("pairs", [])}
-                if (failed & linked and not again) or broken:
-                    if failed & linked and not again:
-                        say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
-                        unlinked |= failed & linked
-                    if broken:
-                        say(f"not all laid with these as pairs: again as single nets for {', '.join(sorted(broken))}")
+                if weighing is not None:
+                    if len(said) >= weighing[2]:
+                        say("no more is joined without them: the pairs are kept")
+                        problem, solution, _, unpaired = weighing
+                    weighing, broken = None, set()
+                elif broken:
+                    say(f"not all laid as pairs: again as single nets for {', '.join(sorted(broken))}")
+                elif said and problem.get("pairs") and not weighed:
+                    say("not all joined with pairs laid: once more without them")
+                    weighing, weighed = (problem, solution, len(said), set(unpaired)), True
+                    broken = {pair["key"] for pair in problem["pairs"]}
+                if broken:
                     unpaired |= broken
-                    # (a lot that was being laid again to hold a cut pour together is begun anew from the board as it was)
-                    reread, again = False, False
+                    if again:
+                        # (a lot that is being laid again to hold a cut pour together: its problem is drawn up anew)
+                        of_lot = {n["net"] for n in base[0]["nets"] if n["net"] in base[2].groups}
+                        base = (problem_of(base[2], Rules.of(base[2], at_step), engine.ask, only=of_lot, narrow=narrow, options=options,
+                                           unlinked=unlinked, unpaired=unpaired), base[1], base[2])
+                    reread = False
                     continue
                 first = False
                 for pair in problem.get("pairs", []):
@@ -1251,7 +1356,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
                     # step apart, and a track between them holds nothing together.)
                     taken = board.rewind(base[1])
                     outcome.tracks, outcome.vias = outcome.tracks - taken[0], outcome.vias - taken[1]
-                    by_pads = problem_of(picture, Rules.of(picture, replace(at_step, pours=False)), engine.ask, only=set(keys),
+                    by_pads = problem_of(picture, Rules.of(picture, replace(at_step, pours=False, pairs=False)), engine.ask, only=set(keys),
                                             narrow=narrow, options=options, unlinked=set(keys))
                     bridges += [dict(entry, key=f"{entry['net']} ~ {len(bridges) + k + 1}") for k, entry in enumerate(by_pads["nets"])]
                     say(f"no way to join them past the new tracks: those are laid again, with the pieces of the pour held together: {', '.join(keys)}")
@@ -1262,6 +1367,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
                 last = solution["status"]
                 lot = keys
                 number_of_try, reread = number_of_try + 1, True
+                unpaired, weighed = set(), False  # (on a finer grid a pair has its chance again)
             if outcome.failure:
                 break
             given_up = set(board.unjoined(set(wanted))) if wanted else set()

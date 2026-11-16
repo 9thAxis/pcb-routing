@@ -4,7 +4,9 @@
     fake_engine.py route PROBLEM -o SOLUTION [--threads N]
     fake_engine.py ask
 
-It joins the terminals of every net by one straight track on the first terminal's first layer. What it does
+It joins the terminals of every net by one straight track on the first terminal's first layer. Of a pair it
+lays each leg as one straight track between its two pads, under the pair's key and the leg's net, and nothing
+under the keys of the trunk and the stubs. What it does
 otherwise is told by files in the directory named by FAKE_ENGINE_DIR:
 
     runs/N.json     written: the problem of run N (from 1)
@@ -44,7 +46,22 @@ if fail_on.exists() and int(fail_on.read_text()) == number:
 
 stubborn = json.loads((control / "stubborn.json").read_text()) if (control / "stubborn.json").exists() else {"nets": [], "below": 0}
 nets, unrouted = [], []
+by_key = {net["key"]: net for net in problem["nets"]}
+of_pairs = set()
+for pair in problem.get("pairs", []):
+    entries = [pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
+    of_pairs.update(entries)
+    stuck = [key for key in entries if key in stubborn["nets"] and by_key[key]["width"] >= stubborn["below"]]
+    if stuck:
+        unrouted.append(f"{stuck[0]}: no path")
+        continue
+    for leg, name in enumerate(pair["legs"]):
+        ends = [by_key[pair["stubs"][end][leg]]["terminals"][0] for end in (0, 1)]
+        nets.append(dict(key=f"{pair['key']}/{name}", net=name, length_mm=1.0, vias=[],
+                         tracks=[dict(layer=ends[0]["layers"][0], points=[ends[0]["xy"], ends[1]["xy"]])]))
 for net in problem["nets"]:
+    if net["key"] in of_pairs:
+        continue
     if net["key"] in stubborn["nets"] and net["width"] >= stubborn["below"]:
         unrouted.append(f"{net['key']}: no path")
         nets.append(dict(key=net["key"], net=net["net"], length_mm=0.0, tracks=[], vias=[]))
