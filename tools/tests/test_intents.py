@@ -206,7 +206,11 @@ class Pairs(WithEngine):
         self.assertNotIn("pairs", self.problem(picture, guesses=False)[0])
         rules = k.Rules.of(picture)
         self.assertNotIn("pairs", k.problem_of(picture, rules, support.ask, narrow=True))
-        self.assertNotIn("pairs", k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P"}))
+        self.assertNotIn("pairs", k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P": 3}))
+        further = k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P": 1})
+        trunk = {n["key"]: n for n in further["nets"]}["D_N = D_P trunk"]
+        self.assertEqual(sorted({t.get("turn", 0) for t in trunk["terminals"]}), [0, 1])  # the nearest lot of places is gone
+        self.assertGreater(min(t["xy"][0] for t in trunk["terminals"] if t["piece"] == 0), 2.95)  # (the nearest lot reached out to 2.95)
 
     def test_why_a_pair_by_name_is_laid_as_two_nets_is_noted(self):
         problem, notes = self.problem(self.picture(far=4.0))  # 2 mm from end to end
@@ -277,18 +281,19 @@ class Pairs(WithEngine):
         self.assertIn("laid as a pair: D_N = D_P", self.said)
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 3, 0))
 
-    def test_a_pair_that_is_not_all_laid_is_done_again_as_two_nets(self):
+    def test_a_pair_that_is_not_all_laid_is_begun_further_from_its_pads_and_then_done_as_two_nets(self):
         board = PairBoard()
         self.stubborn(["D_N = D_P trunk"])
         outcome = self.route(board)
-        first, second = self.runs()
-        self.assertIn("pairs", first)
-        self.assertNotIn("pairs", second)
-        self.assertEqual(sorted(n["key"] for n in second["nets"]), ["D_N", "D_P", "OTHER"])
-        self.assertEqual(board.writes, [["D_N", "D_P", "OTHER"]])  # nothing of the first run is kept
-        self.assertIn("not all laid as pairs: again as single nets for D_N = D_P", self.said)
+        first, second, third, fourth = self.runs()
+        nearest = lambda problem: min(t["xy"][0] for n in problem["nets"] if n["key"].endswith("trunk") for t in n["terminals"] if t["piece"] == 0)
+        self.assertLess(nearest(first), nearest(second))
+        self.assertLess(nearest(second), nearest(third))
+        self.assertNotIn("pairs", fourth)
+        self.assertEqual(sorted(n["key"] for n in fourth["nets"]), ["D_N", "D_P", "OTHER"])
+        self.assertEqual(board.writes, [["D_N", "D_P", "OTHER"]])  # nothing of the runs before is kept
+        self.assertEqual(self.said.count("not all laid as pairs: again, begun further from their pads or as single nets, for D_N = D_P"), 3)
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 3, 0))
-
 
     def test_a_net_left_unjoined_with_pairs_laid_is_tried_once_without_them_and_the_pairs_are_kept_if_that_is_no_better(self):
         board = PairBoard()

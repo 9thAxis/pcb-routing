@@ -892,7 +892,9 @@ def pairs_of(picture, rules, names, ask, notes=None):
 
 def pair_entries(picture, rules, pair, entry, unpaired, taken):
     """The entries for one differential pair (see pairs_of) and what the problem's `pairs` says of it:
-    (entries, pairs); nothing if every stretch of it has been given up as a pair (`unpaired`: their keys).
+    (entries, pairs); nothing if every stretch of it has been given up as a pair. `unpaired`: for the key of
+    a stretch that was not all laid as a pair, how many of the nearest lots of places its trunk is no longer
+    offered (it is begun further from its pads; with none left it is given up).
 
     For each stretch between two of its ends, a trunk: laid as one wide track of a net of its own between
     places a little off the pads (those of one end are one piece: the engine takes the nearest that are open), and four
@@ -908,7 +910,9 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
     while any(key == name or key.startswith(name + " ") for key in taken):
         name += "'"  # (a net may be named just so)
     key_of = lambda number: name + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
-    trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"]) if key_of(number) not in unpaired]
+    further = lambda key, trunk: [lots[min(unpaired.get(key, 0), len(lots)):] for lots in trunk["gather"]]
+    trunks = [(key_of(number), dict(trunk, gather=further(key_of(number), trunk))) for number, trunk in enumerate(plan["trunks"])]
+    trunks = [(key, trunk) for key, trunk in trunks if all(trunk["gather"])]
     entries, said = [], []
     held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
     for key, trunk in trunks:
@@ -932,17 +936,17 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
     return entries, said
 
 
-def problem_of(picture, rules, ask, only=None, unpaired=frozenset(), narrow=False, notes=None, **more):
+def problem_of(picture, rules, ask, only=None, unpaired=None, narrow=False, notes=None, **more):
     """build_problem for the unjoined nets of a picture, with what the engine works out for it (`ask` puts the
     questions to it): where each net may be reached (see reach_of), and which nets are laid as pairs (see
-    pairs_of; not the pairs whose keys are in `unpaired`, and none in the narrower second try). `notes`: a list that what is
+    pairs_of; `unpaired`: see pair_entries; none in the narrower second try). `notes`: a list that what is
     worth telling the user is added to."""
     names = picture.unjoined(only)
     pairs = pairs_of(picture, rules, names, ask, notes) if rules.settings.pairs and not narrow else []
     return build_problem(picture, rules, reach_of(picture, rules, names, ask), only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, notes=notes, **more)
 
 
-def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=frozenset(), notes=None,
+def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=None, notes=None,
                   closed=()):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
@@ -950,7 +954,7 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     narrower tracks and vias allowed in a net's own lands. `unlinked`: nets whose capacitors get no link of
     their own to the pin they stand by. `stubs`: instead of the unjoined nets, a track for each of these pads
     from its middle to its zone: [(key, Thermal, points of the zone to end on)]. `pairs`: the nets to lay as
-    differential pairs (see pairs_of), `unpaired`: the keys of the pairs given up as such. `notes`: a list
+    differential pairs (see pairs_of), `unpaired`: those not all laid as such before (see pair_entries). `notes`: a list
     that what is worth telling the user is added to. `closed`: ground closed to the nets of this problem beyond
     what the board closes, as regions of the engine's.
     """
@@ -1027,7 +1031,7 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     paired, problem_pairs = set(), []
     for pair in pairs:
         a, b = pair[:2]
-        entries, said = pair_entries(picture, rules, pair, entry, unpaired, set(picture.groups) | {n["key"] for n in nets})
+        entries, said = pair_entries(picture, rules, pair, entry, unpaired or {}, set(picture.groups) | {n["key"] for n in nets})
         if said and len(nets) + len(entries) + len(unjoined) >= ENGINE_NETS:
             note(f"{a} = {b} is laid as two nets: there is no room for it among the {ENGINE_NETS - 1} entries of a run")
         elif said and not all(on(picture.pads[group[0]]) for net in (a, b) for group in picture.groups[net]):
@@ -1267,8 +1271,9 @@ class _Lot:
     anything of it is written:
 
     - without the links of capacitors to their pins, for a net that was not all laid with them;
-    - with a pair as two nets, where the pair was not all laid; and, where something else is left unjoined
-      with pairs laid, once without any pair, of which the one that joins more is kept.
+    - with a pair begun further from its pads, and in the end as two nets, where the pair was not all laid;
+      and, where something else is left unjoined with pairs laid, once without any pair, of which the one
+      that joins more is kept.
 
     And after it is written, for the zones:
 
@@ -1281,7 +1286,8 @@ class _Lot:
         self.run, self.lot, self.picture = run, lot, picture
         self.tries = Rules.of(picture, run.settings).tries(lot)
         self.number, self.reread = 0, False  # the try at hand; whether the board is to be read again for it
-        self.unlinked, self.unpaired = set(), set()  # the nets given up as linked, the pairs (by key) given up as pairs
+        # the nets given up as linked; the pairs not all laid as pairs, with how far off their pads they are begun next (see pair_entries)
+        self.unlinked, self.unpaired = set(), {}
         self.weighing, self.weighed = None, False  # a run with pairs kept to be weighed against one without; whether that was done
         # For pours that new tracks cut: how often their nets have been joined again; the last run of the lot's
         # own nets, as (its problem, where the board's record stood before it, its picture); whether the present
@@ -1327,7 +1333,7 @@ class _Lot:
                 run.last = solution["status"]
                 self.lot = keys
                 self.number, self.reread = self.number + 1, True
-                self.unpaired, self.weighed = set(), False  # (on a finer grid a pair has its chance again)
+                self.unpaired, self.weighed = {}, False  # (on a finer grid a pair has its chance again)
 
     def at_step(self):
         """The settings of the try at hand. (No pairs among nets that are only being joined again after a pour was cut.)"""
@@ -1372,9 +1378,10 @@ class _Lot:
             self.unlinked |= failed & linked
             self.reread = False
             return None
-        # Then a pair that is not all laid is done again as two nets; and where something else is left
-        # unjoined with pairs laid, the run is done once more without any (they take room), and the
-        # pairs are kept all the same if that leaves no less unjoined.
+        # Then a pair that is not all laid is done again begun further from its pads (so near them its stubs
+        # may have no room), and as two nets when it has been begun as far off as it is offered; and where
+        # something else is left unjoined with pairs laid, the run is done once more without any (they take
+        # room), and the pairs are kept all the same if that leaves no less unjoined.
         said = solution.get("unrouted", []) + [c.get("key", "") + ":" for c in solution.get("conflicts", [])]
         of_pair = lambda pair: [pair["key"], pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
         broken = {pair["key"] for pair in problem.get("pairs", []) if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
@@ -1384,14 +1391,16 @@ class _Lot:
                 problem, solution, _, self.unpaired = self.weighing
             self.weighing, broken = None, set()
         elif broken:
-            run.say(f"not all laid as pairs: again as single nets for {', '.join(sorted(broken))}")
+            run.say(f"not all laid as pairs: again, begun further from their pads or as single nets, for {', '.join(sorted(broken))}")
         elif said and problem.get("pairs") and not self.weighed:
             run.say("not all joined with pairs laid: once more without them")
-            self.weighing, self.weighed = (problem, solution, len(said), set(self.unpaired)), True
-            broken = {pair["key"] for pair in problem["pairs"]}
+            self.weighing, self.weighed = (problem, solution, len(said), dict(self.unpaired)), True
+            self.unpaired.update({pair["key"]: math.inf for pair in problem["pairs"]})
+            self.reread = False
+            return None
         if not broken:
             return problem, solution
-        self.unpaired |= broken
+        self.unpaired.update({key: self.unpaired.get(key, 0) + 1 for key in broken})
         if self.again:
             # (a lot that is being laid again to hold a cut pour together: its problem is drawn up anew)
             base, mark, picture = self.base
