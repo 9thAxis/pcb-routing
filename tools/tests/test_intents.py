@@ -224,12 +224,13 @@ class Pairs(WithEngine):
         self.assertEqual((trunk["net"], trunk["no_vias"], trunk["width"]), ("~D_N = D_P", True, 0.744241))
         self.assertEqual({t["piece"] for t in trunk["terminals"]}, {0, 1})
         near = [t for t in trunk["terminals"] if t["piece"] == 0]
-        # the nearer to the pads, the earlier its turn
-        self.assertEqual(sorted({t.get("turn", 0) for t in near}), [0, 1, 2])
-        self.assertLess(max(t["xy"][0] for t in near if "turn" not in t),
-                        min(t["xy"][0] for t in near if t.get("turn") == 2))
-        # a little off the pads, towards the other end
-        self.assertTrue(all(2 < t["xy"][0] < 6 for t in trunk["terminals"] if t["piece"] == 0))
+        # square to the pads first, then the places beside it, and the nearer to the pads the earlier
+        self.assertEqual(sorted({t.get("turn", 0) for t in near}), [0, 1, 2, 3, 4, 5])
+        self.assertEqual([t["xy"][1] for t in near if "turn" not in t], [4.5, 4.5])  # (the pads are at y 4 and 5)
+        off = lambda t: abs(t["xy"][0] - 2.0)  # (how far off the pads, which are at x 2)
+        self.assertLess(max(off(t) for t in near if "turn" not in t), min(off(t) for t in near if t.get("turn") == 2))
+        # a little off the pads, to either side of them
+        self.assertTrue(all(0 < off(t) < 4 for t in near))
         self.assertEqual(pair["stubs"],
                          [["D_N = D_P D_N 1", "D_N = D_P D_P 1"], ["D_N = D_P D_N 2", "D_N = D_P D_P 2"]])
         stub = nets["D_N = D_P D_P 1"]
@@ -256,9 +257,9 @@ class Pairs(WithEngine):
         further = k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P": 1})
         trunk = {n["key"]: n for n in further["nets"]}["D_N = D_P trunk"]
         # the nearest lot of places is gone
-        self.assertEqual(sorted({t.get("turn", 0) for t in trunk["terminals"]}), [0, 1])
+        self.assertEqual(sorted({t.get("turn", 0) for t in trunk["terminals"]}), [0, 1, 2, 3])
         # (the nearest lot reached out to 2.95)
-        self.assertGreater(min(t["xy"][0] for t in trunk["terminals"] if t["piece"] == 0), 2.95)
+        self.assertGreater(min(abs(t["xy"][0] - 2.0) for t in trunk["terminals"] if t["piece"] == 0), 0.95)
 
     def test_why_a_pair_by_name_is_laid_as_two_nets_is_noted(self):
         problem, notes = self.problem(self.picture(far=4.0))  # 2 mm from end to end
@@ -339,7 +340,7 @@ class Pairs(WithEngine):
         self.stubborn(["D_N = D_P trunk"])
         outcome = self.route(board)
         first, second, third, fourth = self.runs()
-        nearest = lambda problem: min(t["xy"][0] for n in problem["nets"] if n["key"].endswith("trunk")
+        nearest = lambda problem: min(abs(t["xy"][0] - 2.0) for n in problem["nets"] if n["key"].endswith("trunk")
                                       for t in n["terminals"] if t["piece"] == 0)
         self.assertLess(nearest(first), nearest(second))
         self.assertLess(nearest(second), nearest(third))

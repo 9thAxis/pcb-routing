@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Pairs leave their pads square to them. The places a trunk may begin at were offered towards the far end
+  only; where two pads stand in line with it (a part turned by 45 degrees, a row that faces away), one leg
+  had to pass the other's pad and the pair was laid as two nets. The places square to the line of the two
+  pads are now offered first, to either side, and the others as a second choice (`pairs::plan`). On 18 pairs
+  of 12 public boards: coupled for 49 % of their length, from 35 % (the designers 44 %); a USB pair that
+  was two nets is coupled for 95 %. All boards complete and clean.
 - Fewer slivers at pads. A track ends on the exact place of its pad; where its last corner could not slide
   there, a stub from the cell centre was left, shorter than the track is wide and at any angle. Now the end
   of the last stretch turns onto the point (by seven degrees at the most), and a last step of a cell or two

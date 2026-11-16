@@ -68,7 +68,8 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
     while any(key == name or key.startswith(name + " ") for key in taken):
         name += "'"  # (a net may be named just so)
     key_of = lambda number: name + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
-    further = lambda key, trunk: [lots[min(unpaired.get(key, 0), len(lots)):] for lots in trunk["gather"]]
+    # (the places come as two lots for each distance from the pads: square to the pads, then the others)
+    further = lambda key, trunk: [lots[min(2 * unpaired.get(key, 0), len(lots)):] for lots in trunk["gather"]]
     trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"])]
     trunks = [(key, dict(trunk, gather=further(key, trunk))) for key, trunk in trunks]
     trunks = [(key, trunk) for key, trunk in trunks if all(trunk["gather"])]
