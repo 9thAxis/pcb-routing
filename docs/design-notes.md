@@ -184,7 +184,10 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   gain 11, which is within what these boards move by for any small change. So that is all a guess does,
   for clocks and crystals; the rest of what a role means is for a role that the hints file gives, where
   somebody has said so. What binds (widths, clearances, layers, no vias, the distance kept by a sensitive
-  net) never comes from a guess.
+  net) never comes from a guess. Even so little can cost a connection: on the tightest of the large boards
+  without its zones, one net taken for a clock (`/SCL`) and kept off vias left another with no way. A
+  guess is a wish, as a pair is: where something is left unjoined the lot is laid once more without either,
+  and the run that joins more stands.
 * Open: short last stretches before a pad.
 
 ## Tried and not kept

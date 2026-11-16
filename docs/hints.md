@@ -13,7 +13,8 @@ A guess only *leans* a net: what a detour or a via costs it, how readily it give
 net (a width, a clearance, the layers it may use, no vias, a distance kept from every other net) comes from the
 hints file alone. So a wrong guess can cost a little quality, and asks no room of the board that nobody asked
 for. Laying two nets as a pair is the one guess that changes the copper outright; a pair that cannot be laid
-as one is laid as two nets, and so are all of them where that joins more.
+as one is laid as two nets. And a guess never costs a connection: where anything is left unjoined, the nets
+are laid once more without pairs and without what was only guessed, and that is what stands if it joins more.
 
 ## What is guessed
 
