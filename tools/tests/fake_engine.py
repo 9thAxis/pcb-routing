@@ -2,7 +2,7 @@
 """A stand-in for the pcb-routing program, for the bridge's tests.
 
     fake_engine.py route PROBLEM -o SOLUTION [--threads N]
-    fake_engine.py pours
+    fake_engine.py ask
 
 It joins the terminals of every net by one straight track on the first terminal's first layer. What it does
 otherwise is told by files in the directory named by FAKE_ENGINE_DIR:
@@ -12,14 +12,14 @@ otherwise is told by files in the directory named by FAKE_ENGINE_DIR:
     fail_on         a run number: that run writes no solution and ends with status 2
     fail_pours      a number: from that question about zones on (from 1), a question gets no answer
 
-A question about zones (`pours`) is the program's own to answer: it is passed on to $PCB_ROUTING, else to the
+A question (`ask`) is the program's own to answer: it is passed on to $PCB_ROUTING, else to the
 repository's release build.
 """
 import json, os, sys
 from pathlib import Path
 
 args = sys.argv[1:]
-if args[:1] == ["pours"]:
+if args[:1] == ["ask"]:
     control = Path(os.environ.get("FAKE_ENGINE_DIR", ""))
     if (control / "fail_pours").is_file():
         asked = control / "asked"

@@ -6,7 +6,7 @@ First version as a library.
 
 - `route(&Problem) -> Result<Solution, Error>` and `Router` (events per round, verification of the two-pass
   search against the one-pass search, one attempt alone). The command line is unchanged in its two commands,
-  `route` and `masks`, and gains `--trace`, `--verify` and `--only`, and a third command, `pours` (below).
+  `route` and `masks`, and gains `--trace`, `--verify` and `--only`, and a third command, `ask` (below).
 - A problem is checked before it is run (`Problem::validate`): sizes and costs that make sense, names that
   exist, a grid that fits `options.max_states`. Misspelt fields in a problem file are an error.
 - `Solution::status` is an enum (written as `routed`, `conflicts`, `unroutable`, as before); an incomplete
@@ -57,7 +57,7 @@ First version as a library.
   that no such track fits by is named. On the 119 public boards with their designers' zones put back: all
   complete with no new error in KiCad's check, 26,000 mm of track and 462 vias where ignoring the zones
   takes 33,000 mm and 388 (the vias: pads taken down to a zone on the other side).
-- Zones, in the crate (`pcb_routing::pours`, and the command `pcb-routing pours`, which answers the same
+- Zones, in the crate (`pcb_routing::pours`, and the command `pcb-routing ask`, which answers the same
   questions as JSON): from the pieces of the filled zones as polygons and the pads, which groups of pads
   the zones join (`survey`), the spokes of every pad the zones tie, counted as KiCad counts them, with the
   ground where a track would cut them; the places a net may be joined to its zone (`reach`); the copper of
@@ -66,6 +66,25 @@ First version as a library.
   without the tracks on other layers, which tie nothing to the zone. The bridge did all of this in Python;
   it now reads the board, fills the zones and asks, and keeps what it has laid if a question gets no answer. On the largest of the public boards that takes the time spent outside the router's own
   runs from 14 s to under 4 s.
+- Differential pairs through the KiCad bridge. Two nets named as the halves of a pair (`_P`/`_N`, `-P`/`-N`,
+  `P`/`N`, `+`/`-`, `DP`/`DM`; not supplies), or said to be one in the hints, with the same number of pads
+  (four at most), are laid side by side between the places where a pad of each stand side by side: a trunk
+  for each stretch between two such ends far enough apart, tracks as for any net between two that are not
+  and to a pad that stands alone. `pcb_routing::pairs::plan` (and the question `pairs`) finds the ends and
+  offers each trunk several places to begin and end; a trunk entry may have them as the terminals of two
+  pieces. A stretch that cannot be laid as a pair is done again as two nets, and so is everything if
+  anything is left unjoined with pairs laid (`--no-pairs` for none). On 20 pairs of 13 public boards:
+  coupled for 36 % of their length (18 % without, the designers 39 %), all boards complete and clean.
+- Engine, pairs: a leg lies within the trunk it is split from. Where the trunk ended in a stretch shorter
+  than the inside of its corner has room for, the inner leg ran backwards there, towards the other leg (0.008
+  mm short of the clearance on one board): such a stretch is left out of that leg. And the outside of a
+  corner too sharp for what the trunk is wider than its legs is cut straight across.
+- KiCad bridge: what the nets are for (docs/hints.md). Guessed from names and parts: clocks and crystals are
+  slow to change layer (`--no-guesses` for none). Said in `BOARD.routing.json` beside the board, or
+  `--hints FILE`, by net name with wildcards: `role`, `width`, `amps`, `clearance`, `volts`, `max_mm`, `vias`,
+  `layers`, `priority`, `pair` and `gap`, `bus`; `ohms` and `match` are taken down and not acted on. A
+  guess only leans a net; a width, a clearance, layers, "no vias" and the distance a sensitive net keeps
+  come from the file alone. The bridge says what it took from the names and what from the file.
 - Engine: terminals of an entry may name the piece of copper they stand on (`piece`). Those of one piece are
   joined already, and the entry is joined to the piece at whichever of them comes cheapest. The bridge
   gives every group of pads that copper already joins as one piece, with its nearest pads to choose from,

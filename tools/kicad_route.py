@@ -33,19 +33,25 @@ vias and pads that touch do, and a net meant to be joined by a zone is routed as
   design rule check counts them) gets a straight track from its middle into the zone, which counts as a
   spoke; one that no such track fits by is named.
 
+What the nets are for: taken from their names and parts, and from a hints file beside the board
+(BOARD.routing.json, or --hints FILE; see docs/hints.md). Two nets named as the halves of a differential pair
+are laid side by side where their pads stand side by side at both ends, and as two nets where that cannot be
+done; clocks and crystals are slow to change layer; widths for a current, clearances for a voltage, layers,
+"no vias" and the like come from the hints. What was taken from where is said at the start.
+
 Run KiCad's design rule check on the result before using it.
 
 What it does not do:
 
 - It routes on a grid, with tracks at multiples of 45 degrees and through vias only (no blind, buried or micro
   vias, no arcs).
-- No differential pairs and no length tuning through this bridge yet (the engine can lay pairs; the bridge does
-  not ask for them).
+- No length tuning, and no impedance: a pair is laid at the width and gap it is told, or at its class's width
+  and the clearance.
 
 Exit status: 0 every net joined, 1 some nets left unjoined, 2 the engine failed (what it had laid before that
 is saved all the same).
 """
-import argparse, collections, itertools, json, math, os, re, subprocess, sys, tempfile
+import argparse, collections, fnmatch, itertools, json, math, os, re, subprocess, sys, tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -63,6 +69,10 @@ BATCH_NETS = 200
 # --------------------------------------------------------------------------------------------------------------
 # The picture: a board as plain data. Lengths in mm, points [x, y], layers by name.
 # A polygon is a list of rings (the outline first, then its holes); a ring is a list of points.
+
+def _r(v):
+    return round(v, 6)
+
 
 @dataclass
 class NetClass:
@@ -196,6 +206,203 @@ class Picture:
 
 
 # --------------------------------------------------------------------------------------------------------------
+# What the nets are for: guessed from their names and parts, and said in a hints file beside the board
+# (BOARD.routing.json). A guess only leans a net (what it costs, how readily it gives way); what binds it
+# (a width, a clearance, layers, no vias, a distance kept from other nets) comes from the hints alone.
+# Nothing here touches KiCad.
+
+SUPPLY = re.compile(r"^/?(.*/)?(\+?\d+(\.\d+)?V\d*|\+?\dV\d|V(CC|DD|SS|EE|BAT|BUS|IN|OUT|REF|PP|MOT|SYS)\w*|[AD]?GND\w*|GND|PWR\w*|\+BATT?|VBAT\w*|AVCC|AVDD|DVDD|3V3|5V|12V|24V|V?[+-])$", re.I)
+GROUND = re.compile(r"GND|VSS|VEE", re.I)
+PAIR_HALF = re.compile(r"^(.*?)([_-]?[PN]|[+-]|D[PM])$")
+_WORD = lambda words: re.compile(r"(^|[^A-Za-z])(" + words + r")\d*([^A-Za-z]|$)", re.I)
+# (a role, and what in the last part of a net's name says so; the first that fits is taken)
+NAMED = [("crystal", _WORD("XTAL|XTALIN|XTALOUT|OSC|OSCIN|OSCOUT|XIN|XOUT|OSC32|XTAL32")),
+         ("clock", _WORD("CLK|CLOCK|SCK|SCLK|SCL|MCLK|BCLK|LRCLK|XCLK|PCLK|REFCLK|TCK")),
+         ("noisy", _WORD("SW|LX|PHASE|BOOT|BST|GATE|HDRV|LDRV|PWM")),
+         ("sensitive", _WORD("VREF|AREF|REFP|REFN|AIN|AINP|AINN|ADC|SENSE|VSENSE|ISENSE|SENSEP|SENSEN|MIC|ANT|RF|NTC|RTD|THERM"))]
+CRYSTAL_PART = re.compile(r"^(Y|X|XTAL)\d")
+ROLES = ("supply", "ground", "clock", "crystal", "sensitive", "noisy")
+# How a role leans a net: (how readily it gives way, its weight among results, its via penalty as a factor).
+# A role the hints give leans it all the way. One that is only guessed makes it slower to take a via and no
+# more: on 20 public boards, guessed nets that held their way cost the other nets 13 % more vias.
+LEANING = dict(clock=(0.5, 2.0, 2.0), crystal=(0.2, 3.0, 5.0), noisy=(0.3, 3.0, 1.0), sensitive=(0.5, 2.0, 1.0))
+GUESSED = dict(clock=(1.0, 1.0, 2.0), crystal=(1.0, 1.0, 5.0))
+HINTS = dict(role=str, width=float, clearance=float, amps=float, volts=float, max_mm=float, vias=str, layers=list, pair=(str, bool),
+             gap=float, bus=(str, bool), priority=str, ohms=float, match=str)
+NOT_ACTED_ON = ("ohms", "match")  # taken down and said back, but nothing in the router follows them yet
+
+
+@dataclass
+class Intent:
+    """What is asked of a net beyond its class, and where each thing was taken from."""
+    role: object = None  # one of ROLES
+    width: object = None  # its track width, mm
+    clearance: object = None  # what it keeps from all other copper, mm
+    amps: object = None  # the current it carries: its tracks are at least as wide as that takes
+    volts: object = None  # the voltage on it: it keeps at least the distance that takes
+    max_mm: object = None  # its wanted greatest length
+    vias: object = None  # "none", or "few"
+    layers: object = None  # the layers it may use
+    pair: object = None  # the net it is laid side by side with; False: with none, whatever its name
+    gap: object = None  # between the legs of its pair, edge to edge
+    bus: object = None  # the name of the bus it runs with; False: with none
+    priority: object = None  # "high": it holds its shortest way and the others go round
+    ohms: object = None
+    match: object = None
+    source: dict = field(default_factory=dict)  # what was set -> "names" or the hints file's name
+
+
+@dataclass
+class Hints:
+    """A hints file as read: what it says of the nets a pattern names, in the order given, and its pairs."""
+    name: str = ""
+    nets: list = field(default_factory=list)  # [(pattern, {what: value})]
+    pairs: list = field(default_factory=list)  # [{nets: [a, b], width, gap, ohms}]
+
+
+def read_hints(path):
+    """A hints file (JSON) as Hints; ValueError says what is wrong with it.
+
+        {"nets": {"/adc/*": {"role": "sensitive"}, "+24V": {"amps": 3}, "CLK8": {"max_mm": 40, "vias": "none"}},
+         "pairs": [{"nets": ["TX_P", "TX_N"], "width": 0.15, "gap": 0.18}]}
+
+    A pattern is a net's name, with * and ? for any run of characters and any one (a name is tried with and
+    without its leading /). Later patterns override earlier ones.
+    """
+    name = Path(path).name
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{name}: {error}")
+    wrong = lambda where, why: ValueError(f"{name}: {where}: {why}")
+    if not isinstance(data, dict) or set(data) - {"nets", "pairs"}:
+        raise wrong("the file", "an object with `nets` and `pairs`, nothing else")
+    hints = Hints(name=name)
+    for pattern, said in (data.get("nets") or {}).items():
+        if not isinstance(said, dict):
+            raise wrong(f"nets[{pattern}]", "an object")
+        for what, value in said.items():
+            kinds = HINTS.get(what)
+            if kinds is None:
+                raise wrong(f"nets[{pattern}].{what}", f"not known; one of {', '.join(sorted(HINTS))}")
+            numeric = kinds is float and isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+            if not (numeric or (kinds is not float and isinstance(value, kinds))):
+                raise wrong(f"nets[{pattern}].{what}", "a number more than 0" if kinds is float else "of the wrong kind")
+        for what, among in (("role", ROLES), ("vias", ("none", "few")), ("priority", ("high",))):
+            if what in said and said[what] not in among:
+                raise wrong(f"nets[{pattern}].{what}", f"one of {', '.join(among)}")
+        hints.nets.append((pattern, dict(said)))
+    for k, pair in enumerate(data.get("pairs") or []):
+        legs = pair.get("nets") if isinstance(pair, dict) else None
+        if not (isinstance(legs, list) and len(legs) == 2 and all(isinstance(leg, str) for leg in legs) and legs[0] != legs[1]):
+            raise wrong(f"pairs[{k}].nets", "the two nets of the pair")
+        if set(pair) - {"nets", "width", "gap", "ohms"} or not all(isinstance(pair[w], (int, float)) and pair[w] > 0 for w in pair if w != "nets"):
+            raise wrong(f"pairs[{k}]", "`nets`, and `width`, `gap`, `ohms` as numbers more than 0")
+        hints.pairs.append(dict(pair))
+    return hints
+
+
+def pair_names(nets):
+    """The nets that are the two halves of a differential pair by their names, as [(first, second)]: names
+    that differ only in an ending _P/_N, -P/-N, P/N, +/- or DP/DM, and are not those of supplies."""
+    halves = {}
+    supply = lambda name: SUPPLY.match(name) or (name[-1:] in ("+", "-") and SUPPLY.match(name[:-1]))  # (VIN+ and VIN- are rails)
+    for name in sorted(nets):
+        match = PAIR_HALF.match(name)
+        if match and not supply(name):
+            stem = name[:-1] if name[-2:] in ("DP", "DM") else match.group(1)
+            halves.setdefault(stem, []).append(name)
+    return [tuple(pair) for pair in halves.values() if len(pair) == 2]
+
+
+def intents_of(picture, hints=None, guesses=True):
+    """What is asked of each net of a picture: {net: Intent}, from its name and parts (`guesses`) and then from
+    the hints, which override."""
+    nets = sorted(picture.groups)
+    intents = {net: Intent() for net in nets}
+    def take(net, source, **said):
+        for what, value in said.items():
+            setattr(intents[net], what, value)
+            intents[net].source[what] = source
+    if guesses:
+        on_crystal = {pad.net for pad in picture.pads if pad.net and pad.part and CRYSTAL_PART.match(pad.part)}
+        for net in nets:
+            last = net.rsplit("/", 1)[-1]
+            if GROUND.search(last) and SUPPLY.match(net):
+                take(net, "names", role="ground")
+            elif SUPPLY.match(net):
+                take(net, "names", role="supply")
+            elif net in on_crystal and len(picture.groups[net]) <= 3:
+                take(net, "names", role="crystal")
+            else:
+                role = next((role for role, named in NAMED if named.search(last)), None)
+                if role:
+                    take(net, "names", role=role)
+        for a, b in pair_names(nets):
+            take(a, "names", pair=b)
+            take(b, "names", pair=a)
+    for pattern, said in (hints.nets if hints else []):
+        for net in nets:
+            if fnmatch.fnmatchcase(net, pattern) or fnmatch.fnmatchcase(net.lstrip("/"), pattern):
+                take(net, hints.name, **said)
+                other = said.get("pair")
+                if isinstance(other, str) and other in intents:
+                    take(other, hints.name, pair=net, **{w: said[w] for w in ("width", "gap", "ohms") if w in said})
+    for pair in (hints.pairs if hints else []):
+        a, b = pair["nets"]
+        if a in intents and b in intents:
+            sizes = {w: pair[w] for w in ("width", "gap", "ohms") if w in pair}
+            take(a, hints.name, pair=b, **sizes)
+            take(b, hints.name, pair=a, **sizes)
+    # (a pair is two nets that name each other)
+    for net in nets:
+        other = intents[net].pair
+        if other and (other not in intents or intents[other].pair != net):
+            intents[net].pair = None
+    return intents
+
+
+def told(intents, only=None):
+    """What was taken for the nets (those in `only`, if given) and from where, as lines to say."""
+    lines = {}
+    seen = set()
+    for net in sorted(intents):
+        intent = intents[net]
+        if only is not None and net not in only:
+            continue
+        for what, source in sorted(intent.source.items()):
+            value = getattr(intent, what)
+            if value is None or (what == "pair" and (value is False or (value, net) in seen)):
+                continue
+            if what == "role" and source == "names" and value not in GUESSED:
+                continue  # (a supply, a ground, a switch node by its name: nothing follows from that alone)
+            seen.add((net, value) if what == "pair" else None)
+            if what == "pair":
+                text = f"pair {net} = {value}"
+            elif what == "role":
+                text = f"{value} {net}"
+            else:
+                text = f"{net} {what} {value if not isinstance(value, list) else ' '.join(value)}" + (" (not acted on)" if what in NOT_ACTED_ON else "")
+            lines.setdefault(source, []).append(text)
+    return [f"from {'the net names and parts' if source == 'names' else source}: {'; '.join(found)}" for source, found in sorted(lines.items())]
+
+
+def amps_width(amps):
+    """The width of an outer track of 35 um copper that carries a current with a rise of 10 degrees, in mm
+    (IPC-2221: I = 0.048 dT^0.44 A^0.725, A in square mils)."""
+    area = (amps / (0.048 * 10 ** 0.44)) ** (1 / 0.725)
+    return _r(area / 1.378 * 0.0254)
+
+
+def volts_clearance(volts):
+    """The distance between bare outer conductors for a voltage, in mm (IPC-2221B table 6-1, column B2)."""
+    for most, distance in ((30, 0.1), (150, 0.6), (300, 1.25), (500, 2.5)):
+        if volts <= most:
+            return distance
+    return _r(2.5 + (volts - 500) * 0.005)
+
+
+# --------------------------------------------------------------------------------------------------------------
 # The rules: what the board asks of the router, each stated once. Nothing here touches KiCad.
 
 @dataclass
@@ -211,6 +418,9 @@ class Settings:
     spoke_cost: float = 4.0  # and across the ground where it would cut a spoke that ties a pad to its pour
     decoupling: bool = True  # a capacitor beside a pin of an IC on its net is joined to that pin itself
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
+    pairs: bool = True  # two nets named as the halves of a differential pair are laid side by side
+    guesses: bool = True  # what a net is for is guessed from its name and parts (see intents_of)
+    hints: object = None  # the hints file beside the board, as read (Hints)
 
 
 def ignored_checks(board_path):
@@ -234,15 +444,20 @@ class Rules:
     STEPS = (0.1, 0.05, 0.025)  # the steps chosen from
     CELLS_PER_PITCH = 6  # at least this many cells from one track to the next
 
-    def __init__(self, minima, classes, ignored=frozenset(), settings=None):
+    def __init__(self, minima, classes, ignored=frozenset(), settings=None, intents=None):
         self.minima, self.classes, self.ignored = minima, classes, frozenset(ignored)
         self.settings = settings or Settings()
+        self.intents = intents or {}  # what is asked of each net beyond its class (see intents_of)
         # the smallest clearance any net keeps from other copper: what every track keeps from a pad or hole anyway
         self.least_clearance = min((self.clearance(net) for net in classes), default=self.kept(minima.clearance))
 
     @classmethod
     def of(cls, picture, settings=None):
-        return cls(picture.minima, picture.classes, picture.ignored, settings)
+        settings = settings or Settings()
+        return cls(picture.minima, picture.classes, picture.ignored, settings, intents_of(picture, settings.hints, settings.guesses))
+
+    def intent(self, net):
+        return self.intents.get(net) or Intent()
 
     def kept(self, distance):
         """A distance as the router is to keep it: with the slack for the grid. The one place it is added."""
@@ -254,13 +469,52 @@ class Rules:
     # -- between nets
 
     def clearance(self, net):
-        """What a net keeps from copper of other nets: its class's clearance, at least the board's."""
-        return self.kept(max(self.classes[net].clearance, self.minima.clearance))
+        """What a net keeps from copper of other nets: its class's clearance, at least the board's, and what
+        the hints ask for it or its voltage takes."""
+        intent = self.intent(net)
+        asked = max(intent.clearance or 0.0, volts_clearance(intent.volts) if intent.volts else 0.0)
+        return self.kept(max(self.classes[net].clearance, self.minima.clearance, asked))
 
     def stricter(self, net):
         """The nets whose class asks more than this net's: it keeps their clearance from their copper."""
         own = self.clearance(net)
         return {other: self.clearance(other) for other in self.classes if other != net and self.clearance(other) > own}
+
+    def pair(self, a, b, nets):
+        """How two nets are laid as a differential pair among `nets`, those of the run: (the width of each leg,
+        the distance between the legs, centre to centre). The legs are as wide as the wider net's tracks, and
+        as near each other as two nets laid in one run may come, or as far apart as the hints say if that is more."""
+        width = max(self.track_width(a), self.track_width(b))
+        gap = max(self.new_clearance(nets), self.intent(a).gap or 0.0, self.intent(b).gap or 0.0)
+        return _r(width), _r(width + gap)
+
+    def quiet_clearance(self, nets):
+        """What a net the hints call sensitive keeps from the other nets laid with it, and they from it: twice
+        what two ordinary nets keep. None if none of these nets is sensitive by the hints."""
+        quiet = any(self.leaning(net).get("quiet") for net in nets)
+        return _r(2 * self.new_clearance(nets)) if quiet else None
+
+    def leaning(self, net, layers=None):
+        """What a net's entry is given beyond its sizes, for what the net is for: fields of the engine's entry,
+        and `via_penalty` as a factor on the usual. A role leans it (how readily it gives way, its weight, its
+        vias: less so where it is only guessed); the hints bind it (no vias, layers among `layers`, a greatest length, a distance kept as a quiet net)."""
+        intent, out = self.intent(net), {}
+        hinted = lambda what: intent.source.get(what, "names") != "names"
+        give, weight, vias = (LEANING if hinted("role") else GUESSED).get(intent.role, (1.0, 1.0, 1.0))
+        if intent.priority == "high":
+            give, weight = min(give, 0.3), max(weight, 3.0)
+        if intent.vias == "few":
+            vias = max(vias, 3.0)
+        out.update({"yield": give} if give != 1.0 else {}, **(dict(weight=weight) if weight != 1.0 else {}), **(dict(via_penalty=vias) if vias != 1.0 else {}))
+        if intent.vias == "none":
+            out["no_vias"] = True
+        if intent.max_mm:
+            out["max_mm"] = intent.max_mm
+        if intent.role == "sensitive" and hinted("role"):
+            out["quiet"] = True
+        if intent.layers and layers is not None and any(l in intent.layers for l in layers):
+            out["layers"] = [l for l in layers if l in intent.layers]
+        return out
 
     def new_clearance(self, nets):
         """Between copper of two nets laid in the same run: the most any of them asks."""
@@ -308,7 +562,10 @@ class Rules:
         return _r(self.track_width(net) / 2 + 0.1)
 
     def track_width(self, net):
-        return max(self.classes[net].track_width, self.minima.track_width)
+        """A net's track width: its class's, or what the hints say instead; at least what its current takes,
+        and the board's narrowest."""
+        intent = self.intent(net)
+        return max(intent.width or self.classes[net].track_width, amps_width(intent.amps) if intent.amps else 0.0, self.minima.track_width)
 
     def narrow_width(self, net, smallest_pad):
         """The second try's width for a net that could not be laid at its class width: narrower than its
@@ -369,10 +626,6 @@ class Rules:
 
 # --------------------------------------------------------------------------------------------------------------
 # The problem: a picture and the rules as the router's JSON (src/model.rs). Nothing here touches KiCad.
-
-def _r(v):
-    return round(v, 6)
-
 
 def _disc(centre, radius, sides=16):
     """A polygon that covers a disc."""
@@ -564,19 +817,59 @@ def decoupling(pads, groups):
     return links
 
 
-def problem_of(picture, rules, ask, only=None, **more):
-    """build_problem for the unjoined nets of a picture, each reached where the engine says (`ask` puts the
-    question to it: see reach_of)."""
-    return build_problem(picture, rules, reach_of(picture, rules, picture.unjoined(only), ask), only=only, **more)
+PAIR_PADS = 4  # the most pads a net of a pair has: more is a rail or a bus by another name
 
 
-def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None):
+def pairs_of(picture, rules, names, ask, notes=None):
+    """Which of these unjoined nets are to be laid as differential pairs, and how: [(first net, second net,
+    leg width, pitch, plan)], the plan as the engine gives it (src/pairs.rs: the ends of the pair, the trunks
+    between them and where each may begin and end, the pads at no end).
+
+    Two nets are a pair if their names or the hints say so (see intents_of), none of their pads is joined to
+    another yet, they have the same number of pads (four at most), and the engine finds them pads side by side
+    at two ends or more, far enough apart to run together between. Why a pair by name is laid as two nets is added to `notes`, if given.
+    """
+    note = lambda a, b, why: notes.append(f"{a} = {b} is laid as two nets: {why}") if notes is not None else None
+    lone = lambda net: all(len(group) == 1 for group in picture.groups[net])
+    other = lambda net: rules.intent(net).pair
+    named = [(a, other(a)) for a in names if other(a) in names and a < other(a)]
+    few = lambda a, b: len(picture.groups[a]) == len(picture.groups[b]) <= PAIR_PADS
+    for a, b in named:
+        if not few(a, b):
+            note(a, b, f"they have not the same number of pads, or more than {PAIR_PADS} each")
+        elif not (lone(a) and lone(b)):
+            note(a, b, "some of their pads are joined already")
+    named = [(a, b) for a, b in named if few(a, b) and lone(a) and lone(b)]
+    if not named:
+        return []
+    spots = lambda net: _spots(picture.pads[group[0]] for group in picture.groups[net])
+    sizes = [rules.pair(a, b, names) for a, b in named]
+    plans = ask(dict(ask="pairs", layers=rules.routing_layers(picture.layers), step=rules.settings.step,
+                     pairs=[dict(a=spots(a), b=spots(b), pitch=pitch) for (a, b), (_, pitch) in zip(named, sizes)]))
+    for (a, b), plan in zip(named, plans):
+        if not plan["trunks"]:
+            note(a, b, "no two places where a pad of each stands by the other" if len(plan["ends"]) < 2 else "its ends are too near each other, or share no routing layer")
+    return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans) if plan["trunks"]]
+
+
+def problem_of(picture, rules, ask, only=None, unpaired=frozenset(), narrow=False, notes=None, **more):
+    """build_problem for the unjoined nets of a picture, with what the engine works out for it (`ask` puts the
+    questions to it): where each net may be reached (see reach_of), and which nets are laid as pairs (see
+    pairs_of; not the pairs whose keys are in `unpaired`, and none in the narrower second try). `notes`: a list that what is
+    worth telling the user is added to."""
+    names = picture.unjoined(only)
+    pairs = pairs_of(picture, rules, names, ask, notes) if rules.settings.pairs and not narrow else []
+    return build_problem(picture, rules, reach_of(picture, rules, names, ask), only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, **more)
+
+
+def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=frozenset()):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
     `reached`: where each of those nets may be reached (see reach_of). `narrow`: the second try, with
     narrower tracks and vias allowed in a net's own lands. `unlinked`: nets whose capacitors get no link of
     their own to the pin they stand by. `stubs`: instead of the unjoined nets, a track for each of these pads
-    from its middle to its zone: [(key, Thermal, points of the zone to end on)].
+    from its middle to its zone: [(key, Thermal, points of the zone to end on)]. `pairs`: the nets to lay as
+    differential pairs (see pairs_of), `unpaired`: the keys of the pairs given up as such.
     """
     every = picture.layers
     layers = rules.routing_layers(every)
@@ -629,18 +922,53 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     nets = []
     def entry(key, name, terminals, via_penalty, **more):
         width = rules.narrow_width(name, smallest.get(name)) if narrow else rules.track_width(name)
-        return dict(key=key, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=layers,
+        lean = rules.leaning(name, layers)  # (what the net is for: see Rules.leaning)
+        return dict(key=key, net=name, width=_r(width), via=[_r(v) for v in rules.via(name)], layers=lean.pop("layers", layers),
                     clearance=dict(default=_r(rules.clearance(name)), nets={n: _r(c) for n, c in rules.stricter(name).items()}),
-                    terminals=terminals, via_penalty_mm=via_penalty, **more)
+                    terminals=terminals, via_penalty_mm=via_penalty * lean.pop("via_penalty", 1.0), **dict(lean, **more))
     for key, thermal, targets in stubs or []:
         start = dict(xy=picture.pads[thermal.pad].at, layers=[thermal.layer])
         ends = [dict(xy=at, layers=[thermal.layer], piece=0) for at in targets]
         nets.append(entry(key, thermal.net, [start] + ends, rules.settings.via_penalty, no_vias=True))
+    on = lambda pad: [l for l in layers if l in pad.layers]
+    terminal = lambda pad: dict(xy=pad.at, layers=on(pad))
+    # A differential pair: for each stretch between two of its ends a trunk, laid as one wide track of a net
+    # of its own between places a little off the pads (those of one end are one piece: the engine takes
+    # whichever suits), and four stubs that join the legs it is split into to the pads. A pad of either net
+    # at no end is joined to its net as any pad is, the pads at the ends standing for one piece.
+    paired, problem_pairs = set(), []
+    for a, b, width, pitch, plan in pairs:
+        pads = {net: [picture.pads[group[0]] for group in picture.groups[net]] for net in (a, b)}
+        key_of = lambda number: f"{a} = {b}" + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
+        trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"]) if key_of(number) not in unpaired]
+        if not trunks or len(nets) + 5 * len(trunks) + 2 + len(unjoined) >= ENGINE_NETS or not all(on(pad) for net in pads for pad in pads[net]):
+            continue  # (given up as a pair, no room for it in this run, or a pad on no routing layer: laid as two nets)
+        paired |= {a, b}
+        held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
+        for key, trunk in trunks:
+            places = [dict(xy=place["xy"], layers=place["layers"], piece=end) for end in (0, 1) for place in trunk["gather"][end]]
+            nets.append(dict(entry(f"{key} trunk", a, places, rules.settings.via_penalty, no_vias=True), net=f"~{key}", width=_r(pitch + width + 0.04)))
+            nets[-1]["clearance"] = dict(default=_r(max(rules.clearance(a), rules.clearance(b))), nets={n: _r(c) for net in (a, b) for n, c in rules.stricter(net).items()})
+            stubs_of = [[], []]
+            for end in (0, 1):
+                for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
+                    nets.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], rules.settings.via_penalty, last=True), width=width))
+                    stubs_of[end].append(nets[-1]["key"])
+            problem_pairs.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs_of))
+            first, second = (held[end] for end in trunk["ends"])
+            held = [min(first, second) if h in (first, second) else h for h in held]
+        # What the trunks do not join is joined as the pads of any net are: the pads at the ends that trunks
+        # join stand for one piece, a pad at no end stands alone.
+        for side, net in enumerate((a, b)):
+            at_ends = [dict(terminal(pads[net][end[side]]), piece=held[k]) for k, end in enumerate(plan["ends"])]
+            if len(set(held)) + len(plan["loose"][side]) > 1:
+                nets.append(entry(net, net, [terminal(pads[net][i]) for i in plan["loose"][side]] + at_ends, rules.settings.via_penalty))
     for place, name in enumerate(unjoined):
+        if name in paired:
+            continue
         # One terminal per group of pads that existing copper already joins, or several that stand for the
         # one piece of copper: a group of several pads, or one that a pour joins, is reached where it comes
         # cheapest (see `reach_of`), so that nothing is laid where a pour already joins.
-        on = lambda pad: [l for l in layers if l in pad.layers]
         groups = picture.groups[name]
         pours = picture.pours.get(name, {}) if rules.settings.pours else {}
         reach = reached[name]
@@ -650,7 +978,6 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
         def terminals(g):
             piece = dict(piece=g) if len(reach[g]) > 1 else {}
             return [dict(xy=at, layers=at_layers, **piece) for at, at_layers in reach[g]]
-        terminal = lambda pad: dict(xy=pad.at, layers=on(pad))
         # A capacitor beside a pin of an IC is joined to that pin, in an entry of its own that is slow to
         # change layer; the rest of the net is joined as it would be without the capacitor. (Not on a net
         # with a pour: there the pin and the capacitor both stand on it, or are each taken to it.)
@@ -670,7 +997,10 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
         if len(rest) < 2:
             continue
         nets.append(entry(name, name, [t for g in rest for t in terminals(g)], rules.settings.via_penalty))
-        if name in bus:
+        said = rules.intent(name).bus  # (the hints may name its bus, or say it runs with none)
+        if said:
+            nets[-1]["bus"] = said
+        elif name in bus and said is None:
             nets[-1]["bus"], nets[-1]["bus_lane"] = bus[name]
 
     # The engine keeps one distance between hole centres: enough for two holes of the widest new via's drill. A
@@ -684,12 +1014,14 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
             radius = max(rules.hole_spacing(hole.drill, n["via"][1]) - n["via"][0] / 2 for n in nets) - margin
             regions.append(dict(rings=[_disc(hole.at, max(radius, 0.001))], layers=[], tracks=False, vias=True))
 
-    problem_rules = dict(hole_centre_mm=_r(rules.hole_spacing(via_drill, via_drill)), pad_drill_margin_mm=0.0,
-                         region_margin_mm=_r(margin), new_clearance_mm=_r(rules.new_clearance(n["net"] for n in nets)))
+    real = [n["net"] for n in nets if n["net"] in picture.classes]
+    quiet = rules.quiet_clearance(real)
+    problem_rules = dict(hole_centre_mm=_r(rules.hole_spacing(via_drill, via_drill)), pad_drill_margin_mm=0.0, **(dict(quiet_clearance_mm=quiet) if quiet else {}),
+                         region_margin_mm=_r(margin), new_clearance_mm=_r(rules.new_clearance(real)))
     if narrow:
         problem_rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
     return dict(window=window, step=rules.settings.step, layers=layers, copper=copper, holes=holes, regions=regions,
-                **(dict(dear=dear) if dear else {}), rules=problem_rules, nets=nets, options=dict(dict(bus_pull=rules.settings.bus_pull), **(options or {})))
+                **(dict(dear=dear) if dear else {}), **(dict(pairs=problem_pairs) if problem_pairs else {}), rules=problem_rules, nets=nets, options=dict(dict(bus_pull=rules.settings.bus_pull), **(options or {})))
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -724,19 +1056,18 @@ def run_engine(problem, engine, threads=0, problem_path=None, solution_path=None
 
 
 def ask_engine(question, engine, threads=0):
-    """Put a question about a board's zones to the pcb-routing program (its `pours` command) and return the
-    answer. `engine` is the program (or a command as a list)."""
-    command = ([engine] if isinstance(engine, (str, os.PathLike)) else list(engine)) + ["pours"] + (["--threads", str(threads)] if threads else [])
+    """Put a question to the pcb-routing program (its `ask` command: see src/ask.rs) and return the answer. `engine` is the program (or a command as a list)."""
+    command = ([engine] if isinstance(engine, (str, os.PathLike)) else list(engine)) + ["ask"] + (["--threads", str(threads)] if threads else [])
     try:
         run = subprocess.run(command, input=json.dumps(question), capture_output=True, text=True)
     except OSError as error:
         raise EngineFailed(f"cannot run {command[0]}: {error}")
     if run.returncode:
-        raise EngineFailed(run.stderr.strip() or f"{command[0]} pours ended with status {run.returncode}")
+        raise EngineFailed(run.stderr.strip() or f"{command[0]} ask ended with status {run.returncode}")
     try:
         return json.loads(run.stdout)
     except ValueError:
-        raise EngineFailed(f"{command[0]} pours gave no answer that can be read")
+        raise EngineFailed(f"{command[0]} ask gave no answer that can be read")
 
 
 @dataclass
@@ -798,6 +1129,9 @@ def route(board, settings, engine, only=None, options=None, say=print):
     open_before = set(board.unjoined())  # nets that are not this run's to join, or were not joined to begin with
     starved_before = {(t.pad, t.layer) for t in picture.thermals if t.spokes < t.least}
     given_up = set()  # nets that an earlier batch left unjoined
+    noted = set()  # what has been said of the pairs
+    for line in told(Rules.of(picture, settings).intents, set(names)):
+        say(line)
     lots = batches(names)
     if len(lots) > 1:
         say(f"{len(names)} nets to join, more than the engine takes in one run: routed in {len(lots)} batches of at most "
@@ -811,7 +1145,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
                 picture = board.read(lot)
                 say(f"batch {number + 1} of {len(lots)}")
             tries = Rules.of(picture, settings).tries(lot)
-            number_of_try, reread, unlinked, repeats = 0, False, set(), 0
+            number_of_try, reread, unlinked, unpaired, repeats = 0, False, set(), set(), 0
             # For pours that new tracks cut: the last run of the lot's own nets, as (its problem, where the board's
             # record stood before it, its picture); whether the present run is one that joins a cut pour again;
             # the entries that hold cut pours together; and whether the lot's run is to be done again with those.
@@ -832,9 +1166,15 @@ def route(board, settings, engine, only=None, options=None, say=print):
                         say(f"no try at a {step:g} mm step: the grid would be larger than --max-states")
                         number_of_try, reread = number_of_try + 1, True
                         continue
-                    problem = problem_of(picture, rules, engine.ask, only=set(lot), narrow=narrow, options=options, unlinked=unlinked)
-                keys = list(dict.fromkeys(n["net"] for n in problem["nets"]))  # (a net may have several entries)
-                if not number_of_try and reread is False and not unlinked:
+                    notes = []
+                    problem = problem_of(picture, rules, engine.ask, only=set(lot), narrow=narrow, options=options, unlinked=unlinked, unpaired=unpaired, notes=notes)
+                    for note in notes:
+                        if note not in noted:
+                            say(note)
+                    noted.update(notes)
+                # (a net may have several entries; the trunk of a pair is of no net of the board)
+                keys = list(dict.fromkeys(n["net"] for n in problem["nets"] if n["net"] in picture.groups))
+                if not number_of_try and reread is False and not unlinked and not unpaired:
                     wanted += [n for n in keys if n not in wanted]
                 if not keys:
                     break
@@ -851,16 +1191,32 @@ def route(board, settings, engine, only=None, options=None, say=print):
                 failed = {n["net"] for n in problem["nets"] if any(m.startswith(n["key"] + ":") for m in solution.get("unrouted", []))}
                 failed |= {n["net"] for n in problem["nets"] for c in solution.get("conflicts", []) if c.get("key") == n["key"]}
                 linked = {n["net"] for n in problem["nets"] if n["key"].startswith(n["net"] + " | ")} - unlinked
-                if failed & linked and not again:
-                    say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
-                    unlinked |= failed & linked
-                    reread = False
+                # So is laying two nets as a pair: where a pair is not all laid, it is done again as two nets; and
+                # where anything is left unjoined with pairs laid, once more without any (they take room).
+                said = solution.get("unrouted", []) + [c.get("key", "") + ":" for c in solution.get("conflicts", [])]
+                of_pair = lambda pair: [pair["key"], pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
+                broken = {pair["key"] for pair in problem.get("pairs", []) if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
+                if solution["status"] != "routed" and not broken:
+                    broken = {pair["key"] for pair in problem.get("pairs", [])}
+                if (failed & linked and not again) or broken:
+                    if failed & linked and not again:
+                        say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
+                        unlinked |= failed & linked
+                    if broken:
+                        say(f"not all laid with these as pairs: again as single nets for {', '.join(sorted(broken))}")
+                    unpaired |= broken
+                    # (a lot that was being laid again to hold a cut pour together is begun anew from the board as it was)
+                    reread, again = False, False
                     continue
                 first = False
+                for pair in problem.get("pairs", []):
+                    say(f"laid as a pair: {pair['key']}")
                 mark = board.mark() if settings.pours else None
                 # (an entry that has points of a pour among its terminals is written piece by piece: see below)
                 parts = parts_of(picture, problem, solution, engine.ask) if settings.pours else [dict(laid, of=laid["key"]) for laid in solution["nets"]]
                 sizes = {n["key"]: (n["width"], n["via"]) for n in problem["nets"]}
+                # (what is laid for a pair comes back per leg, under the pair's key and the leg's net: the leg and its stubs)
+                sizes.update({f"{pair['key']}/{leg}": sizes[stub] for pair in problem.get("pairs", []) for leg, stub in zip(pair["legs"], pair["stubs"][0])})
                 added = board.write(dict(solution, nets=parts), {part["key"]: sizes[part["of"]] for part in parts})
                 # A track that ends on a pour is joined only while the pour is there: where the other new tracks
                 # have cut it away, the copper that hangs on that end is taken back, and its net is among those
@@ -1443,6 +1799,9 @@ def main(argv=None):
     parser.add_argument("--no-pours", action="store_true", help="do not count pads that a filled zone joins as joined: a net with a zone is routed as tracks, as if the zone were not there")
     parser.add_argument("--pour-cost", type=float, default=2.0, help="what a track pays for its length across another net's pour, as a factor (1: nothing more)")
     parser.add_argument("--spoke-cost", type=float, default=4.0, help="and across the ground where it would cut a spoke that ties a pad to its pour")
+    parser.add_argument("--no-pairs", action="store_true", help="do not lay two nets named as the halves of a differential pair (_P/_N, +/-, DP/DM) side by side")
+    parser.add_argument("--hints", help="what the nets are for, as a JSON file (default: BOARD.routing.json beside the board, if it is there; see read_hints)")
+    parser.add_argument("--no-guesses", action="store_true", help="do not guess what a net is for from its name and parts (clocks, crystals, switch nodes, pairs): only the hints say")
     parser.add_argument("--no-decoupling", action="store_true", help="do not join a capacitor that stands by a pin of an IC to that pin itself")
     parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
@@ -1463,7 +1822,12 @@ def main(argv=None):
         parser.error("--bus-pull takes a number from 0 to 10")
     if not (1 <= args.pour_cost <= 100 and 1 <= args.spoke_cost <= 100):
         parser.error("--pour-cost and --spoke-cost take a number from 1 to 100")
-    settings = Settings(step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=not args.no_pours,
+    beside = Path(args.board).with_suffix(".routing.json")
+    try:
+        hints = read_hints(args.hints) if args.hints else read_hints(beside) if beside.is_file() else None
+    except ValueError as error:
+        parser.error(str(error))
+    settings = Settings(hints=hints, guesses=not args.no_guesses, step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=not args.no_pours, pairs=not args.no_pairs,
                         pour_cost=args.pour_cost, spoke_cost=args.spoke_cost)
     options = dict(variants=args.variants, max_states=args.max_states)
     engine = Engine(args.engine, args.threads, args.problem, args.solution)

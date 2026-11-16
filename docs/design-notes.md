@@ -142,8 +142,36 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   the bridge asks KiCad only for what KiCad alone knows.
   Still open: a custom rule for the thermal gap or the number of spokes is not read; a pad no straight
   track fits by is only named; the time a cut zone costs when a run is done again.
-* Open: differential pairs are not routed as pairs through the bridge (coupled for 12 % of their length,
-  the designers 27 %, on seven pairs); short last stretches before a pad.
+* Differential pairs through the bridge. The 119 boards have three (the "seven pairs" of an earlier note
+  were mostly `LOAD+`/`LOAD-` and the like: rails); the whole dataset has 42 that the designers routed, on 19
+  boards, and 20 of them on the 13 boards small enough to run again and again are what this was measured on.
+  * A pair is two nets by name or by the hints, with the same few pads, whose pads stand side by side at
+    two places or more. Names alone are not enough: `VIN+`/`VIN-` are rails, and a net of ten pads against
+    one of five is no pair whatever it is called.
+  * The engine lays a pair as one trunk between two points, on one layer. A real pair is often a chain
+    (connector, protection device, controller): a trunk for each stretch long enough, tracks for a hop too
+    short to gather and part in. Before that, the two USB pairs the designers had coupled best (96 and
+    99 %) were not laid as pairs at all.
+  * A trunk is offered nine places at each end (three distances, towards the other end and 45 degrees to
+    either side), as one piece: the first version had one place, and one place is often under a pad.
+  * A pair is a wish. A stretch whose stubs find no way (the legs arrive in the wrong order and cannot cross
+    on one layer) is done again as two nets, and if anything at all is left unjoined with pairs laid, once
+    more without any: one board of the 13 was left incomplete by its pairs before that.
+  * Two faults of the engine's split came out, both at corners (see the changelog): a leg that ran
+    backwards beside a stretch too short for it, and the outside of a sharp corner beyond the trunk.
+  Coupled for 36 % of their length, where the designers have 39 % and the router without pairs 18 %
+  (35 to 37 % from one run of the boards to the next, as the ways the other nets take change); the lengths
+  of the two halves differ by 19 % (designers 19 %, without pairs 16 %). Still open: pairs that
+  change layer; untwisting at an end; coupling up to the pads; impedance.
+* What the nets are for (bridge). Three sources: the board, guesses from names and parts, a hints file.
+  The first version let a guessed clock, crystal, switch node or sensitive net hold its shortest way
+  (`yield`). On the 20 larger boards the 36 nets so guessed lost 12 vias between them and the other 760
+  gained 47 (13 % more). Made only slower to change layer, the 18 clocks go from 12 vias to 6 and the rest
+  gain 11, which is within what these boards move by for any small change. So that is all a guess does,
+  for clocks and crystals; the rest of what a role means is for a role that the hints file gives, where
+  somebody has said so. What binds (widths, clearances, layers, no vias, the distance kept by a sensitive
+  net) never comes from a guess.
+* Open: short last stretches before a pad.
 
 ## Tried and not kept
 

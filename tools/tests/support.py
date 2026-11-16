@@ -8,7 +8,8 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parent.parent
 FAKE_ENGINE = Path(__file__).resolve().parent / "fake_engine.py"
 ENGINE = [sys.executable, str(FAKE_ENGINE)]
-if not shutil.which(os.environ.get("PCB_ROUTING") or str(TOOLS.parent / "target/release/pcb-routing")):
+PROGRAM = os.environ.get("PCB_ROUTING") or str(TOOLS.parent / "target/release/pcb-routing")  # the engine itself
+if not shutil.which(PROGRAM):
     raise unittest.SkipTest("the engine is not built: cargo build --release, or name the program in $PCB_ROUTING")
 
 

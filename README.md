@@ -25,7 +25,8 @@ repository, not in the crate on crates.io. It runs under the Python that ships w
 above is the macOS one). It reads pads, tracks, vias, holes, the outline, rule areas and the net classes, routes every
 net whose pads are not yet joined, writes the tracks and vias back and refills the zones. What is already
 routed is kept and routed around, and what a filled zone joins is left to the zone (see below). `--nets A,B` routes only those nets; `--layers F.Cu,B.Cu` restricts the
-layers; `--coarse-first` trades a little quality for about three times the speed. `--help` lists the rest.
+layers; `--coarse-first` trades a little quality for about three times the speed; `--hints FILE` names a hints
+file other than `BOARD.routing.json`. `--help` lists the rest.
 
 ## How it compares
 
@@ -150,7 +151,17 @@ here.
   boards with their designers' zones put back: all complete, no new error of any kind in KiCad's check
   (thermal relief included), and 21 % less track than with the zones ignored. What the zones join, where
   a net may be joined to one and how each pad is tied to it are worked out in the crate, from the filled
-  zones as polygons (`pcb_routing::pours`, or `pcb-routing pours`); the KiCad bridge fills the zones and asks.
+  zones as polygons (`pcb_routing::pours`, or `pcb-routing ask`); the KiCad bridge fills the zones and asks.
+* Differential pairs, in the engine and through the KiCad bridge: two nets named as a pair (`_P`/`_N`,
+  `+`/`-`, `DP`/`DM`), or said to be one in the hints, are laid side by side between the places where a pad
+  of each stand side by side, and as two nets where that cannot be done. On 20 pairs of 13 public boards:
+  coupled for 36 % of their length, where the same router without pairs has 18 % and the designers 39 %;
+  all boards complete, with no new error in KiCad's check.
+* What the nets are for, in the KiCad bridge: guessed from names and parts (clocks and crystals are slow to
+  change layer), and said in an optional hints file beside the board ([docs/hints.md](docs/hints.md)): roles,
+  a width for a current, a clearance for a voltage, layers, "no vias", a greatest length, pairs with their
+  gap, buses. A guess only leans a net; what binds it comes from the file. The bridge says what it took
+  from where.
 * Buses kept together: nets marked as one bus (`bus` and `bus_lane` on a net; the KiCad bridge marks nets
   that leave one part and arrive at another side by side) are drawn to run beside each other on one layer,
   in the order of their pads, and are slow to cross each other.
@@ -163,8 +174,9 @@ Things other routers have and this one does not, roughly in order of how often t
   shoves; FreeRouting has both modes.
 * **Length and skew tuning** (meanders, matched groups). A wanted maximum length per net only ranks attempts.
   KiCadRoutingTools and the commercial routers tune lengths.
-* **Pairs coupled all the way to the pads**, and pairs through the KiCad bridge. The legs of a pair are also
-  not tested against fixed copper (see Limits).
+* **Pairs coupled all the way to the pads, and pairs that change layer.** A pair is laid side by side on one
+  layer between two points a little off its pads, and where its legs would have to cross to reach their pads
+  it is laid as two nets. There is no impedance calculation: a pair has the width and gap it is told.
 * **Blind, buried and micro vias.** Through vias only.
 * **Fan-out of fine-pitch and BGA parts** as a step of its own. Pads are escaped by the ordinary search,
   with a narrower second try.
@@ -208,21 +220,23 @@ For a board with filled zones, `pcb_routing::pours` turns the zones as your CAD 
 what a problem takes: `survey` tells which pads the zones already join and counts the thermal spokes of
 each pad, `reach` gives the places a net may be joined to its zone (the terminals of one `piece`), and
 after a run `parts` tells which of the new copper hangs on a piece of zone, to be looked at again once the
-zones are refilled. The module documentation has the whole round.
+zones are refilled. The module documentation has the whole round. `pcb_routing::pairs::plan` does the like
+for two nets that are to be a pair: which of their pads face each other, between which of those a trunk is
+to run, and places for it to begin and end.
 
 ## As a program
 
     pcb-routing route PROBLEM.json -o SOLUTION.json [--threads N] [--trace] [--verify] [--only ATTEMPT]
     pcb-routing masks PROBLEM.json --net KEY -o MASK.bin
-    pcb-routing pours [QUESTION.json] [-o ANSWER.json] [--threads N]
+    pcb-routing ask [QUESTION.json] [-o ANSWER.json] [--threads N]
 
 `route` exits with status 0 if every net is laid and none are too close, 1 otherwise, 2 if the problem could
 not be run. `--trace` prints one line per round and the time spent per kind of work. `--verify` runs every
 search a second time without the first pass (see below) and reports any whose cost differs. `masks` writes
-the router's picture of the board for one net, one byte per cell. `pours` answers one question about a
-board's filled zones, as JSON (from standard input to standard output where no file is named): the field
-`ask` names it (`survey`, `reach`, `parts`, `on_zone`, `tie_targets`, `ties`), and the rest is as documented on
-`pcb_routing::pours::Ask`.
+the router's picture of the board for one net, one byte per cell. `ask` answers one question a front
+end has before or after routing, as JSON (from standard input to standard output where no file is named): the
+field `ask` names it (`survey`, `reach`, `parts`, `on_zone`, `tie_targets`, `ties` about filled zones, `pairs`
+about differential pairs), and the rest is as documented on `pcb_routing::ask::Ask`.
 
 Try it on `examples/two_nets.json`.
 
@@ -290,8 +304,9 @@ repository) records what each of these bought when it was added, and what was tr
 * The grid carries part of the clearance: a `routed` result keeps the rules between new nets at cell centres,
   and a diagonal step can come nearer by about 0.002 mm at a 0.05 mm step. The KiCad bridge adds 0.002 mm to
   every clearance for this (`--slack`).
-* The legs of a pair are not tested against fixed copper. The trunk is, at its own width, which covers the
-  legs on straight runs and 45 degree corners when it is at least `pitch + leg_width + 0.04` wide.
+* The legs of a pair are not tested against fixed copper themselves. The trunk they are split from is, at
+  its own width, and the legs lie within it: on the outside of a corner too sharp for what the trunk is
+  wider than the two legs, a leg is cut straight across.
 * Memory is about 200 bytes per (layer, cell) state for each attempt running at once. A problem beyond
   `options.max_states` (default 10 million) is refused.
 * At most seven routing layers and 249 net entries per run.
@@ -306,7 +321,7 @@ repository) records what each of these bought when it was added, and what was tr
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 146 in the engine and its zone module, 136 in the bridge, 141 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 156 in the engine and its modules for zones and pairs, 155 in the bridge, 141 in the quality tools |
 
 ## Sources
 
