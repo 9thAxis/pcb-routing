@@ -242,12 +242,9 @@ impl Problem {
             let trunk = entry(at("trunk"), &pair.trunk)?;
             // (two terminals, or more that stand for two pieces: see `Terminal::piece`)
             let mut ends: Vec<Option<u32>> = Vec::new();
-            for (t, terminal) in trunk.terminals.iter().enumerate() {
+            for terminal in &trunk.terminals {
                 if terminal.piece.is_none() || !ends.contains(&terminal.piece) {
                     ends.push(terminal.piece);
-                }
-                if ends.len() > 2 || (t == 0 && trunk.terminals.len() < 2) {
-                    break;
                 }
             }
             if ends.len() != 2 {

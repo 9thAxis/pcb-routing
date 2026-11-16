@@ -407,3 +407,40 @@ fn a_layer_change_on_a_via_of_another_entry_of_the_net_keeps_its_via() {
         }
     }
 }
+
+/// The trunk of a pair runs between two pieces: two terminals, or several that stand for two. One piece and a
+/// terminal alone will do; three pieces, or one, will not.
+#[test]
+fn a_trunk_has_two_ends_however_many_places_each_is_offered() {
+    let trunk = |terminals: Value| {
+        let mut v = small(vec![
+            json!({"key": "t", "net": "~t", "width": 0.5, "via": [0.45, 0.2], "layers": ["F"], "clearance": {"default": 0.17},
+                   "no_vias": true, "terminals": terminals}),
+        ]);
+        for (key, net, at) in
+            [("a0", "P", [1.0, 2.0]), ("b0", "M", [1.0, 4.0]), ("a1", "P", [9.0, 2.0]), ("b1", "M", [9.0, 4.0])]
+        {
+            v["nets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"key": key, "net": net, "width": 0.15, "via": [0.45, 0.2], "layers": ["F"],
+                "clearance": {"default": 0.17}, "last": true, "terminals": [{"xy": at, "layers": ["F"]}]}));
+        }
+        v["pairs"] = json!([{"key": "p", "trunk": "t", "legs": ["P", "M"], "leg_width": 0.15, "pitch": 0.3, "stubs": [["a0", "b0"], ["a1", "b1"]]}]);
+        problem(v).validate()
+    };
+    let at = |x: f64, piece: Option<u32>| match piece {
+        Some(piece) => json!({"xy": [x, 3.0], "layers": ["F"], "piece": piece}),
+        None => json!({"xy": [x, 3.0], "layers": ["F"]}),
+    };
+    assert!(trunk(json!([at(2.0, None), at(8.0, None)])).is_ok());
+    assert!(trunk(json!([at(2.0, Some(0)), at(2.5, Some(0)), at(8.0, Some(1)), at(7.5, Some(1))])).is_ok());
+    assert!(trunk(json!([at(2.0, Some(0)), at(2.5, Some(0)), at(8.0, None)])).is_ok());
+    for wrong in [
+        json!([at(2.0, Some(0)), at(5.0, Some(1)), at(8.0, Some(2))]),
+        json!([at(2.0, Some(0)), at(2.5, Some(0))]),
+        json!([at(2.0, None)]),
+    ] {
+        assert!(trunk(wrong.clone()).is_err(), "{wrong}"); // (as a trunk, or already as an entry with nothing to join)
+    }
+}
