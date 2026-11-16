@@ -144,8 +144,10 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   connector's shield pad, cut three of its spokes and left no way out for a track of the pad's own. The
   price on spokes had not kept it off; nothing after the fact could. Now the nets whose new tracks pass
   within reach of such a pad are taken out and laid again with that ground closed, and put back if that
-  cannot be done. (That board has since come out clean without it, as the ways taken moved; the step is
-  tested on boards made for it, in KiCad itself.)
+  cannot be done, or if the way they then take parts another net from its zone: the first run of the 119
+  boards with it left one net of one board unjoined that way. (The board it was written for has since
+  come out clean without it, as the ways taken moved; the step is tested on boards made for it, in KiCad
+  itself, and has yet to help on a board of the sets.)
   Still open: a custom rule for the thermal gap or the number of spokes is not read; a pad no straight
   track fits by is only named; the time a cut zone costs when a run is done again.
 * Differential pairs through the bridge. The 119 boards have three (the "seven pairs" of an earlier note
@@ -170,9 +172,10 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     more without any: one board of the 13 was left incomplete by its pairs before that.
   * Two faults of the engine's split came out, both at corners (see the changelog): a leg that ran
     backwards beside a stretch too short for it, and the outside of a sharp corner beyond the trunk.
-  Coupled for 36 % of their length, where the designers have 39 % and the router without pairs 18 %
-  (35 to 37 % from one run of the boards to the next, as the ways the other nets take change); the lengths
-  of the two halves differ by 19 % (designers 19 %, without pairs 16 %). Still open: pairs that
+  Coupled for 40 % of their length, where the designers have 39 % and the router without pairs 18 %
+  (36 % before the places took their turn and a pair was begun again further off); the lengths of the two
+  halves differ by 15 % (designers 19 %, without pairs 16 %). The price is time on the boards where a pair
+  is not laid at once: each new beginning is a run of the whole lot. Still open: pairs that
   change layer; untwisting at an end; coupling up to the pads; impedance.
 * What the nets are for (bridge). Three sources: the board, guesses from names and parts, a hints file.
   The first version let a guessed clock, crystal, switch node or sensitive net hold its shortest way

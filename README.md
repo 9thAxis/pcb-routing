@@ -155,7 +155,7 @@ here.
 * Differential pairs, in the engine and through the KiCad bridge: two nets named as a pair (`_P`/`_N`,
   `+`/`-`, `DP`/`DM`), or said to be one in the hints, are laid side by side between the places where a pad
   of each stand side by side, and as two nets where that cannot be done. On 20 pairs of 13 public boards:
-  coupled for 36 % of their length, where the same router without pairs has 18 % and the designers 39 %;
+  coupled for 40 % of their length, where the same router without pairs has 18 % and the designers 39 %;
   all boards complete, with no new error in KiCad's check.
 * What the nets are for, in the KiCad bridge: guessed from names and parts (clocks and crystals are slow to
   change layer), and said in an optional hints file beside the board ([docs/hints.md](docs/hints.md)): roles,

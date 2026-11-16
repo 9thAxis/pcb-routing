@@ -80,7 +80,7 @@ First version as a library.
   piece only the earliest are offered). A stretch that is not all laid as a pair is done again begun
   further off, and in the end as two nets; where something else is left unjoined with pairs laid, the run
   is done once without them and the one that joins more is kept (`--no-pairs` for none). On 20 pairs of 13 public boards:
-  coupled for 36 % of their length (18 % without, the designers 39 %), all boards complete and clean.
+  coupled for 40 % of their length (18 % without, the designers 39 %), all boards complete and clean.
 - Engine, pairs: a leg lies within the trunk it is split from. Where the trunk ended in a stretch shorter
   than the inside of its corner has room for, the inner leg ran backwards there, towards the other leg (0.008
   mm short of the clearance on one board): such a stretch is left out of that leg. And the outside of a
