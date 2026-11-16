@@ -268,6 +268,7 @@ mod tests {
         let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
         let first = &found.trunks[0].gather[0][0];
         assert!(first[0].xy[0] > 0.5 && first[0].xy[1] > 0.9, "{:?}", first[0]); // along the diagonal first
-        assert!(first[1].xy[0] > first[2].xy[0], "{:?}", first); // then on the side the true direction lies: right before up
+                                                                                 // then on the side the true direction lies: right before up
+        assert!(first[1].xy[0] > first[2].xy[0], "{:?}", first);
     }
 }

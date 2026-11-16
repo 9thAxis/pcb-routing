@@ -289,7 +289,8 @@ impl Engine<'_> {
             match (bound, back) {
                 (Some(bound), Some(back)) => {
                     if swept[at].seen.get() == swept_closed {
-                        // kept in single precision: a little under, so that rounding can never put it above the real cost
+                        // kept in single precision: a little under, so that rounding can never put it above the real
+                        // cost
                         swept[at].d.get() as f64 * 0.9999
                     } else {
                         // (a state the first pass reached but did not finish has its look-ahead kept)

@@ -328,7 +328,8 @@ mod tests {
         let places: Vec<Pt> = found[0].iter().map(|p| p.xy).collect();
         assert!(places.contains(&[5.0, 5.0])); // the pour over the pad on the other side
         assert!(places.contains(&[2.0, 2.0])); // a pad of the group
-        assert!(places.iter().any(|p| 9.5 < p[0] && p[0] < 10.0 && p[1] == 5.0)); // just inside the edge, beside the pad off it
+                                               // just inside the edge, beside the pad off it
+        assert!(places.iter().any(|p| 9.5 < p[0] && p[0] < 10.0 && p[1] == 5.0));
         for (k, a) in found[0].iter().enumerate() {
             assert!(found[0][..k].iter().all(|b| b != a), "{a:?} twice");
         }
@@ -340,7 +341,8 @@ mod tests {
         let fills = [pour("F.Cu", square()), pour("F.Cu", vec![[20.0, 0.0], [22.0, 0.0], [22.0, 2.0], [20.0, 2.0]])];
         let pours = [vec![0], vec![1]];
         let found = reach(&pads, &fills, &[vec![0], vec![1]], &pours, &layers(&LAYERS), 0.2, None).unwrap();
-        assert!(found[0].iter().any(|p| 9.5 < p.xy[0] && p.xy[0] < 10.0)); // the edge of the large one nearest the small
+        // the edge of the large one nearest the small
+        assert!(found[0].iter().any(|p| 9.5 < p.xy[0] && p.xy[0] < 10.0));
         assert!(found[1].iter().any(|p| 20.0 < p.xy[0] && p.xy[0] < 20.5)); // and of the small one nearest the large
     }
 

@@ -57,30 +57,31 @@ First version as a library.
   that no such track fits by is named. On the 119 public boards with their designers' zones put back: all
   complete with no new error in KiCad's check, 26,000 mm of track and 462 vias where ignoring the zones
   takes 33,000 mm and 388 (the vias: pads taken down to a zone on the other side).
-- Zones, in the crate (`pcb_routing::pours`, and the command `pcb-routing ask`, which answers the same
-  questions as JSON): from the pieces of the filled zones as polygons and the pads, which groups of pads
-  the zones join (`survey`), the spokes of every pad the zones tie, counted as KiCad counts them, with the
-  ground where a track would cut them; the places a net may be joined to its zone (`reach`); the copper of
-  a run that hangs on a piece of zone (`parts`), and whether the zone is still there after a fill
-  (`on_zone`); and the straight track that ties a pad left with too few spokes (`tie_targets`, `ties`). A pad is given the fewer of KiCad's count of its spokes and of that count
-  without the tracks on other layers, which tie nothing to the zone. The bridge did all of this in Python;
-  it now reads the board, fills the zones and asks, and keeps what it has laid if a question gets no answer. On the largest of the public boards that takes the time spent outside the router's own
-  runs from 14 s to under 4 s.
+- Zones, in the crate (`pcb_routing::pours`, and the command `pcb-routing ask`, which answers the same questions
+  as JSON): from the pieces of the filled zones as polygons and the pads, which groups of pads the zones join
+  (`survey`), the spokes of every pad the zones tie, counted as KiCad counts them, with the ground where a track
+  would cut them; the places a net may be joined to its zone (`reach`); the copper of a run that hangs on a
+  piece of zone (`parts`), and whether the zone is still there after a fill (`on_zone`); and the straight track
+  that ties a pad left with too few spokes (`tie_targets`, `ties`). A pad is given the fewer of KiCad's count of
+  its spokes and of that count without the tracks on other layers, which tie nothing to the zone. The bridge did
+  all of this in Python; it now reads the board, fills the zones and asks, and keeps what it has laid if a
+  question gets no answer. On the largest of the public boards that takes the time spent outside the router's
+  own runs from 14 s to under 4 s.
 - KiCad bridge, zones: a pad left with too few spokes and no room for a track of its own to its zone,
   because nets of this run pass close by it, is seen to by laying those nets again with the ground round the
   pad closed to them (the pad, its gap, the clearance the zone keeps, and 0.3 mm); they are put back as they
   were if they cannot all be joined so.
 - Differential pairs through the KiCad bridge. Two nets named as the halves of a pair (`_P`/`_N`, `-P`/`-N`,
-  `P`/`N`, `+`/`-`, `DP`/`DM`; not supplies), or said to be one in the hints, with the same number of pads
-  (four at most), are laid side by side between the places where a pad of each stand side by side: a trunk
-  for each stretch between two such ends far enough apart, tracks as for any net between two that are not
-  and to a pad that stands alone. `pcb_routing::pairs::plan` (and the question `pairs`) finds the ends and
-  offers each trunk several places to begin and end, by how far off the pads they are; a trunk entry has
-  them as the terminals of two pieces, the nearest first (`Terminal::turn`: of the open terminals of a
-  piece only the earliest are offered). A stretch that is not all laid as a pair is done again begun
-  further off, and in the end as two nets; where something else is left unjoined with pairs laid, the run
-  is done once without them and the one that joins more is kept (`--no-pairs` for none). On 20 pairs of 13 public boards:
-  coupled for 40 % of their length (18 % without, the designers 39 %), all boards complete and clean.
+  `P`/`N`, `+`/`-`, `DP`/`DM`; not supplies), or said to be one in the hints, with the same number of pads (four
+  at most), are laid side by side between the places where a pad of each stand side by side: a trunk for each
+  stretch between two such ends far enough apart, tracks as for any net between two that are not and to a pad
+  that stands alone. `pcb_routing::pairs::plan` (and the question `pairs`) finds the ends and offers each trunk
+  several places to begin and end, by how far off the pads they are; a trunk entry has them as the terminals of
+  two pieces, the nearest first (`Terminal::turn`: of the open terminals of a piece only the earliest are
+  offered). A stretch that is not all laid as a pair is done again begun further off, and in the end as two
+  nets; where something else is left unjoined with pairs laid, the run is done once without them and the one
+  that joins more is kept (`--no-pairs` for none). On 20 pairs of 13 public boards: coupled for 40 % of their
+  length (18 % without, the designers 39 %), all boards complete and clean.
 - Engine, pairs: a leg lies within the trunk it is split from. Where the trunk ended in a stretch shorter
   than the inside of its corner has room for, the inner leg ran backwards there, towards the other leg (0.008
   mm short of the clearance on one board): such a stretch is left out of that leg. And the outside of a

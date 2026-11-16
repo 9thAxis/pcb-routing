@@ -243,10 +243,11 @@ mod tests {
         let grid = Grid::new([0.0, 0.0, 4.0, 2.0], 0.1);
         let mask = closed_round_the_terminal(&grid);
         let cases = [
-            vec![],                                                                   // no copper at all
-            vec![pad("B", [1.0, 1.0], [1.0, 1.8])],                                   // another net's
-            vec![pad("A", [1.0, 1.0], [1.0, 1.1])],                                   // its own, but all of it closed
-            vec![pad("A", [1.0, 1.0], [1.0, 1.1]), pad("A", [1.0, 1.3], [1.0, 1.8])], // two pieces: none holds both points
+            vec![],                                 // no copper at all
+            vec![pad("B", [1.0, 1.0], [1.0, 1.8])], // another net's
+            vec![pad("A", [1.0, 1.0], [1.0, 1.1])], // its own, but all of it closed
+            // two pieces: none holds both points
+            vec![pad("A", [1.0, 1.0], [1.0, 1.1]), pad("A", [1.0, 1.3], [1.0, 1.8])],
         ];
         for copper in cases {
             let p = problem(&["F"], copper);

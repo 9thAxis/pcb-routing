@@ -103,7 +103,8 @@ fn a_wall_is_crossed_on_another_layer() {
 #[test]
 fn two_nets_cross_with_a_layer_change() {
     let mut nets = vec![net("a", [0.3, 3.0], [9.7, 3.0], &["F", "B"]), net("b", [5.0, 0.3], [5.0, 5.7], &["F", "B"])];
-    nets[0]["layers"] = json!(["F"]); // the first may not leave the top layer; both span the window, so neither can go round the other: the second must go under
+    // the first may not leave the top layer; both span the window, so neither can go round the other: the second must go under
+    nets[0]["layers"] = json!(["F"]);
     let s = route(&problem(&["F", "B"], vec![], nets)).unwrap();
     assert_eq!(s.status, Status::Routed, "{:?}", s.conflicts);
     assert_eq!(s.nets[0].vias.len(), 0);
@@ -156,7 +157,8 @@ fn a_net_with_three_terminals_is_one_tree() {
     n["terminals"].as_array_mut().unwrap().push(json!({"xy": [5.0, 5.0], "layers": ["F"]}));
     let s = route(&problem(&["F"], vec![], vec![n])).unwrap();
     assert_eq!(s.status, Status::Routed);
-    // a straight run of 6 mm and a branch to the third terminal that leaves it at 45 degrees: 6 + 2 * sqrt(2) - 2 + ... = 7.66 mm,
+    // a straight run of 6 mm and a branch to the third terminal that leaves it at 45 degrees: 6 + 2 * sqrt(2) - 2 +
+    // ... = 7.66 mm,
     // shorter than the 8 mm of a square branch from the middle
     assert!(
         (s.nets[0].length_mm - (4.0 + 2.0 * 2.0f64.sqrt() + 2.0 * (2.0f64.sqrt() - 1.0))).abs() < 0.01,

@@ -206,7 +206,8 @@ impl Problem {
                 if !names.contains(l.as_str()) {
                     return Err(invalid(at("layer_cost"), format!("{l} is not a routing layer")));
                 }
-                // a cost of zero would make every length on that layer equally good, and a negative one has no cheapest path
+                // a cost of zero would make every length on that layer equally good, and a negative one has no
+                // cheapest path
                 positive(at(&format!("layer_cost.{l}")), *v)?;
             }
             let fewest = if stub_keys.contains(n.key.as_str()) { 1 } else { 2 };

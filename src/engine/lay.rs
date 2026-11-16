@@ -139,7 +139,8 @@ impl Engine<'_> {
         let mut first_of_tree = 0usize;
         let mut begun = 0usize;
         while !left.is_empty() {
-            // the sources are just terminals for the first connection, and for later ones unless the net may branch anywhere
+            // the sources are just terminals for the first connection, and for later ones unless the net may branch
+            // anywhere
             if islands > begun {
                 begun = islands;
                 first_of_tree = state.conns.len();

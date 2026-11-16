@@ -198,7 +198,8 @@ mod tests {
         let g = ground(json!([square([2.0, 6.0], 4.0, None, Some(&["B"]))]));
         assert_eq!([at(&g, 0, 0, [4.0, 2.0]), at(&g, 0, 1, [4.0, 2.0])], [1.0, 4.0]);
         let cell = |xy: [f64; 2]| g.1.cell(xy).unwrap();
-        assert!((g.0.via(0, cell([4.0, 2.0])) - 3.0 * 6.0).abs() < 1e-9); // (4 - 1) times a via of 0.6 mm in steps of 0.1
+        // (4 - 1) times a via of 0.6 mm in steps of 0.1
+        assert!((g.0.via(0, cell([4.0, 2.0])) - 3.0 * 6.0).abs() < 1e-9);
         assert_eq!(g.0.via(0, cell([8.0, 2.0])), 0.0);
     }
 

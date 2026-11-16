@@ -69,9 +69,14 @@ fn run() -> Result<ExitCode, String> {
     if trace || verify {
         router = router.on_event(move |event| match event {
             Event::Round { attempt, round, relaid, in_conflict, present } if trace => {
-                eprintln!("attempt {attempt} round {round}: laid {relaid} nets, {in_conflict} still in conflict, present {present:.2}")
+                eprintln!(
+                    "attempt {attempt} round {round}: laid {relaid} nets, {in_conflict} still in conflict, \
+                     present {present:.2}"
+                )
             }
-            Event::Mismatch { net, two_pass, one_pass } => eprintln!("CHECK FAILED {net}: two passes {two_pass:?}, one pass {one_pass:?} (cost in grid steps)"),
+            Event::Mismatch { net, two_pass, one_pass } => {
+                eprintln!("CHECK FAILED {net}: two passes {two_pass:?}, one pass {one_pass:?} (cost in grid steps)")
+            }
             _ => {}
         });
     }
