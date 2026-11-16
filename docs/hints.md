@@ -49,7 +49,10 @@ are laid as a pair is where their pads stand (below), and the hints file has the
   },
   "pairs": [
     {"nets": ["TX_P", "TX_N"], "width": 0.15, "gap": 0.18}
-  ]
+  ],
+  "parts": {
+    "J*": {"turn": false}
+  }
 }
 ```
 
@@ -106,3 +109,25 @@ to keep their distance beside it) is done again begun further off, and in the en
 says so. Where something else is left unjoined with pairs laid, the run is done once more without them, and
 the pairs are kept unless that joins more. A pair is laid in the first try only: what needs the narrower
 second try is laid as single nets.
+
+## Advice on where the parts stand
+
+The bridge moves no part, but it says where turning one would spare a pair a way round. A pair cannot be
+turned over on one layer: if its two nets are in one order at one part and in the other at the next (seen
+along the pair's way), it goes round an end or crosses over through vias. The bridge then says so at the
+start of the run, and what would cure it:
+
+```
+D+ = D-: its two nets are the other way round at R201 and R202 than at P201, so the pair goes round an end
+or crosses over. With R201 and R202 in each other's place, it would run straight on.
+```
+
+A part whose two pads stand either side of its middle is to be turned by 180 degrees; two pins on one side
+of a larger part are to be swapped in the schematic, if the part allows (turned, it would have them on its
+other side); two parts are to change places. Where either end would do, both are named.
+
+A part with a pad within 3 mm of the board's edge is never offered: a connector faces outwards. `parts` in
+the hints file overrides that either way, by reference, with `*` and `?` as for nets: `{"turn": false}`
+keeps a part as it stands, `{"turn": true}` lets one at the edge be offered. It is about this advice only.
+A part in the middle of a pair that stands the wrong way round is not passed (see above); the pair ends
+at it.

@@ -374,6 +374,56 @@ class Pairs(WithEngine):
         again = k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P (through)": 1})
         self.assertEqual([pair["key"] for pair in again["pairs"]], ["D_N = D_P"])
 
+    def twisted(self, **near):
+        """A pair whose two nets are the other way round at its near end (the part R1, 5 mm into the board;
+        `near` changes its pads) than at its far end (J1, at the board's edge)."""
+        pads = [support.land(k, "D_P", 5.0, 5.0, half=0.3, part="R1", **near),
+                support.land(k, "D_N", 5.0, 4.0, half=0.3, part="R1", **near),
+                support.land(k, "D_P", 18.0, 4.0, half=0.3, part="J1"), support.land(k, "D_N", 18.0, 5.0, half=0.3, part="J1")]
+        picture = support.picture(k, pads)
+        picture.box = [0.0, 0.0, 20.0, 10.0]
+        return picture
+
+    def advice(self, picture, **settings):
+        return [note for note in self.problem(picture, **settings)[1] if "other way round" in note]
+
+    def test_a_part_that_stands_the_wrong_way_round_for_a_pair_is_said_so_and_one_at_the_edge_is_left_alone(self):
+        # the part in the board may be turned; the connector at the edge is not offered
+        (said,) = self.advice(self.twisted())
+        self.assertEqual(said, "D_N = D_P: its two nets are the other way round at R1 than at J1, so the pair goes round "
+                               "an end or crosses over. With R1 turned by 180 degrees, it would run straight on.")
+        # nothing is said of a pair that is the same way round at both ends
+        self.assertEqual(self.advice(self.picture()), [])
+        # the hints keep a part as it stands, or let a part at the edge be turned
+        self.assertEqual(self.advice(self.twisted(), hints=hints(parts={"R*": dict(turn=False)})), [])
+        (said,) = self.advice(self.twisted(), hints=hints(parts={"J1": dict(turn=True)}))
+        self.assertTrue(said.endswith("With R1 turned by 180 degrees; or with J1 turned by 180 degrees, it would run straight on."),
+                        said)
+        with self.assertRaises(ValueError):
+            hints(parts={"J1": dict(turn="no")})
+        self.assertEqual(k.unheeded(self.twisted(), hints(parts={"U9": dict(turn=False)})),
+                         ["board.routing.json: U9 names no part of the board"])
+
+    def test_two_pins_on_one_side_of_a_part_are_swapped_not_turned_and_two_parts_change_places(self):
+        # a third pad of the part off to one side: its middle is not between the two
+        picture = self.twisted()
+        picture.pads.append(support.land(k, None, 9.0, 6.5, half=0.3, part="R1"))
+        (said,) = self.advice(picture)
+        self.assertIn("With those two pins of R1 swapped in the schematic, if the part allows", said)
+        picture = self.twisted()
+        picture.pads[1].part = "R2"
+        (said,) = self.advice(picture)
+        self.assertIn("at R1 and R2 than at J1", said)
+        self.assertIn("With R1 and R2 in each other's place, it would run straight on.", said)
+
+    def test_a_part_the_wrong_way_round_in_the_middle_of_a_pair_is_not_passed(self):
+        picture = self.with_a_part(3.0)
+        for pad, name in zip(picture.pads[-2:], ("D_N", "D_P")):  # its two pads changed over
+            pad.net = name
+        picture.groups["D_P"][-1], picture.groups["D_N"][-1] = picture.groups["D_N"][-1], picture.groups["D_P"][-1]
+        problem, _ = self.problem(picture)
+        self.assertEqual([pair["key"] for pair in problem["pairs"] if "passes" in pair], [])
+
     def test_the_hints_set_the_gap_and_the_width(self):
         picture = self.picture()
         said = hints(pairs=[dict(nets=["D_P", "D_N"], gap=0.4, width=0.3)], nets={"OTHER": dict(pair=False)})

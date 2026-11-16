@@ -13,6 +13,7 @@ them is mended. Only `kicad` knows KiCad's files and its `pcbnew` module.
     beside     what stands beside what: buses, and capacitors by the pins they decouple
     exits      how a track leaves a long pad
     pairs      differential pairs: which nets are laid as one, and their entries
+    advice     what turning a part would make easier to lay: said, never done
     problem    a picture and the rules as the router's problem
     engine     the pcb-routing program: runs and questions
     outcome    what a run did to a board

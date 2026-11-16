@@ -47,16 +47,19 @@ class Hints:
     name: str = ""
     nets: list = field(default_factory=list)  # [(pattern, {what: value})]
     pairs: list = field(default_factory=list)  # [{nets: [a, b], width, gap, ohms}]
+    parts: list = field(default_factory=list)  # [(pattern, {turn: bool})]
 
 
 def read_hints(path):
     """A hints file (JSON) as Hints; ValueError says what is wrong with it.
 
         {"nets": {"/adc/*": {"role": "sensitive"}, "+24V": {"amps": 3}, "CLK8": {"max_mm": 40, "vias": "none"}},
-         "pairs": [{"nets": ["TX_P", "TX_N"], "width": 0.15, "gap": 0.18}]}
+         "pairs": [{"nets": ["TX_P", "TX_N"], "width": 0.15, "gap": 0.18}],
+         "parts": {"J*": {"turn": false}}}
 
     A pattern is a net's name, with * and ? for any run of characters and any one (a name is tried with and
-    without its leading /). Later patterns override earlier ones.
+    without its leading /). Later patterns override earlier ones. `parts`: a pattern for the references of
+    parts, and whether such a part may be turned where it stands (for advice only: see advice.py).
     """
     name = Path(path).name
     try:
@@ -65,12 +68,17 @@ def read_hints(path):
         raise ValueError(f"{name}: {error}")
     wrong = lambda where, why: ValueError(f"{name}: {where}: {why}")
     number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-    if not isinstance(data, dict) or set(data) - {"nets", "pairs"}:
-        raise wrong("the file", "an object with `nets` and `pairs`, nothing else")
-    if not isinstance(data.get("nets", {}), dict) or not isinstance(data.get("pairs", []), list):
-        raise wrong("the file",
-                    "`nets` is an object (a pattern, and what is said of the nets it names), `pairs` a list")
+    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts"}:
+        raise wrong("the file", "an object with `nets`, `pairs` and `parts`, nothing else")
+    if not (isinstance(data.get("nets", {}), dict) and isinstance(data.get("pairs", []), list)
+            and isinstance(data.get("parts", {}), dict)):
+        raise wrong("the file", "`nets` is an object (a pattern, and what is said of the nets it names), "
+                                "`pairs` a list, `parts` an object (a pattern, and what is said of those parts)")
     hints = Hints(name=name)
+    for pattern, said in data.get("parts", {}).items():
+        if not isinstance(said, dict) or set(said) - {"turn"} or not all(isinstance(v, bool) for v in said.values()):
+            raise wrong(f"parts[{pattern}]", "`turn`: true or false, nothing else")
+        hints.parts.append((pattern, dict(said)))
     for pattern, said in data.get("nets", {}).items():
         if not isinstance(said, dict):
             raise wrong(f"nets[{pattern}]", "an object")
@@ -124,6 +132,10 @@ def unheeded(picture, hints):
         for layer in said.get("layers", []):
             if layer not in picture.layers:
                 lines.append(f"{hints.name}: {pattern} is given the layer {layer}, which the board has not")
+    parts = {pad.part for pad in picture.pads if pad.part}
+    for pattern, _ in (hints.parts if hints else []):
+        if not any(fnmatch.fnmatchcase(part, pattern) for part in parts):
+            lines.append(f"{hints.name}: {pattern} names no part of the board")
     for pair in (hints.pairs if hints else []):
         for leg in pair["nets"]:
             if leg not in nets:

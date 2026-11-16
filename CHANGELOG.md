@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Advice on where the parts stand (bridge). Where the two nets of a pair are in one order at one part and
+  in the other at the next, so that the pair goes round an end or crosses over, the bridge says which part
+  would have to be turned by 180 degrees, have two pins swapped, or change places with its neighbour. No
+  part is moved. A part with a pad within 3 mm of the board's edge is never offered; `parts` in the hints
+  file (`{"J*": {"turn": false}}`) keeps others as they stand, or lets one at the edge be offered. A part
+  in the middle of a pair that stands the wrong way round is no longer tried to be passed.
 - A pair runs on past a part in its middle. Two nets that pass a part on their way (a protection device,
   termination resistors) were laid as a pair up to it and as a pair again, or as two tracks, beyond it. Now
   the trunk is one line from the first end to the last, led between the part's two pads, and either pad

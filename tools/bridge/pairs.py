@@ -3,6 +3,7 @@ of two nets face each other is the engine's to say (src/pairs.rs)."""
 
 import math
 
+from .advice import changed_over, pair_advice
 from .lengths import disc, r6
 from .questions import pair_plans
 
@@ -47,8 +48,11 @@ def pairs_of(picture, rules, names, ask, notes=None):
             few = len(plan["ends"]) < 2
             note(a, b, "no two places where a pad of each stands by the other" if few
                  else "its ends are too near each other, or share no routing layer")
-    return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans)
-            if plan["trunks"] or plan.get("through")]
+    found = [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans)
+             if plan["trunks"] or plan.get("through")]
+    if notes is not None:
+        notes += [line for pair in found for line in pair_advice(picture, rules.settings.hints, pair)]
+    return found
 
 
 def room_between(first, second, layers):
@@ -84,8 +88,8 @@ def stretches_of(picture, rules, pair, unpaired, name):
     """The trunks one pair is laid with, as [(key, trunk)], the trunks as the engine plans them (src/pairs.rs).
 
     A pair with a part in its middle runs on between the two pads of that part where they leave its trunk
-    room and no other pad stands in it (the plan's `through`), keyed `NAME (through)`: one trunk from its
-    first end to its last. That has
+    room, no other pad stands in it and the part does not stand the wrong way round (the plan's `through`),
+    keyed `NAME (through)`: one trunk from its first end to its last. That has
     one try: not all laid so, the pair is laid stretch by stretch (the plan's `trunks`), each from an end to
     the next and only where the two are far enough apart.
     """
@@ -102,7 +106,9 @@ def stretches_of(picture, rules, pair, unpaired, name):
             + 2 * rules.settings.step)
     room = lambda passed: (room_between(*pads(passed["end"]), passed["place"]["layers"]) >= wide and not
                            pad_near(picture, passed["place"]["xy"], passed["place"]["layers"], wide / 2, pads(passed["end"])))
-    fits = all(room(passed) for trunk in passing for passed in trunk["passes"])
+    # (nor past a part whose two pads stand changed over against the pair's ends: it would have to loop round it)
+    over = changed_over(picture, pair)
+    fits = all(room(passed) and passed["end"] not in over for trunk in passing for passed in trunk["passes"])
     if passing and fits and not any(unpaired.get(key_of(trunk)) for trunk in passing):
         return [(key_of(trunk), trunk) for trunk in plan["through"]]
     return plain
