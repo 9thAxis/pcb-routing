@@ -66,7 +66,8 @@ back, as the boards were drawn, the bridge follows them (its default):
 | D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,936 mm (5,082) | 44 (38) | 2.9 s |
 | D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,732 mm (13,232) | 337 (296) | 35 s |
 
-Fewer connections are left to make, a fifth less track is laid, and a few more vias (a pad on one side taken
+(The lengths move by a few millimetres from one preparation of the boards to the next, as KiCad's fills
+do; a board as saved routes the same every time.) Fewer connections are left to make, a fifth less track is laid, and a few more vias (a pad on one side taken
 down to a zone on the other). The large boards take longer: after each run the zones are filled again and
 what the new tracks cut is mended, and a board that is not all joined at once is laid again without pairs
 and without what was guessed from the nets' names.
@@ -120,7 +121,7 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.90 | 1.13 | 10.0 | 1.7 | 12 | 40 |
+| pcb-routing | 0.90 | 1.13 | 10.7 | 1.7 | 12 | 40 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
@@ -135,13 +136,13 @@ pitches of its neighbour on the same layer.
 | | Alongside its neighbour | Same number of vias | The two cross | Difference in length |
 |---|---|---|---|---|
 | The designer | 72% | 80% | 19% | 25% |
-| pcb-routing | 72% | 81% | 13% | 25% |
-| pcb-routing, buses left alone (`--bus-pull 0`) | 63% | 80% | 22% | 23% |
+| pcb-routing | 72% | 80% | 14% | 25% |
+| pcb-routing, buses left alone (`--bus-pull 0`) | 64% | 83% | 21% | 24% |
 | KiCadRoutingTools | 71% | 61% | 26% | 25% |
 | FreeRouting | 64% | 77% | 29% | 24% |
 
 Decoupling: a capacitor with a pin of an IC of the same net within 5 mm (51 on these boards). The designers
-have a via between the capacitor and that pin for 6% of them; pcb-routing 6% (14% with `--no-decoupling`),
+have a via between the capacitor and that pin for 6% of them; pcb-routing 4% (12% with `--no-decoupling`),
 KiCadRoutingTools 7% of those it joins directly, FreeRouting 8%.
 
 Not in these tables: what needs to know what the circuit does (which nets are quiet and which are noisy).
