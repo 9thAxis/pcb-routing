@@ -274,7 +274,10 @@ class _Lot:
         run, board = self.run, self.run.board
         mark = board.mark() if run.settings.pours else None
         # (an entry that has points of a pour among its terminals is written piece by piece)
-        parts = parts_of(self.picture, problem, solution, run.engine.ask) if run.settings.pours else [dict(laid, of=laid["key"]) for laid in solution["nets"]]
+        if run.settings.pours:
+            parts = parts_of(self.picture, problem, solution, run.engine.ask)
+        else:
+            parts = [dict(laid, of=laid["key"]) for laid in solution["nets"]]
         sizes = {n["key"]: (n["width"], n["via"]) for n in problem["nets"]}
         # (what is laid for a pair comes back per leg, under the pair's key and the leg's net: the leg and its stubs)
         sizes.update({f"{pair['key']}/{leg}": sizes[stub] for pair in problem.get("pairs", []) for leg, stub in zip(pair["legs"], pair["stubs"][0])})

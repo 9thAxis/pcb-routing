@@ -134,7 +134,8 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
                 return True
         return False
     new = lambda key: key not in laid_before
-    culprits = {t.net for t in picture.tracks if t.net and new((t.net, t.layer, tuple(t.a), tuple(t.b))) and near(t.net, t.layer, t.a, t.b, t.width / 2)}
+    laid_now = (t for t in picture.tracks if t.net and new((t.net, t.layer, tuple(t.a), tuple(t.b))))
+    culprits = {t.net for t in laid_now if near(t.net, t.layer, t.a, t.b, t.width / 2)}
     culprits |= {v.net for v in picture.vias if v.net and new((v.net, None, tuple(v.at), tuple(v.at))) and near(v.net, None, v.at, v.at, v.width / 2)}
     culprits = sorted(culprits)
     if not culprits or len(culprits) >= ENGINE_NETS:

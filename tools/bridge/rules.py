@@ -125,7 +125,8 @@ class Rules:
             give, weight = min(give, 0.3), max(weight, 3.0)
         if intent.vias == "few":
             vias = max(vias, 3.0)
-        out.update({"yield": give} if give != 1.0 else {}, **(dict(weight=weight) if weight != 1.0 else {}), **(dict(via_penalty=vias) if vias != 1.0 else {}))
+        leans = {"yield": give, "weight": weight, "via_penalty": vias}
+        out.update({field: factor for field, factor in leans.items() if factor != 1.0})
         if intent.vias == "none":
             out["no_vias"] = True
         if intent.max_mm:

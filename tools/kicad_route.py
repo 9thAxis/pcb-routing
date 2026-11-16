@@ -68,24 +68,46 @@ def main(argv=None):
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--nets", help="only these nets, comma separated (default: every net with pads not yet joined)")
     parser.add_argument("--layers", help="copper layers that may carry routes, comma separated (default: all)")
-    parser.add_argument("--step", default="auto", help="grid step in mm, or 'auto' (the default): chosen from the track widths and clearances of the nets")
-    parser.add_argument("--coarse-first", action="store_true", help="a first pass on a grid twice as coarse, then what is left on the fine one: about three times faster, a little more track and vias, and less room on a crowded board")
+    parser.add_argument("--step", default="auto",
+                        help="grid step in mm, or 'auto' (the default): chosen from the track widths and clearances of "
+                             "the nets")
+    parser.add_argument("--coarse-first", action="store_true",
+                        help="a first pass on a grid twice as coarse, then what is left on the fine one: about three "
+                             "times faster, a little more track and vias, and less room on a crowded board")
     parser.add_argument("--slack", type=float, default=0.002, help="added to every clearance for the grid, in mm")
     parser.add_argument("--variants", type=int, default=1, help="differently ordered attempts run side by side")
-    parser.add_argument("--via-penalty", type=float, default=10.0, help="length of detour accepted before a via is preferred, in mm")
-    parser.add_argument("--no-pours", action="store_true", help="do not count pads that a filled zone joins as joined: a net with a zone is routed as tracks, as if the zone were not there")
-    parser.add_argument("--pour-cost", type=float, default=2.0, help="what a track pays for its length across another net's pour, as a factor (1: nothing more)")
-    parser.add_argument("--spoke-cost", type=float, default=4.0, help="and across the ground where it would cut a spoke that ties a pad to its pour")
-    parser.add_argument("--no-pairs", action="store_true", help="do not lay two nets named as the halves of a differential pair (_P/_N, +/-, DP/DM) side by side")
-    parser.add_argument("--hints", help="what the nets are for, as a JSON file (default: BOARD.routing.json beside the board, if it is there; see read_hints)")
-    parser.add_argument("--no-guesses", action="store_true", help="do not guess what a net is for from its name and parts (clocks, crystals, switch nodes, pairs): only the hints say")
-    parser.add_argument("--no-decoupling", action="store_true", help="do not join a capacitor that stands by a pin of an IC to that pin itself")
-    parser.add_argument("--bus-pull", type=float, default=0.2, help="how much longer a net that leaves and arrives beside others may run to stay beside them, as a share of its length (0: buses are not kept together)")
-    parser.add_argument("--max-states", type=int, default=40_000_000, help="largest grid accepted, in cells times layers (memory grows with it and with the number of nets)")
+    parser.add_argument("--via-penalty", type=float, default=10.0,
+                        help="length of detour accepted before a via is preferred, in mm")
+    parser.add_argument("--no-pours", action="store_true",
+                        help="do not count pads that a filled zone joins as joined: a net with a zone is routed as "
+                             "tracks, as if the zone were not there")
+    parser.add_argument("--pour-cost", type=float, default=2.0,
+                        help="what a track pays for its length across another net's pour, as a factor (1: nothing more)")
+    parser.add_argument("--spoke-cost", type=float, default=4.0,
+                        help="and across the ground where it would cut a spoke that ties a pad to its pour")
+    parser.add_argument("--no-pairs", action="store_true",
+                        help="do not lay two nets named as the halves of a differential pair (_P/_N, +/-, DP/DM) side by"
+                             " side")
+    parser.add_argument("--hints",
+                        help="what the nets are for, as a JSON file (default: BOARD.routing.json beside the board, if it"
+                             " is there; see read_hints)")
+    parser.add_argument("--no-guesses", action="store_true",
+                        help="do not guess what a net is for from its name and parts (clocks, crystals, switch nodes, "
+                             "pairs): only the hints say")
+    parser.add_argument("--no-decoupling", action="store_true",
+                        help="do not join a capacitor that stands by a pin of an IC to that pin itself")
+    parser.add_argument("--bus-pull", type=float, default=0.2,
+                        help="how much longer a net that leaves and arrives beside others may run to stay beside them, "
+                             "as a share of its length (0: buses are not kept together)")
+    parser.add_argument("--max-states", type=int, default=40_000_000,
+                        help="largest grid accepted, in cells times layers (memory grows with it and with the number of "
+                             "nets)")
     parser.add_argument("--problem", help="keep the problem file here (of the first run of the engine)")
     parser.add_argument("--solution", help="keep the solution file here (of the first run of the engine)")
-    parser.add_argument("--engine", default=os.environ.get("PCB_ROUTING", "pcb-routing"), help="the pcb-routing program (default: $PCB_ROUTING, else pcb-routing on the path)")
-    parser.add_argument("--threads", type=int, default=0, help="threads the engine may use (default: as many as the machine has)")
+    parser.add_argument("--engine", default=os.environ.get("PCB_ROUTING", "pcb-routing"),
+                        help="the pcb-routing program (default: $PCB_ROUTING, else pcb-routing on the path)")
+    parser.add_argument("--threads", type=int, default=0,
+                        help="threads the engine may use (default: as many as the machine has)")
     args = parser.parse_args(argv)
     if not kicad_is_here():
         parser.error("the pcbnew module is not here: run this with the Python that ships with KiCad")
@@ -104,8 +126,11 @@ def main(argv=None):
         hints = read_hints(args.hints) if args.hints else read_hints(beside) if beside.is_file() else None
     except ValueError as error:
         parser.error(str(error))
-    settings = Settings(hints=hints, guesses=not args.no_guesses, step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty, layers=names(args.layers), bus_pull=args.bus_pull, decoupling=not args.no_decoupling, pours=not args.no_pours, pairs=not args.no_pairs,
-                        pour_cost=args.pour_cost, spoke_cost=args.spoke_cost)
+    settings = Settings(
+        hints=hints, guesses=not args.no_guesses, pairs=not args.no_pairs, decoupling=not args.no_decoupling,
+        pours=not args.no_pours, pour_cost=args.pour_cost, spoke_cost=args.spoke_cost, bus_pull=args.bus_pull,
+        step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty,
+        layers=names(args.layers))
     options = dict(variants=args.variants, max_states=args.max_states)
     engine = Engine(args.engine, args.threads, args.problem, args.solution)
 
@@ -128,7 +153,8 @@ def main(argv=None):
         save_board(board, args.output, fill=False)
         return 0
     save_board(board, args.output)
-    joined = f"{outcome.wanted - outcome.left} of {outcome.wanted} nets joined, {outcome.tracks} track segments and {outcome.vias} vias added; saved {args.output}"
+    joined = (f"{outcome.wanted - outcome.left} of {outcome.wanted} nets joined, {outcome.tracks} track segments "
+              f"and {outcome.vias} vias added; saved {args.output}")
     if outcome.failure:
         print(f"the engine failed; kept what it had laid before: {joined}")
         return 2

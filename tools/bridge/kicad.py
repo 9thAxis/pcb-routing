@@ -119,7 +119,8 @@ def drawing_polygon(item, layer):
     if poly.OutlineCount() == 0:
         box = item.GetBoundingBox()
         poly.NewOutline()
-        for x, y in ((box.GetLeft(), box.GetTop()), (box.GetRight(), box.GetTop()), (box.GetRight(), box.GetBottom()), (box.GetLeft(), box.GetBottom())):
+        left, right, top, bottom = box.GetLeft(), box.GetRight(), box.GetTop(), box.GetBottom()
+        for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
             poly.Append(x, y)
     return poly
 
@@ -333,7 +334,8 @@ def read_board(board, ignored, ask, pours=True):
             track.TransformShapeToPolygon(poly, track.GetLayer(), 0, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
             picture.polygons.extend(Polygon(rings, name(track.GetLayer()), net) for rings in rings_of(poly))
         else:
-            picture.tracks.append(Track(a=xy(track.GetStart()), b=xy(track.GetEnd()), width=MM(track.GetWidth()), net=net, layer=name(track.GetLayer())))
+            picture.tracks.append(Track(a=xy(track.GetStart()), b=xy(track.GetEnd()), width=MM(track.GetWidth()), net=net,
+                                        layer=name(track.GetLayer())))
 
     # text and drawings on copper layers, on the board and in footprints: copper of no net
     drawn = list(board.GetDrawings())

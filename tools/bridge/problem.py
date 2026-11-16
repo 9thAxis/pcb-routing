@@ -160,7 +160,9 @@ def pairs_of(picture, rules, names, ask, notes=None):
                      pairs=[dict(a=pads_of(a), b=pads_of(b), pitch=pitch) for (a, b), (_, pitch) in zip(named, sizes)]))
     for (a, b), plan in zip(named, plans):
         if not plan["trunks"]:
-            note(a, b, "no two places where a pad of each stands by the other" if len(plan["ends"]) < 2 else "its ends are too near each other, or share no routing layer")
+            few = len(plan["ends"]) < 2
+            note(a, b, "no two places where a pad of each stands by the other" if few
+                 else "its ends are too near each other, or share no routing layer")
     return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans) if plan["trunks"]]
 
 
@@ -185,7 +187,8 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
         name += "'"  # (a net may be named just so)
     key_of = lambda number: name + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
     further = lambda key, trunk: [lots[min(unpaired.get(key, 0), len(lots)):] for lots in trunk["gather"]]
-    trunks = [(key_of(number), dict(trunk, gather=further(key_of(number), trunk))) for number, trunk in enumerate(plan["trunks"])]
+    trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"])]
+    trunks = [(key, dict(trunk, gather=further(key, trunk))) for key, trunk in trunks]
     trunks = [(key, trunk) for key, trunk in trunks if all(trunk["gather"])]
     entries, said = [], []
     held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
@@ -193,8 +196,10 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
         # (the places of an end by how far off its pads they are: the nearer take their turn first)
         places = [dict(xy=place["xy"], layers=place["layers"], piece=end, **(dict(turn=turn) if turn else {}))
                   for end in (0, 1) for turn, lot in enumerate(trunk["gather"][end]) for place in lot]
-        clearance = dict(default=r6(max(rules.clearance(a), rules.clearance(b))), nets={n: r6(c) for net in (a, b) for n, c in rules.stricter(net).items()})
-        entries.append(dict(entry(f"{key} trunk", a, places, no_vias=True), net=f"~{key}", width=rules.trunk_width(width, pitch), clearance=clearance))
+        clearance = dict(default=r6(max(rules.clearance(a), rules.clearance(b))),
+                         nets={n: r6(c) for net in (a, b) for n, c in rules.stricter(net).items()})
+        wide = entry(f"{key} trunk", a, places, no_vias=True)
+        entries.append(dict(wide, net=f"~{key}", width=rules.trunk_width(width, pitch), clearance=clearance))
         stubs = [[], []]
         for end in (0, 1):
             for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
@@ -217,10 +222,13 @@ def problem_of(picture, rules, ask, only=None, unpaired=None, narrow=False, note
     worth telling the user is added to."""
     names = picture.unjoined(only)
     pairs = pairs_of(picture, rules, names, ask, notes) if rules.settings.pairs and not narrow else []
-    return build_problem(picture, rules, reach_of(picture, rules, names, ask), only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, notes=notes, **more)
+    reach = reach_of(picture, rules, names, ask)
+    return build_problem(picture, rules, reach, only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, notes=notes,
+                         **more)
 
 
-def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=None, notes=None,
+def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None,
+                  pairs=(), unpaired=None, notes=None,
                   closed=()):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
@@ -288,7 +296,9 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
         width = rules.narrow_width(name, smallest.get(name)) if narrow else rules.track_width(name)
         if rules.intent(name).amps and width < amps_width(rules.intent(name).amps) and name not in narrowed:
             narrowed.add(name)
-            note(f"{name} is laid {width:.2f} mm wide to enter its pads, narrower than the {amps_width(rules.intent(name).amps):.2f} mm its current takes")
+            asked = amps_width(rules.intent(name).amps)
+            note(f"{name} is laid {width:.2f} mm wide to enter its pads, narrower than the {asked:.2f} mm "
+                 "its current takes")
         lean = rules.leaning(name)  # (what the net is for: see Rules.leaning)
         # the layers the hints give it, and those of any terminal that is on none of them: a pad is where it is
         asked = lean.pop("layers", None)
@@ -367,9 +377,16 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
 
     real = [n["net"] for n in nets if n["net"] in picture.classes]
     quiet = rules.quiet_clearance(real)
-    problem_rules = dict(hole_centre_mm=r6(rules.hole_spacing(via_drill, via_drill)), pad_drill_margin_mm=0.0, **(dict(quiet_clearance_mm=quiet) if quiet else {}),
-                         region_margin_mm=r6(margin), new_clearance_mm=r6(rules.new_clearance(real)))
+    problem_rules = dict(hole_centre_mm=r6(rules.hole_spacing(via_drill, via_drill)), pad_drill_margin_mm=0.0)
+    if quiet:
+        problem_rules["quiet_clearance_mm"] = quiet
+    problem_rules.update(region_margin_mm=r6(margin), new_clearance_mm=r6(rules.new_clearance(real)))
     if narrow:
         problem_rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
-    return dict(window=window, step=rules.settings.step, layers=layers, copper=copper, holes=holes, regions=regions,
-                **(dict(dear=dear) if dear else {}), **(dict(pairs=problem_pairs) if problem_pairs else {}), rules=problem_rules, nets=nets, options=dict(dict(bus_pull=rules.settings.bus_pull), **(options or {})))
+    problem = dict(window=window, step=rules.settings.step, layers=layers, copper=copper, holes=holes, regions=regions)
+    if dear:
+        problem["dear"] = dear
+    if problem_pairs:
+        problem["pairs"] = problem_pairs
+    problem.update(rules=problem_rules, nets=nets, options=dict(dict(bus_pull=rules.settings.bus_pull), **(options or {})))
+    return problem

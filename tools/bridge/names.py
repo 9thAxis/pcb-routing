@@ -2,7 +2,9 @@
 crystals and the like. Said once, for the bridge that routes by it and the tools that measure by it."""
 import re
 
-SUPPLY = re.compile(r"^/?(.*/)?(\+?\d+(\.\d+)?V\d*|\+?\dV\d|V(CC|DD|SS|EE|BAT|BUS|IN|OUT|REF|PP|MOT|SYS)\w*|[AD]?GND\w*|GND|PWR\w*|\+BATT?|VBAT\w*|AVCC|AVDD|DVDD|3V3|5V|12V|24V|V?[+-])$", re.I)
+SUPPLY = re.compile(
+    r"^/?(.*/)?(\+?\d+(\.\d+)?V\d*|\+?\dV\d|V(CC|DD|SS|EE|BAT|BUS|IN|OUT|REF|PP|MOT|SYS)\w*|[AD]?GND\w*|GND|PWR\w*"
+    r"|\+BATT?|VBAT\w*|AVCC|AVDD|DVDD|3V3|5V|12V|24V|V?[+-])$", re.I)
 GROUND = re.compile(r"GND|VSS|VEE", re.I)
 PAIR_HALF = re.compile(r"^(.*?)([_-]?[PN]|[+-]|D[PM])$")
 _WORD = lambda words: re.compile(r"(^|[^A-Za-z])(" + words + r")\d*([^A-Za-z]|$)", re.I)

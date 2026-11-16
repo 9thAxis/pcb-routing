@@ -194,7 +194,8 @@ def told(intents, only=None):
             elif what == "role":
                 text = f"{value} {net}"
             else:
-                text = f"{net} {what} {value if not isinstance(value, list) else ' '.join(value)}" + (" (not acted on)" if what in NOT_ACTED_ON else "")
+                said = " ".join(value) if isinstance(value, list) else value
+                text = f"{net} {what} {said}" + (" (not acted on)" if what in NOT_ACTED_ON else "")
             lines.setdefault(source, []).append(text)
     return [f"from {'the net names and parts' if source == 'names' else source}: {'; '.join(found)}" for source, found in sorted(lines.items())]
 

@@ -38,7 +38,8 @@ def run_engine(problem, engine, threads=0, problem_path=None, solution_path=None
 
 
 def ask_engine(question, engine, threads=0):
-    """Put a question to the pcb-routing program (its `ask` command: see src/ask.rs) and return the answer. `engine` is the program (or a command as a list)."""
+    """Put a question to the pcb-routing program (its `ask` command: see src/ask.rs) and return the answer.
+    `engine` is the program (or a command as a list)."""
     command = ([engine] if isinstance(engine, (str, os.PathLike)) else list(engine)) + ["ask"] + (["--threads", str(threads)] if threads else [])
     try:
         run = subprocess.run(command, input=json.dumps(question), capture_output=True, text=True)
