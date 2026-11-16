@@ -70,7 +70,8 @@ First version as a library.
 - KiCad bridge, zones: a pad left with too few spokes and no room for a track of its own to its zone,
   because nets of this run pass close by it, is seen to by laying those nets again with the ground round the
   pad closed to them (the pad, its gap, the clearance the zone keeps, and 0.3 mm); they are put back as they
-  were if they cannot all be joined so.
+  were if they cannot all be joined so. A last resort: it is tested on made-up boards, and has not yet mended a pad
+  on any of the 119 public boards.
 - Differential pairs through the KiCad bridge. Two nets named as the halves of a pair (`_P`/`_N`, `-P`/`-N`,
   `P`/`N`, `+`/`-`, `DP`/`DM`; not supplies), or said to be one in the hints, with the same number of pads (four
   at most), are laid side by side between the places where a pad of each stand side by side: a trunk for each
