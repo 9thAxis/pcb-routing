@@ -71,9 +71,9 @@ fn on(q: Pt, points: &[Pt]) -> bool {
 }
 
 impl Engine<'_> {
-    /// End every run on the exact places it wants: by moving it where that is allowed, with a stub where the
-    /// stub is, and on its cell where neither is and the cell's centre is on the pad as well. `dead`: per entry, whether its runs are no copper of the
-    /// result; those get their stubs unasked.
+    /// End every run on the exact places it wants: by moving it where that is allowed, with a stub where the stub
+    /// is, and on its cell where neither is and the cell's centre is on the pad as well. `dead`: per entry, whether
+    /// its runs are no copper of the result; those get their stubs unasked.
     pub(super) fn meet_exactly(&self, runs: &mut [Vec<Run>], dead: &[bool]) {
         let _t = self.shared.timed(8);
         // a stretch shorter than this is not worth keeping for the sake of its direction

@@ -55,12 +55,12 @@ pub struct Problem {
 /// of its own (so that copper of either real net is an obstacle to it), a `width` of at least
 /// `pitch + leg_width`, and `no_vias` set.
 ///
-/// When the nets have settled the trunk is split into two legs `pitch` apart, which lie within it: on the
-/// outside of a corner a leg takes what the trunk is wider than `pitch + leg_width` (0.04 mm takes a turn of
-/// 45 degrees at a pitch up to 0.48 mm) and is cut straight across where that is not enough; a stretch of the
-/// trunk too short for a leg to run beside it on the inside of its corners is left out of that leg. Each leg
-/// is joined to its own pads by a stub at either end: four more entries of `nets`, each marked `last`, with the pad as its only
-/// terminal (the end of the leg is added to it by the router).
+/// When the nets have settled the trunk is split into two legs `pitch` apart, which lie within it: on the outside
+/// of a corner a leg takes what the trunk is wider than `pitch + leg_width` (0.04 mm takes a turn of 45 degrees at
+/// a pitch up to 0.48 mm) and is cut straight across where that is not enough; a stretch of the trunk too short for
+/// a leg to run beside it on the inside of its corners is left out of that leg. Each leg is joined to its own pads
+/// by a stub at either end: four more entries of `nets`, each marked `last`, with the pad as its only terminal (the
+/// end of the leg is added to it by the router).
 ///
 /// In the solution each net of the pair appears as `KEY/NET`: its leg and its two stubs.
 #[derive(Serialize, Deserialize, Clone, Debug)]

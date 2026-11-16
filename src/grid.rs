@@ -2,7 +2,8 @@
 
 use crate::model::Pt;
 
-/// A cell exactly at the limit distance is closed (as the project's older router has it); this much further still counts as at the limit.
+/// A cell exactly at the limit distance is closed (as the project's older router has it); this much further still
+/// counts as at the limit.
 pub(crate) const EPS: f64 = 1e-6;
 
 /// The grid of a problem: cells `step` apart from the lower corner of its window, numbered row by row.
@@ -36,7 +37,8 @@ impl Grid {
         let (j, i) = (cell / self.w, cell % self.w);
         [round6(self.x0 + i as f64 * self.step), round6(self.y0 + j as f64 * self.step)]
     }
-    /// Nearest cell, or None outside the window. A point midway between two cells goes to the even one, as Python's round() does.
+    /// Nearest cell, or None outside the window. A point midway between two cells goes to the even one, as Python's
+    /// round() does.
     pub fn cell(&self, p: Pt) -> Option<usize> {
         let i = ((p[0] - self.x0) / self.step).round_ties_even();
         let j = ((p[1] - self.y0) / self.step).round_ties_even();

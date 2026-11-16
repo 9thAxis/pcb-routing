@@ -81,10 +81,10 @@ pub(super) struct Swept {
     pub(super) d: Cell<f32>,
     /// The mark of the search that last touched the state, and whether its cost is final.
     pub(super) seen: Cell<u32>,
-    /// What one step into this state costs the net being laid, as a factor on its length: 1 in free ground
-    /// (more by `Ground::apart` away from the net's bus), more where others claim it or conflicts have been, TAKEN where another net stands and may not be
-    /// crossed (with the others fixed), SHUT_COST where fixed copper closes it. Kept here so that it comes
-    /// with the same memory fetch as the first pass's cost.
+    /// What one step into this state costs the net being laid, as a factor on its length: 1 in free ground (more by
+    /// `Ground::apart` away from the net's bus), more where others claim it or conflicts have been, TAKEN where
+    /// another net stands and may not be crossed (with the others fixed), SHUT_COST where fixed copper closes it.
+    /// Kept here so that it comes with the same memory fetch as the first pass's cost.
     pub(super) mult: Cell<f32>,
     /// The directions in which a step can be taken from here past the fixed copper (see `Fixed::open`).
     pub(super) open: Cell<u8>,

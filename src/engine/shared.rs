@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Cheapest cost from every (layer, cell) to a set of terminals of a net past the fixed copper alone, shared by all attempts.
+/// Cheapest cost from every (layer, cell) to a set of terminals of a net past the fixed copper alone, shared by all
+/// attempts.
 pub(super) type Floors = Mutex<HashMap<(usize, Vec<Term>, Vec<u32>), Arc<Table>>>;
 
 /// The look-ahead towards a net's copper as it stood in a recent search.

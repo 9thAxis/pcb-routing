@@ -27,9 +27,10 @@ impl Engine<'_> {
         }
     }
 
-    /// Lay one net against the claims of the others as they stand: grow a tree from its first piece (a
-    /// terminal, or those that stand on one piece of copper) to the nearest remaining one until all are joined. Nothing of the engine changes; the caller puts the result
-    /// in place. `hard`: cells claimed by other nets are closed instead of dearer.
+    /// Lay one net against the claims of the others as they stand: grow a tree from its first piece (a terminal, or
+    /// those that stand on one piece of copper) to the nearest remaining one until all are joined. Nothing of the
+    /// engine changes; the caller puts the result in place. `hard`: cells claimed by other nets are closed instead
+    /// of dearer.
     fn lay(&self, n: usize, present: f64, hard: bool) -> NetState {
         let mut w = Worker::take(self.shared, self.plan.space.states(), self.plan.space.hw);
         let mine: Vec<usize> = std::iter::once(n).chain(self.plan.siblings[n].iter().copied()).collect();
@@ -222,8 +223,9 @@ impl Engine<'_> {
         self.plan.layer_cost[n][layer] * len * self.plan.dear.track(n, state) as f64
     }
 
-    /// Add what the connection `path` of net `n` costs, free of the other nets (its steps by layer, its
-    /// corners, its layer changes), its length, and what of the cost is away from its bus, to `state`. Returns the cells where it needs a new via.
+    /// Add what the connection `path` of net `n` costs, free of the other nets (its steps by layer, its corners,
+    /// its layer changes), its length, and what of the cost is away from its bus, to `state`. Returns the cells
+    /// where it needs a new via.
     fn account(&self, n: usize, path: &[u32], own_hole: f32, w: &Worker, state: &mut NetState) -> Vec<u32> {
         let (p, net, space) = (self.p, &self.p.nets[n], self.plan.space);
         let mut new_vias = Vec::new();

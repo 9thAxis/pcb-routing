@@ -95,7 +95,13 @@ impl Engine<'_> {
                         }
                     }
                 }
-                let (_, cell) = best.ok_or_else(|| format!("{}: no free cell at the end of a leg at {:?} for its stub {} (the legs are closer than the rules let a stub come, or fixed copper is in the way)", pair.key, at, me.key))?;
+                let (_, cell) = best.ok_or_else(|| {
+                    format!(
+                        "{}: no free cell at the end of a leg at {:?} for its stub {} (the legs are closer than \
+                         the rules let a stub come, or fixed copper is in the way)",
+                        pair.key, at, me.key
+                    )
+                })?;
                 self.pairs.extra_terms[n] = vec![Term { cell, layers: 1 << layer }];
                 self.exact[n].insert(cell, at);
             }

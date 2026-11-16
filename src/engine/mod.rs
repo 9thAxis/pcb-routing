@@ -42,10 +42,12 @@ const SHUT: u8 = 2; // too close to a hole of this net for another via
 
 const DIRS: [(i32, i32); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
 
-/// A search state is (direction of arrival, layer, cell); direction 8 is "none" (a start, or just after a layer change).
+/// A search state is (direction of arrival, layer, cell); direction 8 is "none" (a start, or just after a layer
+/// change).
 const NO_DIR: usize = 8;
 
-/// Cost of turning from one direction to another, in units of the 45 degree corner cost; None for a turn sharper than a right angle.
+/// Cost of turning from one direction to another, in units of the 45 degree corner cost; None for a turn sharper
+/// than a right angle.
 fn turn(from: usize, to: usize) -> Option<f64> {
     if from == NO_DIR || from == to {
         return Some(0.0);
@@ -95,7 +97,8 @@ pub(crate) struct Engine<'a> {
     shared: &'a Shared<'a>,
     /// What follows from the problem alone; the same for every attempt.
     plan: &'a Plan,
-    /// Per net: the exact place of what stands in a cell. The plan's, and the leg ends of the pairs split in this attempt.
+    /// Per net: the exact place of what stands in a cell. The plan's, and the leg ends of the pairs split in this
+    /// attempt.
     exact: Vec<HashMap<u32, Pt>>,
     claims: Claims,
     history: History,

@@ -96,7 +96,6 @@ The legs are as wide as the nets' tracks and as far apart as the clearance, or t
 near its pads as there is room. A stretch that is not all laid as a pair (the short tracks from its legs to
 the pads find no way, the legs would have to cross to reach them, or its line turns too sharply for two legs
 to keep their distance beside it) is done again begun further off, and in the end laid as two nets; the bridge
-says so. Where
-something else is left unjoined with pairs laid, the run is done once more without them, and the pairs are
-kept unless that joins more. A pair is laid in the first try only: what needs the narrower second try is laid
-as single nets.
+says so. Where something else is left unjoined with pairs laid, the run is done once more without them, and
+the pairs are kept unless that joins more. A pair is laid in the first try only: what needs the narrower
+second try is laid as single nets.

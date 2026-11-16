@@ -17,7 +17,7 @@ RULES = ({"hole_centre_mm", "pad_drill_margin_mm", "via_in_pad", "region_margin_
 NET = ({"key", "net", "width", "via", "layers", "clearance", "terminals", "via_penalty_mm", "layer_cost", "yield", "weight", "max_mm",
         "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus", "bus_lane"}, {"key", "net", "width", "via", "layers", "clearance", "terminals"})
 CLEARANCE = ({"default", "nets"}, {"default"})
-TERMINAL = ({"xy", "layers"}, {"xy", "layers"})
+TERMINAL = ({"xy", "layers", "piece", "turn"}, {"xy", "layers"})
 OPTIONS = ({"max_iterations", "present_start", "present_growth", "present_max", "history_step", "refine_passes", "variants", "negotiate",
             "own_hole_free", "bend_mm", "two_pass", "sweep_margin", "exact_after", "stall_after", "patience", "drop_conflicts",
             "threads", "max_states", "bus_pull", "bus_cross"}, set())

@@ -134,8 +134,8 @@ fn reaches_clear(fixed: &Fixed, grid: &Grid, n: usize, cell: usize, xy: Pt) -> b
 }
 
 /// Where a terminal of `net` is reached, or why it cannot be. Its own cell if a track of the net may end there
-/// (`mask` gives the net's fixed mask at a cell); else the nearest open cell on the same piece of the net's copper (a pad
-/// too near the board edge or another pad is entered where there is room), and the track then ends on that
+/// (`mask` gives the net's fixed mask at a cell); else the nearest open cell on the same piece of the net's copper
+/// (a pad too near the board edge or another pad is entered where there is room), and the track then ends on that
 /// cell, not at the terminal's own point.
 pub(super) fn relocate(
     p: &Problem,
@@ -201,7 +201,8 @@ mod tests {
         json!({"t": "seg", "a": a, "b": b, "w": 0.3, "net": net, "layers": ["F"]})
     }
 
-    /// A mask with layer F closed in columns 0..=11 of rows 0..=13: round the terminal, which is in column 10 of row 10.
+    /// A mask with layer F closed in columns 0..=11 of rows 0..=13: round the terminal, which is in column 10 of
+    /// row 10.
     fn closed_round_the_terminal(grid: &Grid) -> Vec<u8> {
         let mut mask = vec![0u8; grid.cells()];
         for row in 0..=13 {

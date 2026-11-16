@@ -127,7 +127,7 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   read. None of it needs KiCad once the fills are polygons, a board from another program has the same
   questions, and on the largest board choosing the points of the zones alone took 10 s of Python (all
   that is done outside the router's own runs now takes under 4 s there, KiCad's fills included): it is
-  now a module of the crate (`src/pours`), which the bridge asks through `pcb-routing pours`. The port
+  now a module of the crate (`src/pours`), which the bridge asks through `pcb-routing ask`. The port
   gives the same groups, pieces, spoke counts and points on all 119 boards. One thing is made differently:
   the ground of a spoke was cut out with KiCad's polygon operations (the zone within a band round the pad,
   grown by the gap); it is now everything within that distance of where the half-gap line runs on the

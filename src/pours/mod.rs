@@ -19,8 +19,9 @@
 //! 3. Route. [`parts`] gives what was laid as the pieces that can be taken back one by one, each with the
 //!    points of a zone it ended on.
 //! 4. Fill the zones again and survey again: a part that ended on a piece of zone the new tracks cut away
-//!    ([`on_zone`] tells) is taken back; nets the new tracks parted are joined again; a pad left with too few spokes gets a straight
-//!    track into its zone, ending on one of its [`tie_targets`] and kept if it [`ties`] the pad.
+//!    ([`on_zone`] tells) is taken back; nets the new tracks parted are joined again; a pad left with too few
+//!    spokes gets a straight track into its zone, ending on one of its [`tie_targets`] and kept if it
+//!    [`ties`] the pad.
 //!
 //! Every one of these is also a question the `pcb-routing ask` command answers, as JSON: see
 //! [`Ask`](crate::ask::Ask).

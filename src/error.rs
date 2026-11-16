@@ -28,7 +28,11 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Invalid { field, reason } => write!(f, "invalid problem: {field}: {reason}"),
-            Error::TooLarge { states, limit } => write!(f, "the grid has {states} (layer, cell) states, more than the {limit} allowed (a coarser step, a smaller window, or a higher options.max_states)"),
+            Error::TooLarge { states, limit } => write!(
+                f,
+                "the grid has {states} (layer, cell) states, more than the {limit} allowed \
+                 (a coarser step, a smaller window, or a higher options.max_states)"
+            ),
             Error::Threads(e) => write!(f, "cannot start threads: {e}"),
         }
     }

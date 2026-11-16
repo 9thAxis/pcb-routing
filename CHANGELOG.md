@@ -90,7 +90,8 @@ First version as a library.
   `--hints FILE`, by net name with wildcards: `role`, `width`, `amps`, `clearance`, `volts`, `max_mm`, `vias`,
   `layers`, `priority`, `pair` and `gap`, `bus`; `ohms` and `match` are taken down and not acted on. A
   guess only leans a net, and is dropped where it would cost a connection; a width, a clearance, layers,
-  "no vias" and the distance a sensitive net keeps come from the file alone. The bridge says what it took from the names and what from the file.
+  "no vias" and the distance a sensitive net keeps come from the file alone. The bridge says what it took
+  from the names and what from the file.
 - Engine: terminals of an entry may name the piece of copper they stand on (`piece`). Those of one piece are
   joined already, and the entry is joined to the piece at whichever of them comes cheapest. The bridge
   gives every group of pads that copper already joins as one piece, with its nearest pads to choose from,

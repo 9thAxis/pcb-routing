@@ -115,7 +115,8 @@ impl Around {
 /// the tiles (squares of 16 cells) that hold some of it. Each tile of the board keeps the few copper tiles
 /// that can be the nearest one for a cell in it, so a look-up tries a handful of boxes.
 pub(crate) struct Tiles {
-    /// Per tile of the board: the copper tiles that may be nearest, as (first row, last row, first column, last column).
+    /// Per tile of the board: the copper tiles that may be nearest, as (first row, last row, first column, last
+    /// column).
     near: Vec<Vec<[i32; 4]>>,
     across: usize,
     unit: f32,
