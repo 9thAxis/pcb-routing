@@ -66,11 +66,11 @@ back, as the boards were drawn, the bridge follows them (its default):
 | D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,936 mm (5,082) | 44 (38) | 2.9 s |
 | D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,732 mm (13,232) | 337 (296) | 35 s |
 
-(The lengths move by a few millimetres from one preparation of the boards to the next, as KiCad's fills
-do; a board as saved routes the same every time.) Fewer connections are left to make, a fifth less track is laid, and a few more vias (a pad on one side taken
-down to a zone on the other). The large boards take longer: after each run the zones are filled again and
-what the new tracks cut is mended, and a board that is not all joined at once is laid again without pairs
-and without what was guessed from the nets' names.
+(The lengths move by a few millimetres from one preparation of the boards to the next, as KiCad's fills do;
+a board as saved routes the same every time.) Fewer connections are left to make, a fifth less track is
+laid, and a few more vias (a pad on one side taken down to a zone on the other). The large boards take
+longer: after each run the zones are filled again and what the new tracks cut is mended, and a board that is
+not all joined at once is laid again without pairs and without what was guessed from the nets' names.
 
 ### Against other open routers, on the same machine
 
