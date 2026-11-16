@@ -51,6 +51,7 @@ impl Engine<'_> {
         for (leg, line) in lines.iter_mut().enumerate() {
             *line = beside(&centre, if (leg == 0) == left { d } else { -d }, spare);
         }
+        drawn_back(&mut lines, pair.pitch);
         // Nothing else tests the legs: they are laid only if they are what they are meant to be.
         fit(&centre, &lines, pair.pitch, spare).map_err(|why| format!("{}: {why}", pair.key))?;
         self.unclaim(trunk);
@@ -213,6 +214,66 @@ fn beside(centre: &[Pt], by: f64, spare: f64) -> Vec<Pt> {
     }
 }
 
+/// Draw the ends of the legs back where they lie nearer the other leg than the pitch. Where the trunk's line
+/// turns within a step or two of its end (it often does, finding its way off the place it began at), the
+/// leg on the inside of the turn ends under the other's way round it; a leg may end short of the trunk's
+/// end, its stub joins it wherever it ends. What is too near elsewhere than at an end is left as it is,
+/// for [`fit`] to refuse.
+fn drawn_back(legs: &mut [Vec<Pt>; 2], pitch: f64) {
+    let near = |a: Pt, b: Pt, other: &[Pt]| {
+        other.windows(2).map(|w| dist_segments(a, b, w[0], w[1])).fold(f64::INFINITY, f64::min)
+    };
+    for _ in 0..64 {
+        let mut drawn = false;
+        for leg in 0..2 {
+            for at_end in [false, true] {
+                let (mine, other) = (&legs[leg], &legs[1 - leg]);
+                if mine.len() < 2 || other.len() < 2 {
+                    return;
+                }
+                // the last stretch at this end: from its end `p` back to `q`
+                let k = if at_end { mine.len() - 1 } else { 0 };
+                let (p, q) = (mine[k], mine[if at_end { k - 1 } else { 1 }]);
+                if near(p, q, other) >= pitch - 1e-6 {
+                    continue;
+                }
+                // (the other leg's last stretch may be the one to give way: the shorter of the two does)
+                let theirs = |far: bool| {
+                    let j = if far { other.len() - 1 } else { 0 };
+                    (other[j], other[if far { j - 1 } else { 1 }])
+                };
+                let shorter = |far: bool| {
+                    let (a, b) = theirs(far);
+                    dist_segments(p, q, a, b) < pitch - 1e-6 && dist(a, b) < dist(p, q)
+                };
+                if shorter(false) || shorter(true) {
+                    continue;
+                }
+                // back along the stretch to where it is clear of the other leg, or the whole stretch
+                let length = dist(p, q);
+                let pieces = (length / (pitch / 20.0)).ceil().max(1.0) as usize;
+                let from = |i: usize| {
+                    let t = i as f64 / pieces as f64;
+                    [round6(p[0] + t * (q[0] - p[0])), round6(p[1] + t * (q[1] - p[1]))]
+                };
+                // (by no more than two pitches at a time: what is too near further in is not an end's doing)
+                let clear = (1..pieces).find(|&i| near(from(i), q, other) >= pitch - 1e-6);
+                match clear {
+                    Some(i) if dist(p, from(i)) <= 2.0 * pitch => legs[leg][k] = from(i),
+                    None if length <= 2.0 * pitch => {
+                        legs[leg].remove(k);
+                    }
+                    _ => continue,
+                }
+                drawn = true;
+            }
+        }
+        if !drawn {
+            return;
+        }
+    }
+}
+
 /// Whether the two legs beside a trunk's line are fit to be laid: no nearer each other than the pitch, each of
 /// two points at least, and nowhere further from the line than half the pitch and what the trunk has to
 /// spare (so that what the trunk kept its distance from, the legs do too). Where the line turns twice in a
@@ -262,12 +323,29 @@ fn nth_order(four: &[usize], mut code: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{beside, fit, nth_order};
+    use super::{beside, drawn_back, fit, nth_order};
     use crate::geom::dist_segments;
 
     /// The legs beside a line at a pitch, as `split` makes them.
     fn legs(centre: &[[f64; 2]], pitch: f64, spare: f64) -> [Vec<[f64; 2]>; 2] {
-        [beside(centre, pitch / 2.0, spare), beside(centre, -pitch / 2.0, spare)]
+        let mut both = [beside(centre, pitch / 2.0, spare), beside(centre, -pitch / 2.0, spare)];
+        drawn_back(&mut both, pitch);
+        both
+    }
+
+    #[test]
+    fn a_leg_that_ends_under_the_others_way_round_a_turn_is_drawn_back() {
+        // two short stretches that turn the same way where the trunk begins
+        let hook = [[0.0, 0.0], [0.05, 0.0], [0.1, -0.05], [0.1, -2.15]];
+        let both = legs(&hook, 0.4, 0.02);
+        assert_eq!(fit(&hook, &both, 0.4, 0.02), Ok(()));
+        // one of them begins later than it did, and both still run to the trunk's end
+        let before = [beside(&hook, 0.2, 0.02), beside(&hook, -0.2, 0.02)];
+        assert!(both[0][0] != before[0][0] || both[1][0] != before[1][0]);
+        assert!(both.iter().all(|leg| leg[leg.len() - 1][1] == -2.15));
+        // a trunk of one step with a corner has nothing left to lay
+        let stump = [[5.0, 3.0], [5.05, 3.0], [5.1, 3.05]];
+        assert!(fit(&stump, &legs(&stump, 0.4, 0.02), 0.4, 0.02).is_err());
     }
 
     #[test]
@@ -276,12 +354,9 @@ mod tests {
         // a jog shorter than a leg has room for, between two stretches side by side, at a pitch too wide to mitre
         let jog = [[0.0, 0.0], [2.0, 0.0], [2.05, 0.05], [4.0, 0.05]];
         assert!(fit(&jog, &legs(&jog, 0.5, 0.02), 0.5, 0.02).unwrap_err().contains("apart"));
-        // two short stretches that turn the same way at an end
+        // two short stretches that turn the same way at an end, as `beside` leaves them
         let hook = [[0.0, 0.0], [0.05, 0.0], [0.1, -0.05], [0.1, -2.15]];
-        assert!(fit(&hook, &legs(&hook, 0.4, 0.02), 0.4, 0.02).is_err());
-        // a trunk of one step with a corner
-        let stump = [[5.0, 3.0], [5.05, 3.0], [5.1, 3.05]];
-        assert!(fit(&stump, &legs(&stump, 0.4, 0.02), 0.4, 0.02).is_err());
+        assert!(fit(&hook, &[beside(&hook, 0.2, 0.02), beside(&hook, -0.2, 0.02)], 0.4, 0.02).is_err());
         // and what is as it should be passes: straight, one corner, a corner cut across
         for line in [
             vec![[0.0, 0.0], [3.0, 0.0]],
@@ -332,9 +407,9 @@ mod tests {
                 Err(_) => refused += 1,
             }
         }
-        // (these lines are far more crooked than a trunk, which pays for its corners: of them about half split;
-        // a pair that does not is done as two nets by whoever asked for it)
-        assert!(passed > 1000 && refused > 100, "{passed} split, {refused} refused");
+        // (these lines are far more crooked than a trunk, which pays for its corners: most of them split all the
+        // same; a pair that does not is done as two nets by whoever asked for it)
+        assert!(passed > 3000 && refused > 100, "{passed} split, {refused} refused");
     }
 
     #[test]

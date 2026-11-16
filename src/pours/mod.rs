@@ -38,6 +38,7 @@ mod reach;
 mod shape;
 mod spokes;
 
+pub use crate::board::{Pad, Place, Polygon};
 pub use parts::parts;
 pub use reach::reach;
 pub use spokes::{tie_targets, ties};
@@ -45,25 +46,7 @@ pub use spokes::{tie_targets, ties};
 use crate::error::{invalid, Error};
 use crate::model::{Pt, Track};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
-
-/// A polygon: its outline, then its holes (even-odd).
-pub type Polygon = Vec<Vec<Pt>>;
-
-/// A pad.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Pad {
-    /// Its electrical net, if it has one.
-    pub net: Option<String>,
-    /// Where a track meets it.
-    pub at: Pt,
-    /// The copper layers it is on.
-    pub layers: Vec<String>,
-    /// Its copper on each of those layers, as polygons. Needed by [`survey`] only.
-    #[serde(default)]
-    pub shapes: HashMap<String, Vec<Polygon>>,
-}
+use std::collections::BTreeMap;
 
 /// One piece of a filled zone: copper of a net that joins what touches it.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -183,16 +166,6 @@ pub struct Survey {
     /// Every pad a zone ties by spokes, in the order of [`Layout::spoked`]. A pad its zone covers without a
     /// gap, or does not reach, is not among them.
     pub thermals: Vec<Thermal>,
-}
-
-/// A place where a group of pads may be reached: a terminal for a router.
-#[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Place {
-    /// Where.
-    pub xy: Pt,
-    /// The layers it may be reached on there.
-    pub layers: Vec<String>,
 }
 
 /// A point of a zone that laid copper came to end on.

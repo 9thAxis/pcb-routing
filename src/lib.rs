@@ -47,6 +47,7 @@
 #![warn(missing_docs)]
 
 pub mod ask;
+pub mod board;
 mod engine;
 mod error;
 mod geom;

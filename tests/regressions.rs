@@ -444,3 +444,19 @@ fn a_trunk_has_two_ends_however_many_places_each_is_offered() {
         assert!(trunk(wrong.clone()).is_err(), "{wrong}"); // (as a trunk, or already as an entry with nothing to join)
     }
 }
+
+/// A size given in the wrong unit is refused before anything is drawn up for it.
+#[test]
+fn a_width_or_a_clearance_wider_than_the_board_is_refused() {
+    for (field, at) in [("width", "nets[0] (a).width"), ("clearance", "nets[0] (a).clearance.default")] {
+        let mut v = small(vec![net("a", [1.0, 3.0], [9.0, 3.0], &["F"])]);
+        match field {
+            "width" => v["nets"][0]["width"] = json!(250.0),
+            _ => v["nets"][0]["clearance"]["default"] = json!(250.0),
+        }
+        assert!(matches!(problem(v).validate(), Err(Error::Invalid { field, .. }) if field == at));
+    }
+    let mut v = small(vec![net("a", [1.0, 3.0], [9.0, 3.0], &["F"])]);
+    v["rules"] = json!({"new_clearance_mm": 500.0});
+    assert!(matches!(problem(v).validate(), Err(Error::Invalid { field, .. }) if field == "rules.new_clearance_mm"));
+}

@@ -354,6 +354,32 @@ fn a_trunk_with_places_to_choose_from_at_each_end_is_laid_from_one_that_is_open(
     assert!(joined(&s, 0, [1.0, 2.5], [9.0, 2.5]) && joined(&s, 1, [1.0, 3.5], [9.0, 3.5]));
 }
 
+/// Of the open terminals of a piece, those whose turn comes first are the ones offered: a nearer place given
+/// a later turn is not taken while an earlier one is open, and is when that one is closed.
+#[test]
+fn a_terminal_with_a_later_turn_is_taken_only_where_the_earlier_are_closed() {
+    let ends = |v: &Solution| {
+        v.nets[0].tracks.iter().flat_map(|t| [t.points[0], *t.points.last().unwrap()]).collect::<Vec<_>>()
+    };
+    let nets = || {
+        vec![entry(
+            "a",
+            "A",
+            0.15,
+            json!([{"xy": [1.0, 3.0], "layers": ["F"]},
+                   {"xy": [8.0, 3.0], "layers": ["F"], "piece": 1}, {"xy": [4.0, 3.0], "layers": ["F"], "piece": 1, "turn": 1}]),
+            json!({"layers": ["F"]}),
+        )]
+    };
+    let free = route(&problem(&["F"], vec![], nets())).unwrap();
+    assert_eq!(free.status, Status::Routed);
+    assert!(ends(&free).contains(&[8.0, 3.0]) && !ends(&free).contains(&[4.0, 3.0]), "{:?}", ends(&free));
+    let blocked = vec![json!({"t": "circle", "c": [8.0, 3.0], "r": 0.3, "net": "X", "layers": ["F"]})];
+    let other = route(&problem(&["F"], blocked, nets())).unwrap();
+    assert_eq!(other.status, Status::Routed, "{}", other.message);
+    assert!(ends(&other).contains(&[4.0, 3.0]), "{:?}", ends(&other));
+}
+
 /// Length of the first net's track that lies within `reach` of the second's, sampled every 0.05 mm.
 fn beside(s: &Solution, a: usize, b: usize, reach: f64) -> f64 {
     let near = |q: [f64; 2]| {

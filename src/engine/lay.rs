@@ -89,10 +89,15 @@ impl Engine<'_> {
         // reached is a failure only where its piece has no other.
         let mut terms: Vec<(Term, u64)> = Vec::new();
         let mut closed: Vec<(usize, u64, &String)> = Vec::new();
+        // (of the open terminals of a piece, those whose turn it is: see `Terminal::turn`)
+        let open = || (0..net.terminals.len()).filter(|&t| self.plan.terms[n][t].is_ok());
+        let first =
+            |piece: u64| open().filter(|&t| self.plan.pieces[n][t] == piece).map(|t| net.terminals[t].turn).min();
         for (t, at) in self.plan.terms[n].iter().enumerate() {
             let piece = self.plan.pieces[n][t];
             match at {
-                Ok(term) => terms.push((*term, piece)),
+                Ok(term) if first(piece) == Some(net.terminals[t].turn) => terms.push((*term, piece)),
+                Ok(_) => {}
                 Err(why) => closed.push((t, piece, why)),
             }
         }

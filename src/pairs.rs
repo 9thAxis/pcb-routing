@@ -5,12 +5,13 @@
 //! joins each leg to its pads by stubs (see [`Pair`](crate::Pair)). What a front end has is two nets and
 //! their pads. [`plan`] is the step between: it finds the ends of the pair (a pad of each net side by
 //! side), says between which ends a trunk is to run, and offers places for each trunk to begin and end.
-//! The places of one end are the terminals of one piece ([`Terminal::piece`](crate::Terminal::piece)): the
-//! router takes whichever suits, and one that turns out closed costs nothing.
+//! The places of one end are the terminals of one piece ([`Terminal::piece`](crate::Terminal::piece)), the
+//! nearer to the pads the earlier their turn ([`Terminal::turn`](crate::Terminal::turn)): a place that
+//! turns out closed costs nothing, and the next is tried.
 
+use crate::board::{Pad, Place};
 use crate::error::{invalid, Error};
 use crate::geom::dist;
-use crate::pours::{Pad, Place};
 use serde::{Deserialize, Serialize};
 
 /// Two pads further apart than this, in mm, are not an end of a pair.
@@ -25,8 +26,11 @@ pub struct Trunk {
     /// The two ends it runs between, as indices into [`Plan::ends`].
     pub ends: [usize; 2],
     /// Where it may begin and where it may end: for each of its two ends, places on the grid a little off
-    /// the pads towards the other end, the nearest first.
-    pub gather: [Vec<Place>; 2],
+    /// the pads towards the other end (the grid's cells are taken to be at multiples of the step), by how
+    /// far off they are: the nearest first, each lot of places half as far again. They are for terminals of
+    /// one piece that take their turn in that order ([`Terminal::turn`](crate::Terminal::turn)): the trunk
+    /// then begins as near its pads as there is room, and the pair runs side by side for longer.
+    pub gather: [Vec<Vec<Place>>; 2],
 }
 
 /// How two nets are to be laid as a pair.
@@ -93,7 +97,10 @@ pub fn plan(a: &[Pad], b: &[Pad], pitch: f64, layers: &[String], step: f64) -> R
     let mut trunks = Vec::new();
     for [i, j] in between {
         let (from, to) = (middle(ends[i]), middle(ends[j]));
-        if dist(from, to) < 2.0 * FURTHER[0] * (off(ends[i]) + off(ends[j])) {
+        // (between the places where it gathers and where it parts, a trunk is as long again as both are off
+        // their pads at the least: so the furthest places are offered only where the ends are far enough apart)
+        let room = |further: f64| dist(from, to) >= (further + 1.0) * (off(ends[i]) + off(ends[j]));
+        if !room(FURTHER[0]) {
             continue; // too close for a stretch side by side: these two ends are joined as the pads of any net are
         }
         // on the layers all four pads are on; failing that, on those of either end
@@ -107,14 +114,15 @@ pub fn plan(a: &[Pad], b: &[Pad], pitch: f64, layers: &[String], step: f64) -> R
         if on_layers.is_empty() {
             continue;
         }
-        let places = |end: [usize; 2], from: [f64; 2], to: [f64; 2]| -> Vec<Place> {
+        let places = |end: [usize; 2], from: [f64; 2], to: [f64; 2]| -> Vec<Vec<Place>> {
             // towards the other end, in the nearest of the eight directions and the two beside it
             let towards = (to[1] - from[1]).atan2(to[0] - from[0]);
             let eighth = std::f64::consts::FRAC_PI_4;
             let straight = (towards / eighth).round();
             let nearer = if towards >= straight * eighth { 1.0 } else { -1.0 }; // (the side the true direction lies on)
-            let mut found: Vec<Place> = Vec::new();
-            for further in FURTHER {
+            let mut found: Vec<Vec<Place>> = Vec::new();
+            for further in FURTHER.into_iter().filter(|&further| room(further)) {
+                found.push(Vec::new());
                 for turn in [0.0, nearer, -nearer] {
                     let angle = (straight + turn) * eighth;
                     let far = further * off(end);
@@ -123,8 +131,8 @@ pub fn plan(a: &[Pad], b: &[Pad], pitch: f64, layers: &[String], step: f64) -> R
                         crate::grid::round6((at[0] / step).round() * step),
                         crate::grid::round6((at[1] / step).round() * step),
                     ];
-                    if !found.iter().any(|place| place.xy == xy) {
-                        found.push(Place { xy, layers: on_layers.clone() });
+                    if !found.iter().flatten().any(|place| place.xy == xy) {
+                        found.last_mut().expect("a lot was begun").push(Place { xy, layers: on_layers.clone() });
                     }
                 }
             }
@@ -159,9 +167,15 @@ mod tests {
         let trunk = &found.trunks[0];
         assert_eq!(trunk.ends, [0, 1]);
         // the nearest place is straight towards the other end, half the pads' distance and the pitch off
-        assert_eq!(trunk.gather[0][0], Place { xy: [0.9, 0.5], layers: vec!["F".to_string()] });
-        assert_eq!(trunk.gather[1][0].xy, [19.1, 0.5]);
-        assert!(trunk.gather[0].len() > 3 && trunk.gather[0].iter().all(|p| p.xy[0] > 0.5 && p.xy[0] < 3.0));
+        assert_eq!(trunk.gather[0][0][0], Place { xy: [0.9, 0.5], layers: vec!["F".to_string()] });
+        assert_eq!(trunk.gather[1][0][0].xy, [19.1, 0.5]);
+        // three lots of three, each further off than the one before
+        assert_eq!(trunk.gather[0].iter().map(Vec::len).collect::<Vec<_>>(), [3, 3, 3]);
+        assert!(trunk.gather[0].iter().flatten().all(|p| p.xy[0] > 0.5 && p.xy[0] < 3.0));
+        assert!(
+            trunk.gather[0][1][0].xy[0] > trunk.gather[0][0][0].xy[0]
+                && trunk.gather[0][2][0].xy[0] > trunk.gather[0][1][0].xy[0]
+        );
     }
 
     #[test]
@@ -197,11 +211,28 @@ mod tests {
     }
 
     #[test]
+    fn the_places_of_the_two_ends_never_meet() {
+        // ends 3.6 mm apart with pads 1 mm apart: twice as far off the pads, the places of both would be one
+        let a = [land(0.0, 0.0, "F"), land(3.6, 0.0, "F")];
+        let b = [land(0.0, 1.0, "F"), land(3.6, 1.0, "F")];
+        let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
+        let [near, far] = &found.trunks[0].gather;
+        assert!(!near.is_empty() && !far.is_empty());
+        for p in near.iter().flatten() {
+            assert!(far.iter().flatten().all(|q| q.xy[0] - p.xy[0] >= 1.7), "{p:?} and {far:?}");
+        }
+        // and a little nearer still there is no trunk at all
+        let b = [land(0.0, 1.0, "F"), land(3.5, 1.0, "F")];
+        let a = [land(0.0, 0.0, "F"), land(3.5, 0.0, "F")];
+        assert!(plan(&a, &b, 0.4, &layers(), 0.1).unwrap().trunks.is_empty());
+    }
+
+    #[test]
     fn a_trunk_is_offered_on_the_layers_of_all_four_pads_or_of_either_end() {
         let a = [land(0.0, 0.0, "F"), land(20.0, 0.0, "B")];
         let b = [land(0.0, 1.0, "F"), land(20.0, 1.0, "B")];
         let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
-        assert_eq!(found.trunks[0].gather[0][0].layers, ["F", "B"]);
+        assert_eq!(found.trunks[0].gather[0][0][0].layers, ["F", "B"]);
         let inner = [land(0.0, 0.0, "In1"), land(20.0, 0.0, "In1")];
         assert!(plan(&inner, &b, 0.4, &layers(), 0.1).unwrap().trunks.is_empty()); // an end on no routing layer
         assert!(plan(&a, &b, 0.0, &layers(), 0.1).is_err());
@@ -213,7 +244,7 @@ mod tests {
         let a = [land(0.0, 0.0, "F"), land(20.0, 14.0, "F")];
         let b = [land(0.0, 1.0, "F"), land(20.0, 15.0, "F")];
         let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
-        let first = &found.trunks[0].gather[0];
+        let first = &found.trunks[0].gather[0][0];
         assert!(first[0].xy[0] > 0.5 && first[0].xy[1] > 0.9, "{:?}", first[0]); // along the diagonal first
         assert!(first[1].xy[0] > first[2].xy[0], "{:?}", first); // then on the side the true direction lies: right before up
     }

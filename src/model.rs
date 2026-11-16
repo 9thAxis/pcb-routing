@@ -234,6 +234,12 @@ pub struct Terminal {
     /// one stands alone.
     #[serde(default)]
     pub piece: Option<u32>,
+    /// Its turn among the terminals of its piece: of those that fixed copper leaves open, only the ones with
+    /// the lowest number are offered. 0 where not given. For places in an order of preference, of which a
+    /// later one is wanted only where the earlier are closed (where the trunk of a [`Pair`] may begin: as
+    /// near its pads as there is room).
+    #[serde(default)]
+    pub turn: u32,
 }
 
 /// One piece of work: terminals to be joined, and the rules for the copper that joins them.

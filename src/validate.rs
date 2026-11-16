@@ -160,6 +160,14 @@ impl Problem {
         let stub_keys: HashSet<&str> =
             self.pairs.iter().flat_map(|p| p.stubs.iter().flatten().map(|s| s.as_str())).collect();
         let mut keys = HashSet::new();
+        let widest = (self.window[2] - self.window[0]).max(self.window[3] - self.window[1]).max(self.step);
+        for (field, v) in
+            [("new_clearance_mm", self.rules.new_clearance_mm), ("quiet_clearance_mm", self.rules.quiet_clearance_mm)]
+        {
+            if v > widest {
+                return Err(invalid(format!("rules.{field}"), format!("is {v} mm: more than the window is across")));
+            }
+        }
         for (k, n) in self.nets.iter().enumerate() {
             let at = |f: &str| format!("nets[{k}] ({}).{f}", n.key);
             if !keys.insert(n.key.as_str()) {
@@ -174,6 +182,14 @@ impl Problem {
             not_negative(at("clearance.default"), n.clearance.default)?;
             for (name, v) in &n.clearance.nets {
                 not_negative(at(&format!("clearance.nets.{name}")), *v)?;
+            }
+            // (a slip of a unit, 250 for 0.25, would have the router draw up discs of millions of cells)
+            let sizes = [("width", n.width), ("via[0]", n.via[0]), ("clearance.default", n.clearance.default)];
+            let named = n.clearance.nets.iter().map(|(name, v)| (format!("clearance.nets.{name}"), *v));
+            for (field, v) in sizes.into_iter().map(|(field, v)| (field.to_string(), v)).chain(named) {
+                if v > widest {
+                    return Err(invalid(at(&field), format!("is {v} mm: more than the window is across")));
+                }
             }
             if let Some(m) = n.max_mm {
                 not_negative(at("max_mm"), m)?;

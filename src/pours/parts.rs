@@ -117,8 +117,10 @@ mod tests {
             "clearance": {"default": 0.2}, "terminals": []
         }))
         .unwrap();
-        entry.terminals =
-            terminals.iter().map(|&(xy, layer, piece)| Terminal { xy, layers: vec![layer.into()], piece }).collect();
+        entry.terminals = terminals
+            .iter()
+            .map(|&(xy, layer, piece)| Terminal { xy, layers: vec![layer.into()], piece, turn: 0 })
+            .collect();
         entry
     }
 
