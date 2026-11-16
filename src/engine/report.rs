@@ -8,6 +8,56 @@ use crate::grid::round6;
 /// What an entry is of a pair, if anything: (pair, leg) for a stub, (pair, None) for the trunk.
 type Part = Option<(usize, Option<usize>)>;
 
+/// Runs that meet end to end and go straight on, as one: where one ends on the point another begins at (or
+/// ends at) on its layer, the two lie in one line there, and nothing holds the point (`held`: another run
+/// or a via of the net there, or a pad or hole: a track is joined to a pad at its end, not along its way).
+/// A connection that set out from the end of an earlier one, straight on, is so one track and not two.
+fn joined_in_line(mut runs: Vec<Run>, held: &dyn Fn(usize, Pt) -> bool) -> Vec<Run> {
+    let straight_on = |a: Pt, at: Pt, b: Pt| {
+        let (u, v) = ([at[0] - a[0], at[1] - a[1]], [b[0] - at[0], b[1] - at[1]]);
+        let (lu, lv) = (u[0].hypot(u[1]), v[0].hypot(v[1]));
+        lu > 1e-9 && lv > 1e-9 && (u[0] * v[1] - u[1] * v[0]).abs() < 1e-6 * lu * lv && u[0] * v[0] + u[1] * v[1] > 0.0
+    };
+    loop {
+        let mut found = None;
+        'all: for i in 0..runs.len() {
+            for j in 0..runs.len() {
+                if i == j || runs[i].layer != runs[j].layer {
+                    continue;
+                }
+                let at = runs[i].points[runs[i].points.len() - 1];
+                for turned in [false, true] {
+                    let (first, next) = match turned {
+                        false => (runs[j].points[0], runs[j].points[1]),
+                        true => (runs[j].points[runs[j].points.len() - 1], runs[j].points[runs[j].points.len() - 2]),
+                    };
+                    // (the other way round, a run is met once: with the higher number first)
+                    let before = runs[i].points[runs[i].points.len() - 2];
+                    if dist(first, at) < 1e-6
+                        && (!turned || i > j)
+                        && straight_on(before, at, next)
+                        && !held(runs[i].layer, at)
+                    {
+                        found = Some((i, j, turned));
+                        break 'all;
+                    }
+                }
+            }
+        }
+        let Some((i, j, turned)) = found else { return runs };
+        let mut rest = runs[j].points.clone();
+        if turned {
+            rest.reverse();
+        }
+        let want = if turned { runs[j].want[0] } else { runs[j].want[1] };
+        let run = &mut runs[i];
+        run.points.pop();
+        run.points.extend(rest.into_iter().skip(1));
+        run.want[1] = want;
+        runs.remove(j);
+    }
+}
+
 impl Engine<'_> {
     /// What the attempt has laid, as a solution, and what attempts that end alike are ranked by (the score,
     /// which the solution itself carries only if it is complete).
@@ -26,13 +76,31 @@ impl Engine<'_> {
             part.iter().map(|part| matches!(part, Some((k, None)) if self.pairs.legs[*k].is_some())).collect();
         let mut runs: Vec<Vec<Run>> = (0..p.nets.len()).map(|n| self.runs(n)).collect();
         self.meet_exactly(&mut runs, &split);
-        for ((n, net), runs) in p.nets.iter().enumerate().zip(runs) {
+        // where the runs of each entry begin and end: two that meet in line, with nothing else there, are one
+        let ends: Vec<Vec<(usize, Pt)>> = runs
+            .iter()
+            .map(|runs| {
+                let runs = runs.iter().filter(|run| run.points.len() > 1);
+                runs.flat_map(|run| [(run.layer, run.points[0]), (run.layer, run.points[run.points.len() - 1])])
+                    .collect()
+            })
+            .collect();
+        for ((n, net), mut runs) in p.nets.iter().enumerate().zip(runs) {
             let split = split[n];
-            let tracks: Vec<Track> = runs
-                .into_iter()
-                .filter(|run| run.points.len() > 1)
-                .map(|run| Track { layer: p.layers[run.layer].clone(), points: run.points })
-                .collect();
+            runs.retain(|run| run.points.len() > 1);
+            let mine = || std::iter::once(n).chain(self.plan.siblings[n].iter().copied());
+            let held = |layer: usize, at: Pt| {
+                let same = |q: Pt| dist(q, at) < 1e-6;
+                let meet = mine().flat_map(|m| &ends[m]).filter(|end| end.0 == layer && same(end.1)).count();
+                let via = mine().flat_map(|m| &self.laid.nets[m].vias).any(|&v| same(self.plan.grid.xy(v as usize)));
+                let stands = self.exact[n].values().any(|&q| same(q))
+                    || net.terminals.iter().any(|t| same(t.xy))
+                    || self.plan.terms[n].iter().flatten().any(|t| same(self.plan.grid.xy(t.cell as usize)));
+                meet != 2 || via || stands
+            };
+            let runs = joined_in_line(runs, &held);
+            let tracks: Vec<Track> =
+                runs.into_iter().map(|run| Track { layer: p.layers[run.layer].clone(), points: run.points }).collect();
             let length = length(&tracks);
             if !split {
                 self.list_conflicts(n, &mut conflicts);
