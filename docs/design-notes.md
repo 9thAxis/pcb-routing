@@ -189,7 +189,16 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     more without any: one board of the 13 was left incomplete by its pairs before that.
   * Two faults of the engine's split came out, both at corners (see the changelog): a leg that ran
     backwards beside a stretch too short for it, and the outside of a sharp corner beyond the trunk.
-  Coupled for 40 % of their length, where the designers have 39 % and the router without pairs 18 %
+  * Which way round (17 November). Three things found by drawing the pairs that failed, not by reading
+    their messages: a trunk offered places only towards the far end had to pass one pad to reach the other
+    where the two stand in line with it; a trunk that came to its place from the side ended with one leg
+    behind the other; and a pair cannot be turned over on one layer, so the ways out of its two ends go
+    together. Pricing the ground beside the way in did not hold a trunk to it; a heading in the search does
+    (`Terminal::heading`), with the two ways round as hands (`Terminal::hand`), and where the ends share no
+    layer the trunk ends further off on the layer the pads are not on, for two vias. 35 % to 51 % on the
+    same 20 pairs. Tried and dropped: shutting a trunk's place inside the engine when its stubs fail and
+    laying it again with all else fixed (nothing changed: what makes a pair fit is the board laid again).
+  Before that: coupled for 40 % of their length, where the designers have 39 % and the router without pairs 18 %
   (36 % before the places took their turn and a pair was begun again further off); the lengths of the two
   halves differ by 15 % (designers 19 %, without pairs 16 %). The price is time on the boards where a pair
   is not laid at once: each new beginning is a run of the whole lot. Still open: pairs that
