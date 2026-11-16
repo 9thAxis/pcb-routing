@@ -55,6 +55,8 @@ import argparse, collections, fnmatch, itertools, json, math, os, re, subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from net_names import CAPACITOR_PART, CHIP_PART, CRYSTAL_PART, GROUND, NAMED, is_supply, pair_names
+
 try:
     import pcbnew
 except ImportError:  # the rules and the problem are worked out without KiCad; only reading and writing a board need it
@@ -211,16 +213,6 @@ class Picture:
 # (a width, a clearance, layers, no vias, a distance kept from other nets) comes from the hints alone.
 # Nothing here touches KiCad.
 
-SUPPLY = re.compile(r"^/?(.*/)?(\+?\d+(\.\d+)?V\d*|\+?\dV\d|V(CC|DD|SS|EE|BAT|BUS|IN|OUT|REF|PP|MOT|SYS)\w*|[AD]?GND\w*|GND|PWR\w*|\+BATT?|VBAT\w*|AVCC|AVDD|DVDD|3V3|5V|12V|24V|V?[+-])$", re.I)
-GROUND = re.compile(r"GND|VSS|VEE", re.I)
-PAIR_HALF = re.compile(r"^(.*?)([_-]?[PN]|[+-]|D[PM])$")
-_WORD = lambda words: re.compile(r"(^|[^A-Za-z])(" + words + r")\d*([^A-Za-z]|$)", re.I)
-# (a role, and what in the last part of a net's name says so; the first that fits is taken)
-NAMED = [("crystal", _WORD("XTAL|XTALIN|XTALOUT|OSC|OSCIN|OSCOUT|XIN|XOUT|OSC32|XTAL32")),
-         ("clock", _WORD("CLK|CLOCK|SCK|SCLK|SCL|MCLK|BCLK|LRCLK|XCLK|PCLK|REFCLK|TCK")),
-         ("noisy", _WORD("SW|LX|PHASE|BOOT|BST|GATE|HDRV|LDRV|PWM")),
-         ("sensitive", _WORD("VREF|AREF|REFP|REFN|AIN|AINP|AINN|ADC|SENSE|VSENSE|ISENSE|SENSEP|SENSEN|MIC|ANT|RF|NTC|RTD|THERM"))]
-CRYSTAL_PART = re.compile(r"^(Y|XTAL)\d")  # (not X: that is a connector as often)
 ROLES = ("supply", "ground", "clock", "crystal", "sensitive", "noisy")
 # How a role leans a net: (how readily it gives way, its weight among results, its via penalty as a factor).
 # A role the hints give leans it all the way. One that is only guessed makes it slower to take a via and no
@@ -339,19 +331,6 @@ def unheeded(picture, hints):
     return lines
 
 
-def pair_names(nets):
-    """The nets that are the two halves of a differential pair by their names, as [(first, second)]: names
-    that differ only in an ending _P/_N, -P/-N, P/N, +/- or DP/DM, and are not those of supplies."""
-    halves = {}
-    supply = lambda name: SUPPLY.match(name) or (name[-1:] in ("+", "-") and SUPPLY.match(name[:-1]))  # (VIN+ and VIN- are rails)
-    for name in sorted(nets):
-        match = PAIR_HALF.match(name)
-        if match and not supply(name):
-            stem = name[:-1] if name[-2:] in ("DP", "DM") else match.group(1)
-            halves.setdefault(stem, []).append(name)
-    return [tuple(pair) for pair in halves.values() if len(pair) == 2]
-
-
 def intents_of(picture, hints=None, guesses=True):
     """What is asked of each net of a picture: {net: Intent}, from its name and parts (`guesses`) and then from
     the hints, which override."""
@@ -365,9 +344,9 @@ def intents_of(picture, hints=None, guesses=True):
         on_crystal = {pad.net for pad in picture.pads if pad.net and pad.part and CRYSTAL_PART.match(pad.part)}
         for net in nets:
             last = net.rsplit("/", 1)[-1]
-            if GROUND.search(last) and SUPPLY.match(net):
+            if GROUND.search(last) and is_supply(net):
                 take(net, "names", role="ground")
-            elif SUPPLY.match(net):
+            elif is_supply(net):
                 take(net, "names", role="supply")
             elif net in on_crystal and len(picture.groups[net]) <= 3:
                 take(net, "names", role="crystal")
@@ -851,8 +830,8 @@ def decoupling(pads, groups):
             by_part[pad.part].append(pad)
     def is_cap(pad):
         both = by_part.get(pad.part, [])
-        return bool(pad.part) and re.match(r"C\d", pad.part) and len(both) == 2 and all(size[p.net] >= 3 for p in both)
-    is_pin = lambda pad: bool(pad.part) and re.match(r"(U|IC)\d", pad.part)
+        return bool(pad.part) and CAPACITOR_PART.match(pad.part) and len(both) == 2 and all(size[p.net] >= 3 for p in both)
+    is_pin = lambda pad: bool(pad.part) and CHIP_PART.match(pad.part)
     links = []
     for g, group in enumerate(groups):
         if len(group) != 1 or not is_cap(pads[group[0]]):

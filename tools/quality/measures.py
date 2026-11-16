@@ -52,7 +52,7 @@ buses (`bus_pairs`, `bus_measures`, `bus_figures`)
     mismatch    difference of the two lengths over the longer
 
 circuit (`circuit_nets`, `circuit_measures`, `circuit_figures`): read from net names and part references
-    power       nets with pads at two or more places whose name looks like a supply or ground (`POWER`), not
+    power       nets with pads at two or more places whose name looks like a supply or ground (`is_supply`), not
                 poured in the reference, and with tracks in the routing being measured (so the count can differ
                 between routings): share of length narrower than the net class's track width, vias per 100
                 connections, detour
@@ -76,7 +76,8 @@ pad exits (`exit_measures`, `exit_figures`)
     long side   for pads at least 1.5 times as long as wide (by the smallest rectangle around them): the edge
                 crossed runs along the pad's length
 """
-import collections, fnmatch, heapq, itertools, math, re
+import collections, fnmatch, heapq, itertools, math, re, sys
+from pathlib import Path
 
 import numpy as np
 import shapely
@@ -90,12 +91,10 @@ BUS_REACH = 1.5          # pad pitches within which two bus nets run alongside
 PAIR_REACH = 4.0         # track widths within which the halves of a differential pair are coupled
 DECAP_REACH = 5.0        # mm from a capacitor's pad to the pin it decouples
 
-POWER = re.compile(r"^/?(.*/)?(\+?\d+(\.\d+)?V\d*|\+?\dV\d|V(CC|DD|SS|EE|BAT|BUS|IN|OUT|REF|PP|MOT|SYS)\w*|[AD]?GND\w*|GND|PWR\w*|\+BATT?|VBAT\w*|AVCC|AVDD|DVDD|3V3|5V|12V|24V)$", re.I)
-GROUND = re.compile(r"GND|VSS|VEE", re.I)
-CAPACITOR = re.compile(r"^C\d")
-CHIP = re.compile(r"^(U|IC)\d")
-CRYSTAL = re.compile(r"^(Y|X|XTAL)\d")
-PAIR_HALF = re.compile(r"^(.*?)([_-]?(P|N)|\+|-|D[PM])$")
+# What names say (supplies, grounds, pairs, capacitors, chips, crystals) is said once, in tools/net_names.py:
+# the router goes by the same.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from net_names import CAPACITOR_PART as CAPACITOR, CHIP_PART as CHIP, CRYSTAL_PART as CRYSTAL, GROUND, is_supply, pair_names as pair_halves
 
 
 class Tally(collections.Counter):
@@ -467,17 +466,6 @@ def bus_figures(tally):
 # --------------------------------------------------------------------------------------------------------------
 # Circuit: power, decoupling, crystals, differential pairs
 
-def pair_halves(nets):
-    """Nets that are the two halves of a differential pair by name, as [(first, second)] in sorted order."""
-    halves = {}
-    for n in sorted(nets):
-        m = PAIR_HALF.match(n)
-        if m:
-            stem = re.sub(r"(D)[PM]$", r"\1", n[:-1]) if n[-2:] in ("DP", "DM") else m.group(1)
-            halves.setdefault(stem, []).append(n)
-    return [tuple(v) for v in halves.values() if len(v) == 2]
-
-
 def circuit_nets(reference):
     """What the reference's net names and part references say the nets are for:
     pads      {net: its pads}
@@ -490,7 +478,7 @@ def circuit_nets(reference):
         if p["net"]:
             pads[p["net"]].append(p)
     nets = {n for n, ps in pads.items() if len(places(p["at"] for p in ps)) >= 2}
-    power = {n for n in nets if POWER.match(n)}
+    power = {n for n in nets if is_supply(n)}
     parts = collections.defaultdict(list)
     for p in reference["pads"]:
         parts[p.get("ref", "")].append(p)

@@ -342,9 +342,9 @@ def decoupled(tracks, vias=(), chip_layers=("F.Cu",)):
 class CircuitNets(unittest.TestCase):
     def test_power_nets_by_name(self):
         for name in ("GND", "VCC", "+3V3", "+5V", "3V3", "VDD_IO", "AGND", "/power/VBUS", "+12V", "VBAT"):
-            self.assertTrue(m.POWER.match(name), name)
+            self.assertTrue(m.is_supply(name), name)
         for name in ("SDA", "Net-(U1-Pad3)", "VSYNC", "RESET", "D5", "/usb/D+"):
-            self.assertFalse(m.POWER.match(name), name)
+            self.assertFalse(m.is_supply(name), name)
 
     def test_a_power_net_needs_pads_at_two_places(self):
         d = board([pad("VCC", 0, 0), pad("VCC", 4, 0), pad("GND", 9, 9), pad("SIG", 1, 1), pad("SIG", 2, 2)])
@@ -372,9 +372,10 @@ class CircuitNets(unittest.TestCase):
         d["pads"].append(pad("VCC", 0, 2, ref="U2", num="7"))
         self.assertEqual(m.circuit_nets(d)["decaps"][0][2]["ref"], "U2")
 
-    def test_crystal_nets_are_those_on_y_or_x_parts_that_are_not_power(self):
+    def test_crystal_nets_are_those_on_y_or_xtal_parts_that_are_not_power(self):
         d = board([pad("XI", 0, 0, ref="Y1"), pad("XI", 3, 0, ref="U1"), pad("GND", 0, 1, ref="Y1"), pad("GND", 3, 1, ref="U1"),
-                   pad("XO", 0, 2, ref="X2"), pad("XO", 3, 2, ref="U1"), pad("NC", 0, 3, ref="Y1")])
+                   pad("XO", 0, 2, ref="XTAL2"), pad("XO", 3, 2, ref="U1"), pad("NC", 0, 3, ref="Y1"),
+                   pad("SIG", 0, 4, ref="X3"), pad("SIG", 3, 4, ref="U1")])  # (X3 is a connector as often)
         self.assertEqual(m.circuit_nets(d)["crystals"], ["XI", "XO"])
 
     def test_differential_pairs_by_name(self):
