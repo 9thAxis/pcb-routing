@@ -102,7 +102,8 @@ def spokes(scene, tie=True):
     picture = scene.read()
     cut = count(picture)
     starved = [t for t in picture.thermals if t.spokes < t.least]
-    targets = questions.tie_targets(picture, [(starved[0], picture.pads[starved[0].pad].at, 0.25, [])], ASK)[0] if starved else []
+    targets = questions.tie_targets(picture, [(starved[0], picture.pads[starved[0].pad].at, 0.25, [])],
+                                    ASK)[0] if starved else []
     if targets and tie:
         scene.track("GND", pcbnew.F_Cu, (2.2, 2.2), tuple(targets[0]))
     return dict(whole=whole, cut=cut, targets=targets, tied=count(scene.read()),
@@ -140,14 +141,17 @@ def cleared(scene, room=True):
     count = lambda picture: {picture.pads[t.pad].part: t.spokes for t in picture.thermals}
     laid_before = board.read().copper_keys()
     round_the_pad = ([list(ends[0])] if room else []) + ring + ([list(ends[1])] if room else [])
-    board.write(dict(nets=[dict(key="SIG", net="SIG", vias=[], tracks=[dict(layer="F.Cu", points=round_the_pad)])]), {"SIG": (0.25, [0.6, 0.3])})
+    board.write(dict(nets=[dict(key="SIG", net="SIG", vias=[], tracks=[dict(layer="F.Cu", points=round_the_pad)])]),
+                {"SIG": (0.25, [0.6, 0.3])})
     picture = board.read()
     starved = [t for t in picture.thermals if t.spokes < t.least]
     counted, said = outcome.Outcome(tracks=len(round_the_pad) - 1), []
-    done = ties.cleared(board, rules.Settings(), engine.Engine(sys.argv[3]), counted, picture, starved, laid_before, None, said.append)
+    done = ties.cleared(board, rules.Settings(), engine.Engine(sys.argv[3]), counted, picture, starved, laid_before,
+                        None, said.append)
     after = board.read()
     signal = sorted((t.a, t.b) for t in after.tracks if t.net == "SIG")
-    return dict(cut=count(picture), after=count(after), done=done, said=said, unjoined=after.unjoined(), tracks=[counted.tracks, len(signal)],
+    return dict(cut=count(picture), after=count(after), done=done, said=said, unjoined=after.unjoined(),
+                tracks=[counted.tracks, len(signal)],
                 as_it_was=signal == sorted((a, b) for a, b in zip(round_the_pad, round_the_pad[1:])),
                 nearest=min(math.dist(p, [15, 10]) for t in after.tracks if t.net == "SIG" for p in (t.a, t.b)))
 

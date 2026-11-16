@@ -32,7 +32,8 @@ class Pad:
     at: list  # where a track meets it
     layers: list  # the copper layers it is on
     shapes: dict  # layer -> its polygons there: on its copper layers, and where it has only a mask opening
-    openings: dict = field(default_factory=dict)  # outer copper layer -> how far its mask opening reaches beyond its outline
+    # outer copper layer -> how far its mask opening reaches beyond its outline
+    openings: dict = field(default_factory=dict)
     hole_at: object = None  # the centre of its drilled hole
     drill: object = None  # the hole's diameter (the longer side of a slot); None: no hole
     clearance: object = None  # its own clearance, where it or its footprint overrides the class
@@ -101,8 +102,10 @@ class Thermal:
     least: int  # the spokes the board asks of it
     spokes: int  # those it has, counted as KiCad's design rule check counts them
     ground: list = field(default_factory=list)  # the ground where a track would cut its spokes: polygons
-    outline: list = field(default_factory=list)  # for a pad with too few: the ring a spoke crosses, half the gap from the pad
-    fill: list = field(default_factory=list)  # and the pieces of the zone it is tied to, as indices into the picture's fills
+    # for a pad with too few: the ring a spoke crosses, half the gap from the pad
+    outline: list = field(default_factory=list)
+    # and the pieces of the zone it is tied to, as indices into the picture's fills
+    fill: list = field(default_factory=list)
     gap: float = 0.0  # the gap the zone leaves round the pad
     clearance: float = 0.0  # the clearance the zone keeps from copper of other nets
 
@@ -122,7 +125,8 @@ class Picture:
     minima: Minima = field(default_factory=Minima)
     ignored: frozenset = frozenset()  # the design rule checks the project sets to 'ignore'
     groups: dict = field(default_factory=dict)  # net -> its groups of pads already joined, as indices into pads
-    pours: dict = field(default_factory=dict)  # net -> {index of a group: the pours that join it, as indices into fills}
+    # net -> {index of a group: the pours that join it, as indices into fills}
+    pours: dict = field(default_factory=dict)
     fills: list = field(default_factory=list)  # every piece of every filled zone, whatever it joins: [Pour]
     thermals: list = field(default_factory=list)  # every pad tied to a filled zone by spokes: [Thermal]
     # What its nets are for, once worked out (rules.py keeps it here, by the hints and whether guesses are made).

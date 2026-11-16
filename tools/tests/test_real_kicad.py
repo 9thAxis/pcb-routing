@@ -30,14 +30,16 @@ class RealKicad(unittest.TestCase):
         self.dir = Path(tmp.name)
 
     def scene(self, name):
-        run = subprocess.run([PYTHON, str(HERE / "kicad_scenes.py"), name, str(self.dir), ENGINE], capture_output=True, text=True)
+        run = subprocess.run([PYTHON, str(HERE / "kicad_scenes.py"), name, str(self.dir), ENGINE], capture_output=True,
+                             text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         return json.loads(run.stdout.strip().splitlines()[-1])
 
     def check(self, board):
         """KiCad's design rule check of a board, its zones filled again: (kinds of error, unconnected items)."""
         report = self.dir / "drc.json"
-        subprocess.run([CLI, "pcb", "drc", "--severity-error", "--format", "json", "--refill-zones", "-o", str(report), str(board)],
+        subprocess.run([CLI, "pcb", "drc", "--severity-error", "--format", "json", "--refill-zones", "-o", str(report),
+                        str(board)],
                        capture_output=True)
         found = json.loads(report.read_text())
         return sorted(v["type"] for v in found["violations"]), len(found["unconnected_items"])
@@ -86,7 +88,8 @@ class RealKicad(unittest.TestCase):
         lengths = {}
         for pours in (True, False):
             out = self.dir / f"routed-{pours}.kicad_pcb"
-            run = subprocess.run([PYTHON, str(HERE.parent / "kicad_route.py"), said["saved"], "-o", str(out), "--engine", ENGINE]
+            run = subprocess.run([PYTHON, str(HERE.parent / "kicad_route.py"), said["saved"], "-o", str(out),
+                                  "--engine", ENGINE]
                                  + ([] if pours else ["--no-pours"]), capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
             self.assertEqual(self.check(out), ([], 0), run.stdout)

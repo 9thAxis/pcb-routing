@@ -87,8 +87,10 @@ class Joined(unittest.TestCase):
         self.c1, self.d1, self.d2 = pad("c1", "C"), pad("d1", "D"), pad("d2", "D")
         self.free, self.masked = pad("free", ""), pad("masked", "D", (pcbnew.F_Mask,))
         t1, t2, via, stub = track("t1"), track("t2"), Item("v1", pcbnew.PCB_VIA_T), track("stub")
-        self.connectivity = Connectivity((self.a1, t1), (t1, via), (via, t2), (t2, self.a2), (self.a3, stub), (self.b1, self.b2))
-        self.board = Board([self.a1, self.a2, self.a3, self.b1, self.b2, self.c1, self.d1, self.d2, self.free, self.masked], self.connectivity)
+        self.connectivity = Connectivity((self.a1, t1), (t1, via), (via, t2), (t2, self.a2), (self.a3, stub),
+                                         (self.b1, self.b2))
+        self.board = Board([self.a1, self.a2, self.a3, self.b1, self.b2, self.c1, self.d1, self.d2, self.free,
+                            self.masked], self.connectivity)
 
     def test_joined_pads_follows_tracks_and_vias(self):
         self.assertEqual(names(k.joined_pads(self.connectivity, self.a1)[0]), ["a1", "a2"])
@@ -109,7 +111,8 @@ class Joined(unittest.TestCase):
     def test_pad_groups(self):
         groups = {net: [names(g) for g in gs] for net, gs in k.pad_groups(self.board).items()}
         # no group for the pad without a net, nor for the pad that is on no copper layer
-        self.assertEqual(groups, {"A": [["a1", "a2"], ["a3"]], "B": [["b1", "b2"]], "C": [["c1"]], "D": [["d1"], ["d2"]]})
+        self.assertEqual(groups,
+                         {"A": [["a1", "a2"], ["a3"]], "B": [["b1", "b2"]], "C": [["c1"]], "D": [["d1"], ["d2"]]})
 
     def test_pad_groups_of_some_nets(self):
         self.assertEqual(set(k.pad_groups(self.board, {"B", "D"})), {"B", "D"})
@@ -130,8 +133,10 @@ class WriteBack(unittest.TestCase):
         self.board = Board(nets=["A", "B"])
         self.solution = dict(status="routed", nets=[
             dict(key="A", net="A", length_mm=3.0, vias=[[2.0, 1.0]],
-                 tracks=[dict(layer="F.Cu", points=[[0.0, 0.0], [1.0, 1.0], [2.0, 1.0]]), dict(layer="B.Cu", points=[[2.0, 1.0], [5.0, 1.0]])]),
-            dict(key="B", net="B", length_mm=1.0, vias=[], tracks=[dict(layer="B.Cu", points=[[0.0, 4.0], [1.5, 4.0]])]),
+                 tracks=[dict(layer="F.Cu", points=[[0.0, 0.0], [1.0, 1.0], [2.0, 1.0]]),
+                         dict(layer="B.Cu", points=[[2.0, 1.0], [5.0, 1.0]])]),
+            dict(key="B", net="B", length_mm=1.0, vias=[],
+                 tracks=[dict(layer="B.Cu", points=[[0.0, 4.0], [1.5, 4.0]])]),
             dict(key="C", net="B", length_mm=0.0, vias=[], tracks=[]),
         ])
         self.sizes = {"A": (0.25, [0.6, 0.3]), "B": (0.15, [0.5, 0.3]), "C": (0.15, [0.5, 0.3])}
@@ -180,7 +185,8 @@ class BoardAdapter(unittest.TestCase):
         adapter = k.KicadBoard(board, frozenset(), support.ask, pours=False)
         self.assertEqual(adapter.unjoined(), ["A"])
         self.assertEqual(board.built, 0)  # as loaded, it is up to date
-        adapter.write(dict(nets=[dict(key="A", net="A", vias=[], tracks=[dict(layer="F.Cu", points=[[0, 0], [1, 0]])])]), {"A": (0.2, [0.6, 0.3])})
+        adapter.write(dict(nets=[dict(key="A", net="A", vias=[],
+                                      tracks=[dict(layer="F.Cu", points=[[0, 0], [1, 0]])])]), {"A": (0.2, [0.6, 0.3])})
         self.assertEqual(board.built, 0)
         adapter.unjoined({"A"})
         adapter.unjoined({"A"})

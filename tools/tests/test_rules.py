@@ -8,11 +8,11 @@ k = support.bridge()
 
 
 def rules(ignored=(), slack=0.02, step=0.05, layers=None, **minima):
-    base = dict(clearance=0.15, hole_clearance=0.25, edge_clearance=0.3, track_width=0.15, via_size=0.5, through_drill=0.3,
-                annular_width=0.1, hole_to_hole=0.25)
+    base = dict(clearance=0.15, hole_clearance=0.25, edge_clearance=0.3, track_width=0.15, via_size=0.5,
+                through_drill=0.3, annular_width=0.1, hole_to_hole=0.25)
     base.update(minima)
-    classes = {"A": k.NetClass(0.2, 0.25, 0.6, 0.3), "B": k.NetClass(0.2, 0.25, 0.6, 0.3), "HV": k.NetClass(0.8, 0.5, 1.0, 0.5),
-               "FINE": k.NetClass(0.1, 0.1, 0.3, 0.1)}
+    classes = {"A": k.NetClass(0.2, 0.25, 0.6, 0.3), "B": k.NetClass(0.2, 0.25, 0.6, 0.3),
+               "HV": k.NetClass(0.8, 0.5, 1.0, 0.5), "FINE": k.NetClass(0.1, 0.1, 0.3, 0.1)}
     return k.Rules(k.Minima(**base), classes, frozenset(ignored), k.Settings(step=step, slack=slack, layers=layers))
 
 
@@ -25,7 +25,8 @@ class Clearances(unittest.TestCase):
 
     def test_least_clearance_is_the_smallest_of_any_net(self):
         self.assertAlmostEqual(rules().least_clearance, 0.17)
-        self.assertAlmostEqual(k.Rules(k.Minima(clearance=0.2), {}, settings=k.Settings(slack=0.02)).least_clearance, 0.22)
+        self.assertAlmostEqual(k.Rules(k.Minima(clearance=0.2), {}, settings=k.Settings(slack=0.02)).least_clearance,
+                               0.22)
 
     def test_clearance_to_a_stricter_class(self):
         r = rules()
@@ -169,7 +170,8 @@ class Where(unittest.TestCase):
 class IgnoredChecks(unittest.TestCase):
     def test_read_from_the_project_beside_the_board(self):
         with tempfile.TemporaryDirectory() as tmp:
-            severities = {"solder_mask_bridge": "ignore", "hole_clearance": "error", "silk_overlap": "ignore", "clearance": "warning"}
+            severities = {"solder_mask_bridge": "ignore", "hole_clearance": "error", "silk_overlap": "ignore",
+                          "clearance": "warning"}
             (Path(tmp) / "b.kicad_pro").write_text(json.dumps({"board": {"design_settings": {"rule_severities": severities}}}))
             self.assertEqual(k.ignored_checks(Path(tmp) / "b.kicad_pcb"), {"solder_mask_bridge", "silk_overlap"})
 

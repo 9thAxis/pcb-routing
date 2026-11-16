@@ -40,9 +40,9 @@ def route(board, settings, engine, only=None, options=None, say=print):
     `board` reads and writes it: `read(nets)` gives its picture as it now stands (with the groups of joined pads
     of those nets at least), `write(solution, sizes)` adds a solution's copper and returns the numbers of track
     segments and vias added, `unjoined(nets)` names those of the nets whose pads are still not all joined; for
-    a board with pours, `take_back(keys)` removes what the last solution written laid for those entries, `mark()` gives the place
-    in the record of what has been written and `rewind(mark)` removes all written since (both return the
-    numbers of track segments and vias removed).
+    a board with pours, `take_back(keys)` removes what the last solution written laid for those entries,
+    `mark()` gives the place in the record of what has been written and `rewind(mark)` removes all written
+    since (both return the numbers of track segments and vias removed).
     `engine` runs problems and answers the bridge's questions (see `Engine`).
 
     The nets go in lots the engine accepts, and each lot through its tries (see `_Lot`).
@@ -59,8 +59,8 @@ def route(board, settings, engine, only=None, options=None, say=print):
     intents = Rules.of(picture, settings).intents
     lots = batches(names, together=[(a, intents[a].pair) for a in names if intents[a].pair and a < intents[a].pair])
     if len(lots) > 1:
-        say(f"{len(names)} nets to join, more than the engine takes in one run: routed in {len(lots)} batches of at most "
-            f"{max(len(l) for l in lots)}, each against the board as the batch before left it")
+        say(f"{len(names)} nets to join, more than the engine takes in one run: routed in {len(lots)} batches "
+            f"of at most {max(len(l) for l in lots)}, each against the board as the batch before left it")
     # (a question that gets no answer ends the run as a failed run of the engine does: what has been laid is kept)
     try:
         for number, lot in enumerate(lots):
@@ -122,7 +122,8 @@ class _Lot:
         self.run, self.lot, self.picture = run, lot, picture
         self.tries = Rules.of(picture, run.settings).tries(lot)
         self.number, self.reread = 0, False  # the try at hand; whether the board is to be read again for it
-        # the nets given up as linked; the pairs not all laid as pairs, with how far off their pads they are begun next (see pair_entries)
+        # the nets given up as linked; the pairs not all laid as pairs, with how far off their pads they are
+        # begun next (see pair_entries)
         self.unlinked, self.unpaired = set(), {}
         # a run with wishes granted (pairs, what the names were taken to ask) kept to be weighed against one
         # without; whether that was done; and whether the wishes are off for the rest of the lot
@@ -174,9 +175,11 @@ class _Lot:
                 self.unpaired, self.weighed = {}, False  # (on a finer grid a pair has its chance again)
 
     def at_step(self):
-        """The settings of the try at hand. (No pairs among nets that are only being joined again after a pour was cut.)"""
+        """The settings of the try at hand. (No pairs among nets that are only being joined again after a pour
+        was cut.)"""
         settings = self.run.settings
-        return replace(settings, step=self.tries[self.number][0], pairs=settings.pairs and not self.rejoining and not self.plain,
+        return replace(settings, step=self.tries[self.number][0],
+                       pairs=settings.pairs and not self.rejoining and not self.plain,
                        lean=settings.lean and not self.plain)
 
     def drawn_up(self):
@@ -195,8 +198,8 @@ class _Lot:
             self.number, self.reread = self.number + 1, True
             return None
         notes = []
-        problem = problem_of(self.picture, rules, run.engine.ask, only=set(self.lot), narrow=narrow, options=run.options,
-                             unlinked=self.unlinked, unpaired=self.unpaired, notes=notes)
+        problem = problem_of(self.picture, rules, run.engine.ask, only=set(self.lot), narrow=narrow,
+                             options=run.options, unlinked=self.unlinked, unpaired=self.unpaired, notes=notes)
         for note in notes:
             if note not in run.noted:
                 run.say(note)
@@ -209,12 +212,14 @@ class _Lot:
         run, narrow = self.run, self.tries[self.number][1]
         # A link from a capacitor to its pin is a wish, not a need. Where a net with such links is not all
         # laid, the run is done again with that net whole, as it is from then on.
-        failed = {n["net"] for n in problem["nets"] if any(m.startswith(n["key"] + ":") for m in solution.get("unrouted", []))}
+        failed = {n["net"] for n in problem["nets"]
+                  if any(m.startswith(n["key"] + ":") for m in solution.get("unrouted", []))}
         failed |= {n["net"] for n in problem["nets"] for c in solution.get("conflicts", []) if c.get("key") == n["key"]}
         linked = {n["net"] for n in problem["nets"] if n["key"].startswith(n["net"] + " | ")} - self.unlinked
         # So is laying two nets as a pair. First the links are given up, and the pairs stay.
         if failed & linked and not self.again:
-            run.say(f"not all joined with the capacitors linked to their pins: again without those links for {', '.join(sorted(failed & linked))}")
+            run.say("not all joined with the capacitors linked to their pins: again without those links for "
+                    f"{', '.join(sorted(failed & linked))}")
             self.unlinked |= failed & linked
             self.reread = False
             return None
@@ -226,16 +231,19 @@ class _Lot:
         said = solution.get("unrouted", []) + [c.get("key", "") + ":" for c in solution.get("conflicts", [])]
         leaned = Rules.of(self.picture, self.at_step()).leans(n["net"] for n in problem["nets"])
         of_pair = lambda pair: [pair["key"], pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
-        broken = {pair["key"] for pair in problem.get("pairs", []) if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
+        broken = {pair["key"] for pair in problem.get("pairs", [])
+                  if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
         if self.weighing is not None:
             if len(said) >= self.weighing[2]:
                 run.say("no more is joined without: they are kept")
                 (problem, solution, _), self.plain = self.weighing, False
             self.weighing, broken = None, set()
         elif broken:
-            run.say(f"not all laid as pairs: again, begun further from their pads or as single nets, for {', '.join(sorted(broken))}")
+            run.say("not all laid as pairs: again, begun further from their pads or as single nets, for "
+                    f"{', '.join(sorted(broken))}")
         elif said and not self.weighed and not self.again and (problem.get("pairs") or leaned):
-            wishes = (["pairs"] if problem.get("pairs") else []) + (["what the nets' names were taken to ask"] if leaned else [])
+            wishes = (["pairs"] if problem.get("pairs")
+                      else []) + (["what the nets' names were taken to ask"] if leaned else [])
             run.say(f"not all joined: once more without {' and '.join(wishes)}")
             self.weighing, self.weighed, self.plain = (problem, solution, len(said)), True, True
             self.reread = False
@@ -247,8 +255,8 @@ class _Lot:
             # (a lot that is being laid again to hold a cut pour together: its problem is drawn up anew)
             base, mark, picture = self.base
             of_lot = {n["net"] for n in base["nets"] if n["net"] in picture.groups}
-            anew = problem_of(picture, Rules.of(picture, self.at_step()), run.engine.ask, only=of_lot, narrow=narrow, options=run.options,
-                              unlinked=self.unlinked, unpaired=self.unpaired)
+            anew = problem_of(picture, Rules.of(picture, self.at_step()), run.engine.ask, only=of_lot, narrow=narrow,
+                              options=run.options, unlinked=self.unlinked, unpaired=self.unpaired)
             self.base = (anew, mark, picture)
         self.reread = False
         return None
@@ -266,7 +274,8 @@ class _Lot:
             parts = [dict(laid, of=laid["key"]) for laid in solution["nets"]]
         sizes = {n["key"]: (n["width"], n["via"]) for n in problem["nets"]}
         # (what is laid for a pair comes back per leg, under the pair's key and the leg's net: the leg and its stubs)
-        sizes.update({f"{pair['key']}/{leg}": sizes[stub] for pair in problem.get("pairs", []) for leg, stub in zip(pair["legs"], pair["stubs"][0])})
+        sizes.update({f"{pair['key']}/{leg}": sizes[stub] for pair in problem.get("pairs", [])
+                      for leg, stub in zip(pair["legs"], pair["stubs"][0])})
         added = board.write(dict(solution, nets=parts), {part["key"]: sizes[part["of"]] for part in parts})
         ends = [(part["key"], end) for part in parts for end in part.get("ends", [])]
         standing = on_zone(board.read(), [end for _, end in ends], run.engine.ask) if ends else []
@@ -275,7 +284,8 @@ class _Lot:
             taken = board.take_back(loose)
             added = (added[0] - taken[0], added[1] - taken[1])
             nets_of = {part["key"]: part["net"] for part in parts}
-            run.say(f"ended on a pour that the other new tracks cut away, taken back: {', '.join(sorted({nets_of[key] for key in loose}))}")
+            run.say("ended on a pour that the other new tracks cut away, taken back: "
+                    f"{', '.join(sorted({nets_of[key] for key in loose}))}")
         run.outcome.tracks, run.outcome.vias = run.outcome.tracks + added[0], run.outcome.vias + added[1]
         return mark
 
@@ -306,15 +316,18 @@ class _Lot:
         point of the pour to another: on the pour whole again those are a step apart, and a track between
         them holds nothing together.)"""
         run, narrow = self.run, self.tries[self.number][1]
-        room = self.base is not None and len(self.base[0]["nets"]) + len(self.bridges) + len(problem["nets"]) < ENGINE_NETS
+        entries = len(self.base[0]["nets"]) + len(self.bridges) + len(problem["nets"]) if self.base else 0
+        room = self.base is not None and entries < ENGINE_NETS
         if not (self.rejoining and room and run.settings.pours and self.agains < POUR_AGAINS):
             return False
         taken = run.board.rewind(self.base[1])
         run.outcome.tracks, run.outcome.vias = run.outcome.tracks - taken[0], run.outcome.vias - taken[1]
-        by_pads = problem_of(self.picture, Rules.of(self.picture, replace(self.at_step(), pours=False, pairs=False)), run.engine.ask,
-                             only=set(keys), narrow=narrow, options=run.options, unlinked=set(keys))
-        self.bridges += [dict(entry, key=f"{entry['net']} ~ {len(self.bridges) + k + 1}") for k, entry in enumerate(by_pads["nets"])]
-        run.say(f"no way to join them past the new tracks: those are laid again, with the pieces of the pour held together: {', '.join(keys)}")
+        by_pads = problem_of(self.picture, Rules.of(self.picture, replace(self.at_step(), pours=False, pairs=False)),
+                             run.engine.ask, only=set(keys), narrow=narrow, options=run.options, unlinked=set(keys))
+        self.bridges += [dict(entry, key=f"{entry['net']} ~ {len(self.bridges) + k + 1}")
+                         for k, entry in enumerate(by_pads["nets"])]
+        run.say("no way to join them past the new tracks: those are laid again, with the pieces of the pour held "
+                f"together: {', '.join(keys)}")
         self.lot = list(dict.fromkeys(n["net"] for n in self.base[0]["nets"]))
         self.reread, self.rejoining, self.again, self.agains = False, False, True, self.agains + 1
         return True

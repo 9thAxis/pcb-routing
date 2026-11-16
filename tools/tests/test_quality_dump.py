@@ -40,7 +40,8 @@ class Pad:
     def TransformShapeToPolygon(self, polygons, layer, clearance, error, where):
         self.asked = (clearance, error, where)
         x, y = self.at
-        polygons.outlines.append(Outline([(x - MM // 2, y - MM // 2), (x + MM // 2, y - MM // 2), (x + MM // 2, y + MM // 2), (x - MM // 2, y + MM // 2)]))
+        polygons.outlines.append(Outline([(x - MM // 2, y - MM // 2), (x + MM // 2, y - MM // 2),
+                                          (x + MM // 2, y + MM // 2), (x - MM // 2, y + MM // 2)]))
 
 
 class Track:
@@ -93,14 +94,16 @@ def with_poly_sets(test):
 
 
 PROJECT = dict(net_settings=dict(
-    classes=[dict(name="Default", clearance=0.15, track_width=0.25), dict(name="POWER", clearance=0.3, track_width=0.5)],
+    classes=[dict(name="Default", clearance=0.15, track_width=0.25),
+             dict(name="POWER", clearance=0.3, track_width=0.5)],
     netclass_patterns=[dict(netclass="POWER", pattern="VCC*")], netclass_assignments={"GND": ["POWER"]}))
 
 
 class Rules(unittest.TestCase):
     def test_what_is_kept_of_a_project(self):
         self.assertEqual(dump.project_rules(PROJECT), dict(clearance=0.15, track_widths={"Default": 0.25, "POWER": 0.5},
-                                                           patterns=[["VCC*", "POWER"]], assignments={"GND": ["POWER"]}))
+                                                           patterns=[["VCC*", "POWER"]],
+                                                           assignments={"GND": ["POWER"]}))
 
     def test_a_project_without_net_classes(self):
         self.assertEqual(dump.project_rules({}), dict(clearance=None, track_widths={}, patterns=[], assignments={}))
@@ -118,10 +121,13 @@ class Rules(unittest.TestCase):
 class ReadBoard(unittest.TestCase):
     def setUp(self):
         with_poly_sets(self)
-        self.pads = [Pad("A", 1, 2, {pcbnew.F_Cu}, ref="R1", num="2"), Pad("B", 5, 5, {pcbnew.F_Cu, pcbnew.B_Cu}, ref=None),
-                     Pad("PASTE", 9, 9, {pcbnew.F_Mask})]
-        tracks = [Track("A", (1, 2), (4, 6), 0.25, pcbnew.F_Cu), Via("A", 4, 6, 0.6), Track("A", (4, 6), (5, 7), 0.2, pcbnew.B_Cu, mid=(4.7, 6.3))]
-        self.board = Board(self.pads, tracks, [Zone("GND"), Zone("VCC"), Zone("GND"), Zone("", False), Zone("KEEP", rule_area=True)], unconnected=2)
+        self.pads = [Pad("A", 1, 2, {pcbnew.F_Cu}, ref="R1", num="2"),
+                     Pad("B", 5, 5, {pcbnew.F_Cu, pcbnew.B_Cu}, ref=None), Pad("PASTE", 9, 9, {pcbnew.F_Mask})]
+        tracks = [Track("A", (1, 2), (4, 6), 0.25, pcbnew.F_Cu), Via("A", 4, 6, 0.6),
+                  Track("A", (4, 6), (5, 7), 0.2, pcbnew.B_Cu, mid=(4.7, 6.3))]
+        self.board = Board(self.pads, tracks,
+                           [Zone("GND"), Zone("VCC"), Zone("GND"), Zone("", False), Zone("KEEP", rule_area=True)],
+                           unconnected=2)
         self.dump = dump.read_board(self.board)
 
     def test_layers_by_name(self):
@@ -129,7 +135,8 @@ class ReadBoard(unittest.TestCase):
 
     def test_pads_on_copper_with_their_outline_on_each_layer(self):
         first, second = self.dump["pads"]
-        self.assertEqual({k: first[k] for k in ("net", "at", "ref", "num")}, dict(net="A", at=[1.0, 2.0], ref="R1", num="2"))
+        self.assertEqual({k: first[k] for k in ("net", "at", "ref", "num")},
+                         dict(net="A", at=[1.0, 2.0], ref="R1", num="2"))
         self.assertEqual(first["shapes"], {"F.Cu": [[[0.5, 1.5], [1.5, 1.5], [1.5, 2.5], [0.5, 2.5]]]})
         self.assertEqual(sorted(second["shapes"]), ["B.Cu", "F.Cu"])
         self.assertEqual(second["ref"], "")

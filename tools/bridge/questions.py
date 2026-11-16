@@ -19,7 +19,8 @@ class _Named:
 
     @property
     def fills(self):
-        return [dict(net=pour.net, layer=pour.layer, rings=pour.rings) for pour in (self.picture.fills[f] for f in self.index)]
+        return [dict(net=pour.net, layer=pour.layer, rings=pour.rings)
+                for pour in (self.picture.fills[f] for f in self.index)]
 
 
 def reach_of(picture, rules, names, ask):
@@ -36,9 +37,10 @@ def reach_of(picture, rules, names, ask):
         pours = picture.pours.get(name, {}) if rules.settings.pours else {}
         nets.append(dict(groups=picture.groups[name], inset=rules.inset(name),
                          pours=[named(pours.get(g, [])) for g in range(len(picture.groups[name]))]))
-    found = ask(dict(ask="reach", pads=spots(picture.pads), fills=named.fills, layers=rules.routing_layers(picture.layers),
-                     step=rules.settings.step, nets=nets))
-    return {name: [[(place["xy"], place["layers"]) for place in group] for group in groups] for name, groups in zip(names, found)}
+    found = ask(dict(ask="reach", pads=spots(picture.pads), fills=named.fills,
+                     layers=rules.routing_layers(picture.layers), step=rules.settings.step, nets=nets))
+    return {name: [[(place["xy"], place["layers"]) for place in group] for group in groups]
+            for name, groups in zip(names, found)}
 
 
 def parts_of(picture, problem, solution, ask):
@@ -51,7 +53,8 @@ def parts_of(picture, problem, solution, ask):
 def on_zone(picture, points, ask):
     """Whether each of these points (net, layer, xy) is on a pour of its net, as the picture has the zones."""
     wanted = {(point["net"], point["layer"]) for point in points}
-    fills = [dict(net=pour.net, layer=pour.layer, rings=pour.rings) for pour in picture.fills if (pour.net, pour.layer) in wanted]
+    fills = [dict(net=pour.net, layer=pour.layer, rings=pour.rings) for pour in picture.fills
+             if (pour.net, pour.layer) in wanted]
     return ask(dict(ask="on_zone", fills=fills, points=points))
 
 
@@ -59,7 +62,8 @@ def tie_targets(picture, starved, ask):
     """For pads with too few spokes, as [(Thermal, the pad's middle, how far within the zone to end, points
     not to give again)]: for each, the points of its zone that a straight track from its middle may end on."""
     named = _Named(picture)
-    pads = [dict(outline=thermal.outline, fill=named(thermal.fill), at=at, inset=inset, tried=tried) for thermal, at, inset, tried in starved]
+    pads = [dict(outline=thermal.outline, fill=named(thermal.fill), at=at, inset=inset, tried=tried)
+            for thermal, at, inset, tried in starved]
     return ask(dict(ask="tie_targets", fills=named.fills, pads=pads)) if pads else []
 
 
@@ -83,6 +87,7 @@ def survey(pads, wires, groups, fills, spoked, ask):
     """What the filled zones of a board join, and how they tie each pad (src/pours: `survey`)."""
     zoned = {pour.net for pour in fills}
     copper = lambda pad: {layer: pad.shapes[layer] for layer in pad.layers} if pad.net in zoned else {}
-    return ask(dict(ask="survey", pads=[dict(net=pad.net, at=pad.at, layers=pad.layers, shapes=copper(pad)) for pad in pads],
+    return ask(dict(ask="survey",
+                    pads=[dict(net=pad.net, at=pad.at, layers=pad.layers, shapes=copper(pad)) for pad in pads],
                     wires=wires, groups=groups, spoked=spoked,
                     fills=[dict(net=pour.net, layer=pour.layer, rings=pour.rings, zone=pour.zone) for pour in fills]))

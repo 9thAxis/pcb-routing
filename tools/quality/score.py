@@ -62,7 +62,8 @@ def compare(boards, names, assume_complete=False, clearance=None, per_net=False)
                 tally, counts = m.general_measures(dump, gap, nets)
                 totals["general"][name].add(tally)
                 if per_net:
-                    nets_rows += [dict(board=board, net=net, routing=name, tree=tree, connections=connections, **counts[net])
+                    nets_rows += [dict(board=board, net=net, routing=name, tree=tree, connections=connections,
+                                       **counts[net])
                                   for net, (tree, connections) in nets.items()]
         pairs, groups = m.bus_pairs(reference)
         buses += groups
@@ -70,7 +71,8 @@ def compare(boards, names, assume_complete=False, clearance=None, per_net=False)
         for name, dump in dumps.items():
             if pairs:
                 totals["buses"][name].add(m.bus_measures(dump, pairs))
-            totals["circuit"][name].add(m.circuit_measures(dump, circuit, poured, rules, is_reference=name == reference_name))
+            totals["circuit"][name].add(m.circuit_measures(dump, circuit, poured, rules,
+                                                           is_reference=name == reference_name))
             totals["exits"][name].add(m.exit_measures(dump, tracked))
 
     general = totals["general"]
@@ -154,14 +156,20 @@ def boards_in(directory, reference_name, routing_names, only=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("dumps", nargs="+", metavar="DUMP", help="REFERENCE.json NAME=ROUTED.json ..., or with --dir the names of the routings")
+    parser.add_argument("dumps", nargs="+", metavar="DUMP",
+                        help="REFERENCE.json NAME=ROUTED.json ..., or with --dir the names of the routings")
     parser.add_argument("--dir", help="a directory of BOARD.NAME.json dumps: score every board in it")
-    parser.add_argument("--reference", help="with --dir: the name of the reference routing; without: the name of its row (default: reference)")
+    parser.add_argument("--reference",
+                        help="with --dir: the name of the reference routing; without: the name of its row (default: reference)")
     parser.add_argument("--boards", help="with --dir: a file naming the boards to score, one a line (default: all)")
-    parser.add_argument("--assume-complete", action="store_true", help="take every routing as complete, whatever its dump says")
-    parser.add_argument("--clearance", type=float, help="the clearance in mm for the spacing figures (default: the Default class's from the dumps' rules, else 0.2)")
-    parser.add_argument("--json", metavar="FILE", help="write the figures as JSON here; - for standard output in place of the tables")
-    parser.add_argument("--per-net", action="store_true", help="with --json: also the per-net rows of the general table")
+    parser.add_argument("--assume-complete", action="store_true",
+                        help="take every routing as complete, whatever its dump says")
+    parser.add_argument("--clearance", type=float,
+                        help="the clearance in mm for the spacing figures (default: the Default class's from the dumps' rules, else 0.2)")
+    parser.add_argument("--json", metavar="FILE",
+                        help="write the figures as JSON here; - for standard output in place of the tables")
+    parser.add_argument("--per-net", action="store_true",
+                        help="with --json: also the per-net rows of the general table")
     args = parser.parse_args(argv)
 
     if args.dir:
@@ -183,7 +191,8 @@ def main(argv=None):
     if len(set(names)) != len(names):
         parser.error("the reference and the routings need different names")
 
-    result = compare(boards, names, assume_complete=args.assume_complete, clearance=args.clearance, per_net=args.per_net)
+    result = compare(boards, names, assume_complete=args.assume_complete, clearance=args.clearance,
+                     per_net=args.per_net)
     for board, reason in result["skipped"].items():
         print(f"skipped {board}: {reason}", file=sys.stderr)
     if args.json == "-":

@@ -23,7 +23,8 @@ def run_engine(problem, engine, threads=0, problem_path=None, solution_path=None
         solution_path = Path(solution_path or Path(tmp) / "solution.json")
         problem_path.write_text(json.dumps(problem))
         solution_path.unlink(missing_ok=True)  # an old file must not pass for this run's answer
-        command = ([engine] if isinstance(engine, (str, os.PathLike)) else list(engine)) + ["route", str(problem_path), "-o", str(solution_path)]
+        command = ([engine] if isinstance(engine, (str, os.PathLike))
+                   else list(engine)) + ["route", str(problem_path), "-o", str(solution_path)]
         if threads:
             command += ["--threads", str(threads)]
         try:
@@ -39,7 +40,8 @@ def run_engine(problem, engine, threads=0, problem_path=None, solution_path=None
 def ask_engine(question, engine, threads=0):
     """Put a question to the pcb-routing program (its `ask` command: see src/ask.rs) and return the answer.
     `engine` is the program (or a command as a list)."""
-    command = ([engine] if isinstance(engine, (str, os.PathLike)) else list(engine)) + ["ask"] + (["--threads", str(threads)] if threads else [])
+    command = ([engine] if isinstance(engine, (str, os.PathLike))
+               else list(engine)) + ["ask"] + (["--threads", str(threads)] if threads else [])
     try:
         run = subprocess.run(command, input=json.dumps(question), capture_output=True, text=True)
     except OSError as error:
@@ -62,7 +64,8 @@ class Engine:
 
     def route(self, problem, first=False):
         """Run a problem and return its solution (`first`: the first run of all); EngineFailed if it gives none."""
-        return run_engine(problem, self.program, self.threads, self.problem_path if first else None, self.solution_path if first else None)
+        return run_engine(problem, self.program, self.threads, self.problem_path if first else None,
+                          self.solution_path if first else None)
 
     def ask(self, question):
         """Put a question (see src/ask.rs) and return the answer; EngineFailed if it gives none."""

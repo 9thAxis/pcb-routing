@@ -14,8 +14,8 @@ ROLES = ("supply", "ground", "clock", "crystal", "sensitive", "noisy")
 # more: on 20 public boards, guessed nets that held their way cost the other nets 13 % more vias.
 LEANING = dict(clock=(0.5, 2.0, 2.0), crystal=(0.2, 3.0, 5.0), noisy=(0.3, 3.0, 1.0), sensitive=(0.5, 2.0, 1.0))
 GUESSED = dict(clock=(1.0, 1.0, 2.0), crystal=(1.0, 1.0, 5.0))
-HINTS = dict(role=str, width=float, clearance=float, amps=float, volts=float, max_mm=float, vias=str, layers=list, pair=(str, bool),
-             gap=float, bus=(str, bool), priority=str, ohms=float, match=str)
+HINTS = dict(role=str, width=float, clearance=float, amps=float, volts=float, max_mm=float, vias=str, layers=list,
+             pair=(str, bool), gap=float, bus=(str, bool), priority=str, ohms=float, match=str)
 # The most a hint may ask: beyond it, it is a slip of a unit (and the router would draw up a board of it).
 MOST = dict(width=20.0, clearance=20.0, gap=20.0, amps=30.0, volts=5000.0)
 NOT_ACTED_ON = ("ohms", "match")  # taken down and said back, but nothing in the router follows them yet
@@ -68,7 +68,8 @@ def read_hints(path):
     if not isinstance(data, dict) or set(data) - {"nets", "pairs"}:
         raise wrong("the file", "an object with `nets` and `pairs`, nothing else")
     if not isinstance(data.get("nets", {}), dict) or not isinstance(data.get("pairs", []), list):
-        raise wrong("the file", "`nets` is an object (a pattern, and what is said of the nets it names), `pairs` a list")
+        raise wrong("the file",
+                    "`nets` is an object (a pattern, and what is said of the nets it names), `pairs` a list")
     hints = Hints(name=name)
     for pattern, said in data.get("nets", {}).items():
         if not isinstance(said, dict):
@@ -94,9 +95,12 @@ def read_hints(path):
         hints.nets.append((pattern, dict(said)))
     for k, pair in enumerate(data.get("pairs", [])):
         legs = pair.get("nets") if isinstance(pair, dict) else None
-        if not (isinstance(legs, list) and len(legs) == 2 and all(isinstance(leg, str) for leg in legs) and legs[0] != legs[1]):
+        if not (isinstance(legs, list) and len(legs) == 2 and all(isinstance(leg, str) for leg in legs)
+                and legs[0] != legs[1]):
             raise wrong(f"pairs[{k}].nets", "the two nets of the pair")
-        if set(pair) - {"nets", "width", "gap", "ohms"} or not all(number(pair[w]) and pair[w] <= MOST.get(w, math.inf) for w in pair if w != "nets"):
+        if set(pair) - {"nets", "width", "gap",
+                        "ohms"} or not all(number(pair[w]) and pair[w] <= MOST.get(w, math.inf) for w in pair
+                                           if w != "nets"):
             raise wrong(f"pairs[{k}]", "`nets`, and `width`, `gap`, `ohms` as numbers more than 0 (20 mm at the most)")
         hints.pairs.append(dict(pair))
     return hints
@@ -106,7 +110,8 @@ def unheeded(picture, hints):
     """What a hints file says that nothing on the board answers to, as lines to say: a pattern that names no
     net, a pair with a net that is not there, a layer the board has not."""
     nets = sorted(picture.groups)
-    named = lambda pattern: [net for net in nets if fnmatch.fnmatchcase(net, pattern) or fnmatch.fnmatchcase(net.lstrip("/"), pattern)]
+    named = lambda pattern: [net for net in nets
+                             if fnmatch.fnmatchcase(net, pattern) or fnmatch.fnmatchcase(net.lstrip("/"), pattern)]
     lines = []
     for pattern, said in (hints.nets if hints else []):
         if not named(pattern):
@@ -122,7 +127,8 @@ def unheeded(picture, hints):
     for pair in (hints.pairs if hints else []):
         for leg in pair["nets"]:
             if leg not in nets:
-                lines.append(f"{hints.name}: the pair {' = '.join(pair['nets'])} names {leg}, which is no net of the board")
+                lines.append(f"{hints.name}: the pair {' = '.join(pair['nets'])} names {leg}, "
+                             "which is no net of the board")
     return lines
 
 
@@ -196,4 +202,5 @@ def told(intents, only=None):
                 said = " ".join(value) if isinstance(value, list) else value
                 text = f"{net} {what} {said}" + (" (not acted on)" if what in NOT_ACTED_ON else "")
             lines.setdefault(source, []).append(text)
-    return [f"from {'the net names and parts' if source == 'names' else source}: {'; '.join(found)}" for source, found in sorted(lines.items())]
+    return [f"from {'the net names and parts' if source == 'names' else source}: {'; '.join(found)}"
+            for source, found in sorted(lines.items())]

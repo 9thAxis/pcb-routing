@@ -84,12 +84,14 @@ def read_board(board):
             pad.TransformShapeToPolygon(polygons, l, 0, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
             shapes[name(l)] = _rings(polygons)
         part = pad.GetParentFootprint()
-        pads.append(dict(net=pad.GetNetname(), at=_xy(pad.GetPosition()), shapes=shapes, ref=part.GetReference() if part else "", num=pad.GetNumber()))
+        pads.append(dict(net=pad.GetNetname(), at=_xy(pad.GetPosition()), shapes=shapes, ref=part.GetReference()
+                         if part else "", num=pad.GetNumber()))
     for t in board.GetTracks():
         if t.Type() == pcbnew.PCB_VIA_T:
             vias.append(dict(net=t.GetNetname(), at=_xy(t.GetPosition()), d=pcbnew.ToMM(t.GetWidth(layers[0]))))
         else:
-            track = dict(net=t.GetNetname(), a=_xy(t.GetStart()), b=_xy(t.GetEnd()), w=pcbnew.ToMM(t.GetWidth()), layer=name(t.GetLayer()), len=pcbnew.ToMM(t.GetLength()))
+            track = dict(net=t.GetNetname(), a=_xy(t.GetStart()), b=_xy(t.GetEnd()), w=pcbnew.ToMM(t.GetWidth()),
+                         layer=name(t.GetLayer()), len=pcbnew.ToMM(t.GetLength()))
             if t.Type() == pcbnew.PCB_ARC_T:
                 track["mid"] = _xy(t.GetMid())
             tracks.append(track)
@@ -111,7 +113,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("board")
     parser.add_argument("-o", "--output", help="the dump (default: the board's name with .json)")
-    parser.add_argument("--project", help="the .kicad_pro to read the net classes from (default: the one beside the board)")
+    parser.add_argument("--project",
+                        help="the .kicad_pro to read the net classes from (default: the one beside the board)")
     args = parser.parse_args(argv)
     if pcbnew is None:
         parser.error("the pcbnew module is not here: run this with the Python that ships with KiCad")

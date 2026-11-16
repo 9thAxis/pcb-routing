@@ -40,4 +40,5 @@ def via(net, x, y, d=0.6):
 
 def board(pads=(), tracks=(), vias=(), zone_nets=(), **more):
     """A two-layer dump."""
-    return dict(layers=["F.Cu", "B.Cu"], pads=list(pads), tracks=list(tracks), vias=list(vias), zone_nets=list(zone_nets), **more)
+    return dict(layers=["F.Cu", "B.Cu"], pads=list(pads), tracks=list(tracks), vias=list(vias),
+                zone_nets=list(zone_nets), **more)

@@ -37,9 +37,11 @@ class PouredBoard:
         first_more = len(pads)
         for n, net in enumerate(self.more):  # (other nets of two pads each, off to the side)
             pads += [support.land(k, net, 2, 20 + 2 * n), support.land(k, net, 8, 20 + 2 * n)]
-        halves = [[[0.0, 0.0], [10.0, 0.0], [10.0, 4.5], [0.0, 4.5]], [[0.0, 5.5], [10.0, 5.5], [10.0, 10.0], [0.0, 10.0]]]
+        halves = [[[0.0, 0.0], [10.0, 0.0], [10.0, 4.5], [0.0, 4.5]],
+                  [[0.0, 5.5], [10.0, 5.5], [10.0, 10.0], [0.0, 10.0]]]
         eroded = self.erodes and len(self.laid("SIG")) == 1 and not self.taken
-        whole = [[0.0, 0.0], [9.0, 0.0], [9.0, 10.0], [0.0, 10.0]] if eroded else SQUARE  # (drawn back from its right edge)
+        # (drawn back from its right edge)
+        whole = [[0.0, 0.0], [9.0, 0.0], [9.0, 10.0], [0.0, 10.0]] if eroded else SQUARE
         pours = [k.Pour("GND", "F.Cu", [ring]) for ring in (halves if self.parted() else [whole])]
         on_pour = [[0], [1]] if self.parted() else [[0, 1]]
         beside = [] if not self.beside or any(key == "GND" for key in self.laid("GND")) else [[4]]
@@ -120,7 +122,8 @@ class Pours(WithEngine):
         first, second, third = self.runs()
         self.assertEqual([n["key"] for n in third["nets"]], ["SIG", "GND ~ 1"])
         # the pads of the pieces as they were cut, not points of the pour
-        self.assertEqual(third["nets"][1]["terminals"], [dict(xy=[2, 2], layers=["F.Cu"]), dict(xy=[8, 8], layers=["F.Cu"])])
+        self.assertEqual(third["nets"][1]["terminals"],
+                         [dict(xy=[2, 2], layers=["F.Cu"]), dict(xy=[8, 8], layers=["F.Cu"])])
         self.assertEqual(third["copper"], first["copper"])  # against the board as it was before the signal
         self.assertEqual(board.written, [["SIG", "GND ~ 1"]])  # the first run's copper is gone
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 2, 0))
@@ -132,7 +135,8 @@ class Pours(WithEngine):
         self.stubborn(["BAD", "GND"])
         outcome = self.route(board)
         self.assertEqual(sorted(board.unjoined()), ["BAD", "GND"])
-        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 3, 2))  # GND was joined, and is not
+        # GND was joined, and is not
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 3, 2))
 
     def test_without_pours_nothing_is_rewound(self):
         board = PouredBoard(cuts=True)
@@ -154,7 +158,8 @@ class Unanswered(WithEngine):
         outcome = super().route(board, settings=k.Settings(pours=True))
         self.assertEqual(board.written, [["SIG"]])
         self.assertIn("not to answer", outcome.failure)
-        self.assertEqual((outcome.tracks, outcome.wanted, outcome.left), (board.segments["SIG"], 2, 1))  # the zone is cut, and stays so
+        # the zone is cut, and stays so
+        self.assertEqual((outcome.tracks, outcome.wanted, outcome.left), (board.segments["SIG"], 2, 1))
 
     def test_without_an_answer_to_the_first_question_nothing_is_laid(self):
         board = PouredBoard()
@@ -187,7 +192,8 @@ class Batches(WithEngine):
         board = ManyNets(300)
         self.stubborn(["N000"])
         outcome = super().route(board, settings=k.Settings(pours=True))
-        self.assertEqual([len(p["nets"]) for p in self.runs()], [150, 1, 150])  # the batch, its second try, the next batch
+        # the batch, its second try, the next batch
+        self.assertEqual([len(p["nets"]) for p in self.runs()], [150, 1, 150])
         self.assertFalse([line for line in self.said if "parted" in line])
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 300, 1))
 
@@ -202,9 +208,12 @@ class StarvedBoard:
         self.written, self.half = [], half
 
     def read(self, nets=None):
-        picture = support.picture(k, [support.land(k, "GND", 5, 5, part="U1", half=self.half), support.land(k, "GND", 8, 8, part="U2")], {"GND": [[0, 1]]})
+        picture = support.picture(k,
+                                  [support.land(k, "GND", 5, 5, part="U1", half=self.half),
+                                   support.land(k, "GND", 8, 8, part="U2")], {"GND": [[0, 1]]})
         tied = any(self.written)
-        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 2 if tied else 1, outline=[] if tied else self.LINE, fill=[] if tied else [0]),
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 2 if tied else 1, outline=[] if tied else self.LINE,
+                                      fill=[] if tied else [0]),
                             k.Thermal("GND", 1, "F.Cu", 2, 4)]
         picture.fills = [k.Pour("GND", "F.Cu", self.ZONE)]
         return picture
@@ -231,9 +240,11 @@ class ShutInBoard:
     def read(self, nets=None):
         pads = [support.land(k, "GND", 5, 5, part="U1"), support.land(k, "GND", 8, 8, part="U2"),
                 support.land(k, "SIG", 1, 6.3, part="R1"), support.land(k, "SIG", 9.5, 6.3, part="R2")]
-        picture = support.picture(k, pads, {"GND": [[0, 1]], "SIG": [[2], [3]] if self.signal == "taken out" else [[2, 3]]})
+        picture = support.picture(k, pads,
+                                  {"GND": [[0, 1]], "SIG": [[2], [3]] if self.signal == "taken out" else [[2, 3]]})
         shut_in = self.signal == "round the pad"
-        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 1 if shut_in else 2, outline=self.LINE if shut_in else [], gap=0.5, clearance=0.2)]
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 1 if shut_in else 2, outline=self.LINE if shut_in else [],
+                                      gap=0.5, clearance=0.2)]
         if self.signal != "taken out":
             y = 6.3 if shut_in else 9.0
             picture.tracks = [k.Track(a=[1, y], b=[9.5, y], width=0.25, net="SIG", layer="F.Cu")]
@@ -271,7 +282,8 @@ class ShutIn(WithEngine):
     def see_to(self, board, laid_before=frozenset()):
         outcome = k.Outcome(tracks=1)
         with redirect_stdout(io.StringIO()):
-            k.tie_starved(board, k.Settings(pours=True), k.Engine(support.ENGINE), outcome, say=self.said.append, laid_before=laid_before)
+            k.tie_starved(board, k.Settings(pours=True), k.Engine(support.ENGINE), outcome, say=self.said.append,
+                          laid_before=laid_before)
         return outcome
 
     def test_the_net_that_goes_round_it_is_laid_again_clear_of_it(self):
@@ -281,7 +293,8 @@ class ShutIn(WithEngine):
         self.assertEqual([n["key"] for n in problem["nets"]], ["SIG"])
         (closed,) = [r for r in problem["regions"] if r.get("layers") == ["F.Cu"]]
         xs = [p[0] for p in closed["rings"][0]]
-        self.assertTrue(3 < min(xs) < 3.5 and 6.5 < max(xs) < 7, (min(xs), max(xs)))  # the pad, its gap, the clearance, and 0.3 mm
+        # the pad, its gap, the clearance, and 0.3 mm
+        self.assertTrue(3 < min(xs) < 3.5 and 6.5 < max(xs) < 7, (min(xs), max(xs)))
         self.assertEqual(board.calls, [("take out", ["SIG"]), ("write", ["SIG"])])
         self.assertEqual(self.said, ["laid again clear of U1, whose spokes they cut: SIG"])
         self.assertEqual((outcome.starved, outcome.tracks), ([], 3))

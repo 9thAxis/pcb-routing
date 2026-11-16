@@ -78,7 +78,8 @@ def bridge():
     line = command()
     from bridge import beside, engine, intent, kicad, lengths, names, outcome, pairs, picture, problem, questions, route, rules, ties
     merged = types.SimpleNamespace()
-    for module in (names, lengths, picture, intent, rules, questions, beside, pairs, problem, engine, outcome, ties, route, kicad, line):
+    for module in (names, lengths, picture, intent, rules, questions, beside, pairs, problem, engine, outcome, ties,
+                   route, kicad, line):
         for name, value in vars(module).items():
             if not name.startswith("__") and not isinstance(value, types.ModuleType):
                 assert getattr(merged, name, value) is value, f"{name} means two things in the bridge"
@@ -87,7 +88,8 @@ def bridge():
 
 
 def square(k, x, y, half=0.5):
-    return [[[k.r6(x - half), k.r6(y - half)], [k.r6(x + half), k.r6(y - half)], [k.r6(x + half), k.r6(y + half)], [k.r6(x - half), k.r6(y + half)]]]
+    return [[[k.r6(x - half), k.r6(y - half)], [k.r6(x + half), k.r6(y - half)], [k.r6(x + half), k.r6(y + half)],
+             [k.r6(x - half), k.r6(y + half)]]]
 
 
 def land(k, net, x, y, layer="F.Cu", half=0.5, **more):
@@ -98,7 +100,8 @@ def land(k, net, x, y, layer="F.Cu", half=0.5, **more):
 def pin(k, net, x, y, drill=1.0, half=0.9, **more):
     """A through-hole pad on both layers."""
     shapes = {l: [square(k, x, y, half)] for l in ("F.Cu", "B.Cu")}
-    return k.Pad(net=net, at=[x, y], layers=["F.Cu", "B.Cu"], shapes=shapes, hole_at=[x, y], drill=drill, smallest=2 * half, **more)
+    return k.Pad(net=net, at=[x, y], layers=["F.Cu", "B.Cu"], shapes=shapes, hole_at=[x, y], drill=drill,
+                 smallest=2 * half, **more)
 
 
 def picture(k, pads, groups=None, **more):
@@ -109,6 +112,7 @@ def picture(k, pads, groups=None, **more):
             if pad.net:
                 groups.setdefault(pad.net, []).append([i])
     more.setdefault("classes", {p.net: k.NetClass(0.2, 0.25, 0.6, 0.3) for p in pads if p.net})
-    more.setdefault("minima", k.Minima(clearance=0.15, hole_clearance=0.25, edge_clearance=0.3, track_width=0.15, via_size=0.5,
+    more.setdefault("minima",
+                    k.Minima(clearance=0.15, hole_clearance=0.25, edge_clearance=0.3, track_width=0.15, via_size=0.5,
                                        through_drill=0.3, annular_width=0.1, hole_to_hole=0.25))
     return k.Picture(layers=["F.Cu", "B.Cu"], box=[0.0, 0.0, 20.0, 10.0], pads=pads, groups=groups, **more)

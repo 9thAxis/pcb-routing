@@ -67,9 +67,11 @@ for net in problem["nets"]:
         nets.append(dict(key=net["key"], net=net["net"], length_mm=0.0, tracks=[], vias=[]))
         continue
     points = [t["xy"] for t in net["terminals"]]
-    nets.append(dict(key=net["key"], net=net["net"], length_mm=1.0, tracks=[dict(layer=net["terminals"][0]["layers"][0], points=points)], vias=[]))
+    nets.append(dict(key=net["key"], net=net["net"], length_mm=1.0,
+                     tracks=[dict(layer=net["terminals"][0]["layers"][0], points=points)], vias=[]))
 status = "unroutable" if unrouted else "routed"
-solution = dict(status=status, iterations=1, variant=0, score=None, nets=nets, conflicts=[], message=unrouted[0] if unrouted else "", unrouted=unrouted)
+solution = dict(status=status, iterations=1, variant=0, score=None, nets=nets, conflicts=[], message=unrouted[0]
+                if unrouted else "", unrouted=unrouted)
 Path(args[3]).write_text(json.dumps(solution))
 print(f"{status}: fake run {number}, {len(problem['nets'])} nets")
 sys.exit(1 if unrouted else 0)

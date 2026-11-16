@@ -29,7 +29,8 @@ MACOS_PYTHON = "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framewo
 def has_pcbnew(python):
     """Whether this Python can import KiCad's pcbnew module."""
     try:
-        return subprocess.run([python, "-c", "import pcbnew"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        return subprocess.run([python, "-c", "import pcbnew"], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
     except OSError:
         return False
 
@@ -46,19 +47,24 @@ def kicad_python(environ=None, works=has_pcbnew):
 
 def dump_command(python, board, output, project=None):
     """The command that dumps one board."""
-    return [python, str(HERE / "dump.py"), str(board), "-o", str(output)] + (["--project", str(project)] if project else [])
+    return [python, str(HERE / "dump.py"), str(board), "-o",
+            str(output)] + (["--project", str(project)] if project else [])
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("reference", metavar="REFERENCE.kicad_pcb")
     parser.add_argument("routed", nargs="+", metavar="NAME=ROUTED.kicad_pcb")
-    parser.add_argument("--project", help="the .kicad_pro to read the reference's net classes from (default: the one beside it)")
+    parser.add_argument("--project",
+                        help="the .kicad_pro to read the reference's net classes from (default: the one beside it)")
     parser.add_argument("--dumps", help="keep the dumps in this directory")
     parser.add_argument("--picture", metavar="OUT.png", help="also draw the routings side by side (needs matplotlib)")
-    parser.add_argument("--json", metavar="FILE", help="write the figures as JSON here; - for standard output in place of the tables")
-    parser.add_argument("--assume-complete", action="store_true", help="take every routing as complete, whatever KiCad counts as open")
-    parser.add_argument("--clearance", type=float, help="the clearance in mm for the spacing figures (default: the Default class's)")
+    parser.add_argument("--json", metavar="FILE",
+                        help="write the figures as JSON here; - for standard output in place of the tables")
+    parser.add_argument("--assume-complete", action="store_true",
+                        help="take every routing as complete, whatever KiCad counts as open")
+    parser.add_argument("--clearance", type=float,
+                        help="the clearance in mm for the spacing figures (default: the Default class's)")
     args = parser.parse_args(argv)
     if not all("=" in r for r in args.routed):
         parser.error("give each routed board as NAME=ROUTED.kicad_pcb")

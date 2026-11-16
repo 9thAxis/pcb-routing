@@ -82,15 +82,16 @@ def main(argv=None):
                         help="do not count pads that a filled zone joins as joined: a net with a zone is routed as "
                              "tracks, as if the zone were not there")
     parser.add_argument("--pour-cost", type=float, default=2.0,
-                        help="what a track pays for its length across another net's pour, as a factor (1: nothing more)")
+                        help="what a track pays for its length across another net's pour, as a factor "
+                             "(1: nothing more)")
     parser.add_argument("--spoke-cost", type=float, default=4.0,
                         help="and across the ground where it would cut a spoke that ties a pad to its pour")
     parser.add_argument("--no-pairs", action="store_true",
-                        help="do not lay two nets named as the halves of a differential pair (_P/_N, +/-, DP/DM) side by"
-                             " side")
+                        help="do not lay two nets named as the halves of a differential pair (_P/_N, +/-, DP/DM) "
+                             "side by side")
     parser.add_argument("--hints",
-                        help="what the nets are for, as a JSON file (default: BOARD.routing.json beside the board, if it"
-                             " is there; see docs/hints.md)")
+                        help="what the nets are for, as a JSON file (default: BOARD.routing.json beside the board, "
+                             "if it is there; see docs/hints.md)")
     parser.add_argument("--no-guesses", action="store_true",
                         help="do not guess what a net is for from its name and parts (clocks, crystals, switch nodes, "
                              "pairs): only the hints say")
@@ -100,8 +101,8 @@ def main(argv=None):
                         help="how much longer a net that leaves and arrives beside others may run to stay beside them, "
                              "as a share of its length (0: buses are not kept together)")
     parser.add_argument("--max-states", type=int, default=40_000_000,
-                        help="largest grid accepted, in cells times layers (memory grows with it and with the number of "
-                             "nets)")
+                        help="largest grid accepted, in cells times layers (memory grows with it and with the "
+                             "number of nets)")
     parser.add_argument("--problem", help="keep the problem file here (of the first run of the engine)")
     parser.add_argument("--solution", help="keep the solution file here (of the first run of the engine)")
     parser.add_argument("--engine", default=os.environ.get("PCB_ROUTING", "pcb-routing"),

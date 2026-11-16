@@ -214,7 +214,8 @@ def zone_wires(board, of):
         net = item.GetNetname()
         if net in zoned:
             via = item.Type() == pcbnew.PCB_VIA_T
-            out.append(dict(net=net, layer=None if via else name(item.GetLayer()), group=of.get(net, {}).get(item.m_Uuid.AsString()),
+            out.append(dict(net=net, layer=None if via else name(item.GetLayer()),
+                            group=of.get(net, {}).get(item.m_Uuid.AsString()),
                             ends=[xy(item.GetPosition())] if via else [xy(item.GetStart()), xy(item.GetEnd())]))
     return out
 
@@ -262,15 +263,19 @@ def spoked_pads(board, index):
                 continue
             whole = fill.BBox()
             for pad in pads.get(zone.GetNetname(), []):
-                if not (pad.IsOnLayer(l) and pad.FlashLayer(l)) or zone_connection(zone, pad) != pcbnew.ZONE_CONNECTION_THERMAL:
+                if not (pad.IsOnLayer(l)
+                        and pad.FlashLayer(l)) or zone_connection(zone, pad) != pcbnew.ZONE_CONNECTION_THERMAL:
                     continue
                 gap = thermal_gap(zone, pad)
                 if gap <= 0 or pad.m_Uuid.AsString() not in index or not whole.Intersects(pad.GetBoundingBox()):
                     continue
                 tracks = [track for track in connectivity.GetConnectedTracks(pad) if track.Type() != pcbnew.PCB_VIA_T]
-                ends = lambda here: [[xy(track.GetStart()), xy(track.GetEnd())] for track in tracks if (track.GetLayer() == l) == here]
-                out.append(dict(pad=index[pad.m_Uuid.AsString()], layer=name(l), zone=number, gap=MM(gap), clearance=MM(clearance),
-                                least=least, line=rings_of(_transformed(pad, l, gap // 2))[0][0], tracks=ends(True), elsewhere=ends(False)))
+                ends = lambda here: [[xy(track.GetStart()), xy(track.GetEnd())] for track in tracks
+                                     if (track.GetLayer() == l) == here]
+                out.append(dict(pad=index[pad.m_Uuid.AsString()], layer=name(l), zone=number, gap=MM(gap),
+                                clearance=MM(clearance),
+                                least=least, line=rings_of(_transformed(pad, l, gap // 2))[0][0], tracks=ends(True),
+                                elsewhere=ends(False)))
     return out
 
 
@@ -300,16 +305,19 @@ def read_board(board, ignored, ask, pours=True):
     picture = Picture(layers=[name(l) for l in enabled], ignored=frozenset(ignored),
                       box=[MM(box.GetLeft()), MM(box.GetTop()), MM(box.GetRight()), MM(box.GetBottom())],
                       minima=Minima(clearance=MM(settings.m_MinClearance), hole_clearance=MM(settings.m_HoleClearance),
-                                    edge_clearance=MM(settings.m_CopperEdgeClearance), track_width=MM(settings.m_TrackMinWidth),
+                                    edge_clearance=MM(settings.m_CopperEdgeClearance),
+                                    track_width=MM(settings.m_TrackMinWidth),
                                     via_size=MM(settings.m_ViasMinSize), through_drill=MM(settings.m_MinThroughDrill),
-                                    annular_width=MM(settings.m_ViasMinAnnularWidth), hole_to_hole=MM(settings.m_HoleToHoleMin)))
+                                    annular_width=MM(settings.m_ViasMinAnnularWidth),
+                                    hole_to_hole=MM(settings.m_HoleToHoleMin)))
 
     index = {}
     for pad in board.GetPads():
         net = pad.GetNetname() or None
         if net and pad.GetNetCode() > 0 and net not in picture.classes:
             cls = pad.GetNet().GetNetClassSlow()
-            picture.classes[net] = NetClass(MM(cls.GetClearance()), MM(cls.GetTrackWidth()), MM(cls.GetViaDiameter()), MM(cls.GetViaDrill()))
+            picture.classes[net] = NetClass(MM(cls.GetClearance()), MM(cls.GetTrackWidth()), MM(cls.GetViaDiameter()),
+                                            MM(cls.GetViaDrill()))
         on = [l for l in enabled if pad.IsOnLayer(l)]
         shapes, openings = {}, {}
         for l in enabled:
@@ -349,8 +357,8 @@ def read_board(board, ignored, ask, pours=True):
             track.TransformShapeToPolygon(poly, track.GetLayer(), 0, pcbnew.FromMM(ARC_ERROR), pcbnew.ERROR_OUTSIDE)
             picture.polygons.extend(Polygon(rings, name(track.GetLayer()), net) for rings in rings_of(poly))
         else:
-            picture.tracks.append(Track(a=xy(track.GetStart()), b=xy(track.GetEnd()), width=MM(track.GetWidth()), net=net,
-                                        layer=name(track.GetLayer())))
+            picture.tracks.append(Track(a=xy(track.GetStart()), b=xy(track.GetEnd()), width=MM(track.GetWidth()),
+                                        net=net, layer=name(track.GetLayer())))
 
     # text and drawings on copper layers, on the board and in footprints: copper of no net
     drawn = list(board.GetDrawings())
@@ -376,17 +384,21 @@ def read_board(board, ignored, ask, pours=True):
             continue
         on = [name(l) for l in enabled if zone.IsOnLayer(l)]
         for rings in rings_of(zone.Outline()):
-            picture.areas.append(Area(rings=rings, layers=on, tracks=bool(zone.GetDoNotAllowTracks()), vias=bool(zone.GetDoNotAllowVias())))
+            picture.areas.append(Area(rings=rings, layers=on, tracks=bool(zone.GetDoNotAllowTracks()),
+                                      vias=bool(zone.GetDoNotAllowVias())))
 
     of = {}
     for net, own in pad_groups(board, copper=of).items():
-        picture.groups[net] = [[index[p.m_Uuid.AsString()] for p in group if p.m_Uuid.AsString() in index] for group in own]
+        picture.groups[net] = [[index[p.m_Uuid.AsString()] for p in group if p.m_Uuid.AsString() in index]
+                               for group in own]
     picture.fills = zone_fills(board) if pours else []
     if picture.fills:
         # what the zones join, and how they tie each pad: the engine's to work out from the plain geometry
-        found = survey(picture.pads, zone_wires(board, of), picture.groups, picture.fills, spoked_pads(board, index), ask)
+        found = survey(picture.pads, zone_wires(board, of), picture.groups, picture.fills, spoked_pads(board, index),
+                       ask)
         picture.groups = found["groups"]
-        picture.pours = {net: {g: pieces for g, pieces in enumerate(own) if pieces} for net, own in found["pours"].items()}
+        picture.pours = {net: {g: pieces for g, pieces in enumerate(own) if pieces}
+                         for net, own in found["pours"].items()}
         picture.thermals = [Thermal(**thermal) for thermal in found["thermals"]]
     return picture
 

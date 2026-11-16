@@ -24,7 +24,8 @@ def buses(pads, nets=None):
     beside = {}  # (net, net) -> the parts they are neighbours on
     for part, own in sorted(parts.items()):
         for a in own:
-            others = sorted(((math.dist(a.at, b.at), b.net or "") for b in own if b is not a and math.dist(a.at, b.at) > 1e-6))
+            others = sorted(((math.dist(a.at, b.at), b.net or "") for b in own
+                             if b is not a and math.dist(a.at, b.at) > 1e-6))
             for distance, net in others:
                 if distance > NEIGHBOUR * others[0][0]:
                     break
@@ -63,7 +64,8 @@ def _lanes(nets, parts):
         return [pad for pad in parts[part] if pad.net in nets]
     part = max(sorted(parts), key=lambda part: len({pad.net for pad in on(part)}))
     pads = on(part)
-    wide = max(p.at[0] for p in pads) - min(p.at[0] for p in pads) >= max(p.at[1] for p in pads) - min(p.at[1] for p in pads)
+    wide = max(p.at[0] for p in pads) - min(p.at[0]
+                                            for p in pads) >= max(p.at[1] for p in pads) - min(p.at[1] for p in pads)
     along, across = (0, 1) if wide else (1, 0)
     rows = {round(p.at[across], 3) for p in pads}
     if len(pads) != len(nets) or {p.net for p in pads} != set(nets) or len(rows) > 2:
@@ -89,14 +91,16 @@ def decoupling(pads, groups):
             by_part[pad.part].append(pad)
     def is_cap(pad):
         both = by_part.get(pad.part, [])
-        return bool(pad.part) and CAPACITOR_PART.match(pad.part) and len(both) == 2 and all(size[p.net] >= 3 for p in both)
+        capacitor = bool(pad.part) and CAPACITOR_PART.match(pad.part)
+        return capacitor and len(both) == 2 and all(size[p.net] >= 3 for p in both)
     is_pin = lambda pad: bool(pad.part) and CHIP_PART.match(pad.part)
     links = []
     for g, group in enumerate(groups):
         if len(group) != 1 or not is_cap(pads[group[0]]):
             continue
         cap = pads[group[0]]
-        pins = [(math.dist(cap.at, pads[i].at), i) for h, other in enumerate(groups) if h != g for i in other if is_pin(pads[i])]
+        pins = [(math.dist(cap.at, pads[i].at), i) for h, other in enumerate(groups) if h != g for i in other
+                if is_pin(pads[i])]
         if pins and min(pins)[0] <= DECOUPLING_REACH:
             links.append((g, min(pins)[1]))
     return links

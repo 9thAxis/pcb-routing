@@ -74,7 +74,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("output", help="the image to write (.png, or whatever matplotlib takes)")
     parser.add_argument("dumps", nargs="+", metavar="NAME=DUMP.json")
-    parser.add_argument("--box", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"), help="show only this part, in mm")
+    parser.add_argument("--box", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"),
+                        help="show only this part, in mm")
     parser.add_argument("--columns", type=int, help="panels in a row (default: as square as it goes)")
     args = parser.parse_args(argv)
     if not all("=" in d for d in args.dumps):

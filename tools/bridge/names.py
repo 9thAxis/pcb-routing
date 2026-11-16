@@ -12,7 +12,8 @@ _WORD = lambda words: re.compile(r"(^|[^A-Za-z])(" + words + r")\d*([^A-Za-z]|$)
 NAMED = [("crystal", _WORD("XTAL|XTALIN|XTALOUT|OSC|OSCIN|OSCOUT|XIN|XOUT|OSC32|XTAL32")),
          ("clock", _WORD("CLK|CLOCK|SCK|SCLK|SCL|MCLK|BCLK|LRCLK|XCLK|PCLK|REFCLK|TCK")),
          ("noisy", _WORD("SW|LX|PHASE|BOOT|BST|GATE|HDRV|LDRV|PWM")),
-         ("sensitive", _WORD("VREF|AREF|REFP|REFN|AIN|AINP|AINN|ADC|SENSE|VSENSE|ISENSE|SENSEP|SENSEN|MIC|ANT|RF|NTC|RTD|THERM"))]
+         ("sensitive",
+          _WORD("VREF|AREF|REFP|REFN|AIN|AINP|AINN|ADC|SENSE|VSENSE|ISENSE|SENSEP|SENSEN|MIC|ANT|RF|NTC|RTD|THERM"))]
 CRYSTAL_PART = re.compile(r"^(Y|XTAL)\d")  # (not X: that is a connector as often)
 CAPACITOR_PART = re.compile(r"^C\d")
 CHIP_PART = re.compile(r"^(U|IC)\d")

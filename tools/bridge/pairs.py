@@ -85,7 +85,8 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
         stubs = [[], []]
         for end in (0, 1):
             for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
-                entries.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], last=True), width=width))
+                entries.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], last=True),
+                                    width=width))
                 stubs[end].append(entries[-1]["key"])
         said.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs))
         first, second = (held[end] for end in trunk["ends"])

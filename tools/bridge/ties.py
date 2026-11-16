@@ -13,7 +13,8 @@ KEEP_OFF = 0.3  # mm beyond the clearance a zone keeps: what is left of a zone n
 TIE_ROUNDS = 3  # how often pads with too few spokes are given a track of their own to their zone
 
 
-def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(), options=None, say=print, laid_before=None):
+def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(), options=None, say=print,
+                laid_before=None):
     """See to every pad that is tied to its zone by fewer spokes than the board asks for. Tracks of other nets
     across its spokes are what starve a pad: one that this run starved is seen to whatever its net; one that
     the board came with (`before`: those, as (pad, layer)) as well, if its net is among those named in `only`
@@ -55,7 +56,8 @@ def tied_by_tracks(board, settings, engine, outcome, ours, tried, options, say):
     the board's picture after them and the pads still starved. `tried`: (pad, layer) -> the points of its
     zone already tried, which is added to."""
     routed_on = lambda picture: Rules.of(picture, settings).routing_layers(picture.layers)
-    starved_of = lambda picture: [t for t in picture.thermals if t.spokes < t.least and ours(t) and t.layer in routed_on(picture)]
+    starved_of = lambda picture: [t for t in picture.thermals
+                                  if t.spokes < t.least and ours(t) and t.layer in routed_on(picture)]
     picture, starved = None, []
     for round_ in range(TIE_ROUNDS + 1):
         picture = board.read()
@@ -116,7 +118,8 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     reach = {}  # (pad, layer) -> (its middle, how far from it a track of another net is too near)
     for thermal in starved:
         at = picture.pads[thermal.pad].at
-        beyond = max((math.dist(at, p) for p in thermal.outline), default=0.0)  # (the outline is half the gap from the pad)
+        # (the outline is half the gap from the pad)
+        beyond = max((math.dist(at, p) for p in thermal.outline), default=0.0)
         reach[thermal.pad, thermal.layer] = (at, beyond + thermal.gap / 2 + thermal.clearance + KEEP_OFF)
     def near(net, layer, a, b, half):
         for thermal in starved:
@@ -124,13 +127,16 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
             vx, vy = b[0] - a[0], b[1] - a[1]
             l2 = vx * vx + vy * vy
             t = max(0.0, min(1.0, ((at[0] - a[0]) * vx + (at[1] - a[1]) * vy) / l2)) if l2 else 0.0
-            if net != thermal.net and layer in (None, thermal.layer) and math.dist(at, (a[0] + t * vx, a[1] + t * vy)) < far + half:
+            nearest = (a[0] + t * vx, a[1] + t * vy)
+            if net != thermal.net and layer in (None, thermal.layer) and math.dist(at, nearest) < far + half:
                 return True
         return False
     new = lambda key: key not in laid_before
     laid_now = (t for t in picture.tracks if t.net and new((t.net, t.layer, tuple(t.a), tuple(t.b))))
     culprits = {t.net for t in laid_now if near(t.net, t.layer, t.a, t.b, t.width / 2)}
-    culprits |= {v.net for v in picture.vias if v.net and new((v.net, None, tuple(v.at), tuple(v.at))) and near(v.net, None, v.at, v.at, v.width / 2)}
+    culprits |= {v.net for v in picture.vias
+                 if v.net and new((v.net, None, tuple(v.at), tuple(v.at)))
+                 and near(v.net, None, v.at, v.at, v.width / 2)}
     culprits = sorted(culprits)
     if not culprits or len(culprits) >= ENGINE_NETS:
         return False
@@ -141,7 +147,8 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     # (as single nets, without the links of capacitors: this is a repair)
     rules = Rules.of(after, replace(settings, pairs=False, decoupling=False))
     rules = Rules.of(after, replace(rules.settings, step=rules.step(set(culprits))))
-    closed = [dict(rings=[disc(at, far)], layers=[layer], tracks=True, vias=True) for (_, layer), (at, far) in reach.items()]
+    closed = [dict(rings=[disc(at, far)], layers=[layer], tracks=True, vias=True)
+              for (_, layer), (at, far) in reach.items()]
     problem = problem_of(after, rules, engine.ask, only=set(culprits), options=options, closed=closed)
     solution = engine.route(problem) if problem["nets"] else dict(status="routed", nets=[])
     done = solution["status"] == "routed"
@@ -152,8 +159,10 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     if not done:
         board.rewind(mark)
         board.put_back()
-        say(f"no way clear of {', '.join(sorted({part(t) for t in starved}))} for {', '.join(culprits)}: left as they were")
+        say(f"no way clear of {', '.join(sorted({part(t) for t in starved}))} for {', '.join(culprits)}: "
+            "left as they were")
         return False
     outcome.tracks, outcome.vias = outcome.tracks - taken[0] + added[0], outcome.vias - taken[1] + added[1]
-    say(f"laid again clear of {', '.join(sorted({part(t) for t in starved}))}, whose spokes they cut: {', '.join(culprits)}")
+    say(f"laid again clear of {', '.join(sorted({part(t) for t in starved}))}, whose spokes they cut: "
+        f"{', '.join(culprits)}")
     return True

@@ -58,19 +58,22 @@ class WithEngine(unittest.TestCase):
 
     def runs(self):
         """The problems the engine was given, in order."""
-        files = sorted((self.dir / "runs").glob("*.json"), key=lambda f: int(f.stem)) if (self.dir / "runs").exists() else []
+        files = sorted((self.dir / "runs").glob("*.json"),
+                       key=lambda f: int(f.stem)) if (self.dir / "runs").exists() else []
         return [json.loads(f.read_text()) for f in files]
 
     def route(self, board, settings=None, **more):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, settings or k.Settings(pours=False), k.Engine(ENGINE), say=self.said.append, **more)  # (boards without zones)
+            # (boards without zones)
+            return k.route(board, settings or k.Settings(pours=False), k.Engine(ENGINE), say=self.said.append, **more)
 
 
 class TwoTries(WithEngine):
     def test_all_joined_at_the_first_try(self):
         board = FakeBoard(3)
         outcome = self.route(board)
-        self.assertEqual((outcome.status, outcome.wanted, outcome.left, outcome.tracks, outcome.vias, outcome.failure), ("routed", 3, 0, 3, 0, None))
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left, outcome.tracks, outcome.vias, outcome.failure),
+                         ("routed", 3, 0, 3, 0, None))
         self.assertEqual(len(self.runs()), 1)
         self.assertEqual(self.said, [])
         self.assertEqual(board.sizes["N000"], (0.25, [0.6, 0.3]))
@@ -96,7 +99,8 @@ class TwoTries(WithEngine):
         self.stubborn(["N001"])
         outcome = self.route(board)
         self.assertEqual(len(self.runs()), 2)  # and no third
-        self.assertEqual((outcome.status, outcome.wanted, outcome.left, outcome.tracks, outcome.failure), ("unroutable", 3, 1, 2, None))
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left, outcome.tracks, outcome.failure),
+                         ("unroutable", 3, 1, 2, None))
 
     def test_only_the_nets_asked_for(self):
         board = FakeBoard(4)
@@ -120,18 +124,23 @@ class TwoTries(WithEngine):
 class Steps(WithEngine):
     def coarse_first(self, board, **more):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return k.route(board, k.Settings(step=None, coarse_first=True, pours=False), k.Engine(ENGINE), say=self.said.append, **more)
+            return k.route(board, k.Settings(step=None, coarse_first=True, pours=False), k.Engine(ENGINE),
+                           say=self.said.append, **more)
 
     def test_the_step_follows_from_the_rules(self):
         picture = FakeBoard(1).read()
-        rules = lambda settings, **sizes: k.Rules(picture.minima, {"N000": k.NetClass(via_size=0.6, via_drill=0.3, **sizes)}, settings=settings)
+        rules = lambda settings, **sizes: k.Rules(picture.minima,
+                                                  {"N000": k.NetClass(via_size=0.6, via_drill=0.3, **sizes)},
+                                                  settings=settings)
         step = lambda **sizes: rules(k.Settings(step=None), **sizes).step(["N000"])
         # 0.25 mm tracks 0.22 mm apart (with the slack): 0.47 mm from one to the next, nine cells of 0.05 mm
         self.assertEqual(step(track_width=0.25, clearance=0.2), 0.05)
         self.assertEqual(step(track_width=0.5, clearance=0.3), 0.1)
         # a step the user chose is kept
-        self.assertEqual(rules(k.Settings(step=0.08), track_width=0.25, clearance=0.2).tries(["N000"]), [(0.08, False), (0.08, True)])
-        self.assertEqual(rules(k.Settings(step=0.08, coarse_first=True), track_width=0.25, clearance=0.2).tries(["N000"]),
+        self.assertEqual(rules(k.Settings(step=0.08), track_width=0.25, clearance=0.2).tries(["N000"]),
+                         [(0.08, False), (0.08, True)])
+        self.assertEqual(rules(k.Settings(step=0.08, coarse_first=True), track_width=0.25,
+                               clearance=0.2).tries(["N000"]),
                          [(0.16, False), (0.08, False), (0.08, True)])
 
     def test_all_joined_on_the_coarse_grid(self):
@@ -204,9 +213,11 @@ class EngineFailure(WithEngine):
         self.assertIn("told to fail", err)
 
     def test_main_reports_and_saves_a_complete_run(self):
-        status, saved, out, err = self.main(FakeBoard(2), "--problem", str(self.dir / "p.json"), "--solution", str(self.dir / "s.json"))
+        status, saved, out, err = self.main(FakeBoard(2), "--problem", str(self.dir / "p.json"), "--solution",
+                                            str(self.dir / "s.json"))
         self.assertEqual((status, saved), (0, ["out.kicad_pcb"]))
-        self.assertEqual(out.splitlines()[-1], "routed: 2 of 2 nets joined, 2 track segments and 0 vias added; saved out.kicad_pcb")
+        self.assertEqual(out.splitlines()[-1],
+                         "routed: 2 of 2 nets joined, 2 track segments and 0 vias added; saved out.kicad_pcb")
         self.assertEqual(len(json.loads((self.dir / "p.json").read_text())["nets"]), 2)
         self.assertEqual(json.loads((self.dir / "s.json").read_text())["status"], "routed")
 
@@ -214,7 +225,8 @@ class EngineFailure(WithEngine):
         self.stubborn(["N001"])
         status, saved, out, err = self.main(FakeBoard(2))
         self.assertEqual((status, saved), (1, ["out.kicad_pcb"]))
-        self.assertEqual(out.splitlines()[-1], "unroutable: 1 of 2 nets joined, 1 track segments and 0 vias added; saved out.kicad_pcb")
+        self.assertEqual(out.splitlines()[-1],
+                         "unroutable: 1 of 2 nets joined, 1 track segments and 0 vias added; saved out.kicad_pcb")
 
     def test_main_with_nothing_to_route(self):
         board = FakeBoard(2)
@@ -232,9 +244,11 @@ class EngineFailure(WithEngine):
         kicad = mock.patch.multiple(support.stub_pcbnew(), create=True, LoadBoard=lambda path: mock.Mock(),
                                     SaveBoard=lambda path, b: saved.append(path), ZONE_FILLER=lambda b: mock.Mock())
         out, err = io.StringIO(), io.StringIO()
-        with kicad, mock.patch.object(support.command(), "KicadBoard", lambda b, ignored, ask, pours=True: board), redirect_stdout(out), redirect_stderr(err):
+        with kicad, mock.patch.object(support.command(), "KicadBoard", lambda b, ignored, ask,
+                                      pours=True: board), redirect_stdout(out), redirect_stderr(err):
             (self.dir / "in.kicad_pcb").write_text("")
-            status = k.main([str(self.dir / "in.kicad_pcb"), "-o", "out.kicad_pcb", "--engine", str(engine), "--no-pours", *more])
+            status = k.main([str(self.dir / "in.kicad_pcb"), "-o", "out.kicad_pcb", "--engine", str(engine),
+                             "--no-pours", *more])
         return status, saved, out.getvalue(), err.getvalue()
 
 
@@ -250,7 +264,8 @@ class Batches(WithEngine):
 
     def test_nets_that_go_together_are_not_parted(self):
         names = [f"N{i:03}" for i in range(300)]
-        first, second = k.batches(names, together=[("N149", "N150"), ("N010", "N020"), ("N299", "N000"), ("N007", "GONE")])
+        first, second = k.batches(names,
+                                  together=[("N149", "N150"), ("N010", "N020"), ("N299", "N000"), ("N007", "GONE")])
         self.assertEqual((len(first), len(second)), (150, 150))
         self.assertTrue({"N149", "N150", "N010", "N020"} <= set(first))  # the second of two joins the first
         self.assertTrue({"N299", "N000"} <= set(second))
@@ -297,7 +312,8 @@ class RunEngine(WithEngine):
 
     def test_solution_and_kept_files(self):
         with redirect_stdout(io.StringIO()) as out:
-            solution = k.run_engine(self.problem, ENGINE, threads=2, problem_path=self.dir / "p.json", solution_path=self.dir / "s.json")
+            solution = k.run_engine(self.problem, ENGINE, threads=2, problem_path=self.dir / "p.json",
+                                    solution_path=self.dir / "s.json")
         self.assertEqual(solution["status"], "routed")
         self.assertEqual(json.loads((self.dir / "p.json").read_text()), self.problem)
         self.assertEqual(json.loads((self.dir / "s.json").read_text()), solution)
@@ -364,7 +380,8 @@ class Decoupling(WithEngine):
         self.assertEqual(len(second["nets"][0]["terminals"]), 3)
         self.assertEqual(board.writes, [["VCC"]])  # nothing of the first run was kept
         self.assertEqual(len(board.reads), 1)
-        self.assertEqual(self.said, ["not all joined with the capacitors linked to their pins: again without those links for VCC"])
+        self.assertEqual(self.said,
+                         ["not all joined with the capacitors linked to their pins: again without those links for VCC"])
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 1, 0))
 
 
@@ -375,8 +392,10 @@ class CapacitorAmongOthers(FakeBoard):
         plain = super().read(nets)
         base = len(plain.pads)
         pads = plain.pads + [support.land(k, "VCC", 2.0, 20.0, part="U1"), support.land(k, "VCC", 4.0, 20.0, part="C1"),
-                             support.land(k, "GND", 4.0, 22.0, part="C1"), support.land(k, "VCC", 18.0, 20.0, part="J1"),
-                             support.land(k, "GND", 2.0, 22.0, part="U1"), support.land(k, "GND", 18.0, 22.0, part="J1")]
+                             support.land(k, "GND", 4.0, 22.0, part="C1"),
+                             support.land(k, "VCC", 18.0, 20.0, part="J1"),
+                             support.land(k, "GND", 2.0, 22.0, part="U1"),
+                             support.land(k, "GND", 18.0, 22.0, part="J1")]
         groups = dict(plain.groups, GND=[[base + 2, base + 4, base + 5]],
                       VCC=[[base, base + 1, base + 3]] if "VCC" in self.joined else [[base], [base + 1], [base + 3]])
         picture = support.picture(k, pads, groups)

@@ -47,7 +47,8 @@ class Geometry(unittest.TestCase):
 
 class NetSelection(unittest.TestCase):
     def reference(self, **more):
-        pads = [pad("A", 0, 0), pad("A", 3, 4), pad("B", 0, 9), pad("B", 5, 9), pad("LONE", 9, 9), pad("", 20, 20), pad("POUR", 0, 20), pad("POUR", 5, 20)]
+        pads = [pad("A", 0, 0), pad("A", 3, 4), pad("B", 0, 9), pad("B", 5, 9), pad("LONE", 9, 9), pad("", 20, 20),
+                pad("POUR", 0, 20), pad("POUR", 5, 20)]
         tracks = [track("A", (0, 0), (3, 4)), track("LONE", (9, 9), (12, 9)), track("POUR", (0, 20), (5, 20))]
         return board(pads, tracks, zone_nets=["POUR"], **more)
 
@@ -75,7 +76,8 @@ class NetSelection(unittest.TestCase):
     def test_a_board_is_usable_when_every_routing_says_it_is_complete(self):
         ref = self.reference()
         self.assertIsNone(m.unusable(ref, {"x": self.reference(unconnected=0)}))
-        self.assertIn("3 open", m.unusable(ref, {"x": self.reference(unconnected=0), "y": self.reference(unconnected=3)}))
+        self.assertIn("3 open",
+                      m.unusable(ref, {"x": self.reference(unconnected=0), "y": self.reference(unconnected=3)}))
 
     def test_a_dump_that_does_not_say_is_not_taken_as_complete(self):
         self.assertIn("does not say", m.unusable(self.reference(), {"x": self.reference()}))
@@ -96,10 +98,12 @@ class Rules(unittest.TestCase):
                  patterns=[["VCC*", "POWER"], ["SIG", "Empty"]], assignments={"GND": ["POWER"], "OLD": "POWER"})
 
     def test_the_reference_s_rules_come_first(self):
-        self.assertEqual(m.board_rules(board(rules={"clearance": 0.1}), {"x": board(rules={"clearance": 0.3})}), {"clearance": 0.1})
+        self.assertEqual(m.board_rules(board(rules={"clearance": 0.1}), {"x": board(rules={"clearance": 0.3})}),
+                         {"clearance": 0.1})
 
     def test_else_those_of_the_first_routing_that_has_any(self):
-        self.assertEqual(m.board_rules(board(), {"x": board(), "y": board(rules={"clearance": 0.3})}), {"clearance": 0.3})
+        self.assertEqual(m.board_rules(board(), {"x": board(), "y": board(rules={"clearance": 0.3})}),
+                         {"clearance": 0.3})
         self.assertEqual(m.board_rules(board(), {"x": board()}), {})
 
     def test_clearance(self):
@@ -165,7 +169,8 @@ class LengthAndShortSegments(unittest.TestCase):
         self.assertAlmostEqual(counts["mm"], 7.0)
 
     def test_a_segment_shorter_than_twice_its_width_is_short(self):
-        counts, _ = shapes([track("A", (0, 0), (0.39, 0), w=0.2), track("A", (0.39, 0), (0.79, 0.01), w=0.2), track("A", (5, 5), (5.5, 5), w=0.3)])
+        counts, _ = shapes([track("A", (0, 0), (0.39, 0), w=0.2), track("A", (0.39, 0), (0.79, 0.01), w=0.2),
+                            track("A", (5, 5), (5.5, 5), w=0.3)])
         self.assertEqual(counts["short"], 2)
 
     def test_vias_of_the_net_are_counted(self):
@@ -242,7 +247,9 @@ class General(unittest.TestCase):
 
     def test_figures_are_sums_over_nets_not_means_of_ratios(self):
         pads = [pad("A", 0, 0), pad("A", 10, 0), pad("B", 0, 5), pad("B", 1, 5)]
-        d = board(pads, [track("A", (0, 0), (10, 0)), track("B", (0, 5), (0, 7)), track("B", (0, 7), (1, 7)), track("B", (1, 7), (1, 5))])
+        d = board(pads,
+                  [track("A", (0, 0), (10, 0)), track("B", (0, 5), (0, 7)), track("B", (0, 7), (1, 7)),
+                   track("B", (1, 7), (1, 5))])
         tally, counts = m.general_measures(d, 0.2, m.compared_nets(d))
         self.assertAlmostEqual(m.general_figures(tally, 1.0)["detour"], 15.0 / 11.0)
         self.assertEqual(tally["connections"], 2)
@@ -259,7 +266,8 @@ class General(unittest.TestCase):
 
 def bus_board(tracks, nets=("A", "B", "C"), vias=()):
     """Two connectors ten mm apart with their pads in a row at 1 mm, joined net by net."""
-    pads = [pad(n, x, i, ref=ref, num=str(i + 1), w=0.5, h=0.5) for ref, x in (("J1", 0), ("J2", 10)) for i, n in enumerate(nets)]
+    pads = [pad(n, x, i, ref=ref, num=str(i + 1), w=0.5, h=0.5) for ref, x in (("J1", 0), ("J2", 10))
+            for i, n in enumerate(nets)]
     return board(pads, tracks, vias)
 
 
@@ -276,7 +284,8 @@ class Buses(unittest.TestCase):
 
     def test_nets_side_by_side_on_one_part_only_are_not_a_bus(self):
         d = bus_board(straight())
-        d["pads"] = [p for p in d["pads"] if p["ref"] == "J1"] + [pad(n, 10 + 5 * i, 7 * i, ref=f"R{i}") for i, n in enumerate("ABC")]
+        d["pads"] = [p for p in d["pads"]
+                     if p["ref"] == "J1"] + [pad(n, 10 + 5 * i, 7 * i, ref=f"R{i}") for i, n in enumerate("ABC")]
         self.assertEqual(m.bus_pairs(d), ([], 0))
 
     def test_a_net_the_reference_did_not_route_or_poured_breaks_the_bus(self):
@@ -335,7 +344,8 @@ class Buses(unittest.TestCase):
 def decoupled(tracks, vias=(), chip_layers=("F.Cu",)):
     """A capacitor C1 between VCC and GND, 3 mm from pin 1 of U1 on VCC."""
     pads = [pad("VCC", 0, 0, ref="C1", num="1", w=0.6, h=0.6), pad("GND", 1, 0, ref="C1", num="2", w=0.6, h=0.6),
-            pad("VCC", 0, 3, ref="U1", num="1", w=0.6, h=0.6, layers=chip_layers), pad("GND", 5, 3, ref="U1", num="2", w=0.6, h=0.6)]
+            pad("VCC", 0, 3, ref="U1", num="1", w=0.6, h=0.6, layers=chip_layers),
+            pad("GND", 5, 3, ref="U1", num="2", w=0.6, h=0.6)]
     return board(pads, tracks, vias)
 
 
@@ -373,13 +383,15 @@ class CircuitNets(unittest.TestCase):
         self.assertEqual(m.circuit_nets(d)["decaps"][0][2]["ref"], "U2")
 
     def test_crystal_nets_are_those_on_y_or_xtal_parts_that_are_not_power(self):
-        d = board([pad("XI", 0, 0, ref="Y1"), pad("XI", 3, 0, ref="U1"), pad("GND", 0, 1, ref="Y1"), pad("GND", 3, 1, ref="U1"),
+        d = board([pad("XI", 0, 0, ref="Y1"), pad("XI", 3, 0, ref="U1"), pad("GND", 0, 1, ref="Y1"),
+                   pad("GND", 3, 1, ref="U1"),
                    pad("XO", 0, 2, ref="XTAL2"), pad("XO", 3, 2, ref="U1"), pad("NC", 0, 3, ref="Y1"),
                    pad("SIG", 0, 4, ref="X3"), pad("SIG", 3, 4, ref="U1")])  # (X3 is a connector as often)
         self.assertEqual(m.circuit_nets(d)["crystals"], ["XI", "XO"])
 
     def test_differential_pairs_by_name(self):
-        self.assertEqual(m.pair_halves(["USB_DP", "USB_DM", "CLK_P", "CLK_N", "TX+", "TX-", "ETH-P", "ETH-N", "SDA", "LONE_P"]),
+        self.assertEqual(m.pair_halves(["USB_DP", "USB_DM", "CLK_P", "CLK_N", "TX+", "TX-", "ETH-P", "ETH-N", "SDA",
+                                        "LONE_P"]),
                          [("CLK_N", "CLK_P"), ("ETH-N", "ETH-P"), ("TX+", "TX-"), ("USB_DM", "USB_DP")])
 
     def test_power_nets_are_not_pairs(self):
@@ -396,7 +408,8 @@ class CopperPath(unittest.TestCase):
         self.assertEqual(self.path(decoupled([track("VCC", (0, 0), (0, 3))])), (3.0, False))
 
     def test_through_a_via(self):
-        d = decoupled([track("VCC", (0, 0), (0, 1)), track("VCC", (0, 1), (0, 3), layer="B.Cu")], [via("VCC", 0, 1)], chip_layers=("F.Cu", "B.Cu"))
+        d = decoupled([track("VCC", (0, 0), (0, 1)), track("VCC", (0, 1), (0, 3), layer="B.Cu")], [via("VCC", 0, 1)],
+                      chip_layers=("F.Cu", "B.Cu"))
         self.assertEqual(self.path(d), (3.0, True))
 
     def test_a_via_on_the_net_but_not_on_the_way_does_not_count(self):
@@ -415,7 +428,8 @@ class CopperPath(unittest.TestCase):
     def test_a_track_that_ends_on_another_branches_from_it(self):
         d = decoupled([track("VCC", (-4, 1), (4, 1)), track("VCC", (0, 0), (0, 1)), track("VCC", (0, 1), (0, 3))])
         self.assertEqual(self.path(d), (3.0, False))
-        tee = decoupled([track("VCC", (0, 0), (0, 5)), track("VCC", (0, 3), (3, 3))])  # the pin sits where the branch leaves
+        # the pin sits where the branch leaves
+        tee = decoupled([track("VCC", (0, 0), (0, 5)), track("VCC", (0, 3), (3, 3))])
         self.assertEqual(self.path(tee), (3.0, False))
 
     def test_a_track_that_stops_short_or_on_the_wrong_layer_does_not_join(self):
@@ -444,7 +458,8 @@ class Circuit(unittest.TestCase):
         self.assertEqual(f["decap_via_between_percent"], 0.0)
 
     def test_a_decoupling_path_through_a_via(self):
-        d = decoupled([track("VCC", (0, 0), (0, 1)), track("VCC", (0, 1), (0, 3), layer="B.Cu")], [via("VCC", 0, 1)], chip_layers=("F.Cu", "B.Cu"))
+        d = decoupled([track("VCC", (0, 0), (0, 1)), track("VCC", (0, 1), (0, 3), layer="B.Cu")], [via("VCC", 0, 1)],
+                      chip_layers=("F.Cu", "B.Cu"))
         f = m.circuit_figures(self.measure(d))
         self.assertAlmostEqual(f["decap_path_over_straight_median"], 1.0)
         self.assertEqual(f["decap_via_between_percent"], 100.0)
@@ -497,10 +512,11 @@ class Circuit(unittest.TestCase):
         self.assertEqual(f["pair_same_vias_percent"], 100.0)
 
     def test_a_pair_that_splits_is_coupled_for_part_of_its_length(self):
-        second = [track("D_P", (0, 0.5), (4, 0.5), w=0.2), track("D_P", (4, 0.5), (4, 6), w=0.2), track("D_P", (4, 6), (10, 6), w=0.2),
-                  track("D_P", (10, 6), (10, 0.5), w=0.2)]
+        second = [track("D_P", (0, 0.5), (4, 0.5), w=0.2), track("D_P", (4, 0.5), (4, 6), w=0.2),
+                  track("D_P", (4, 6), (10, 6), w=0.2), track("D_P", (10, 6), (10, 0.5), w=0.2)]
         f = m.circuit_figures(self.measure(self.pair(second, [via("D_P", 4, 6)])))
-        near = math.sqrt(0.8 ** 2 - 0.5 ** 2)  # how far past the other half's end the first is still within 0.8 mm of it
+        # how far past the other half's end the first is still within 0.8 mm of it
+        near = math.sqrt(0.8 ** 2 - 0.5 ** 2)
         self.assertAlmostEqual(f["pair_coupled_percent"], 100 * (4 + 2 * near) / 10, delta=0.1)
         self.assertAlmostEqual(f["pair_mismatch_percent"], 100 * (21 - 10) / 21)
         self.assertEqual(f["pair_same_vias_percent"], 0.0)
@@ -531,7 +547,8 @@ class PadExits(unittest.TestCase):
         self.assertEqual((t["exits"], t["grazing"]), (1, 0))
 
     def test_the_track_is_followed_out_of_the_pad(self):
-        t = self.exits([track("A", (0, 0), (0.3, 0)), track("A", (0.3, 0), (0.4, 0.3)), track("A", (0.4, 0.3), (0.4, 3))])
+        t = self.exits([track("A", (0, 0), (0.3, 0)), track("A", (0.3, 0), (0.4, 0.3)),
+                        track("A", (0.4, 0.3), (0.4, 3))])
         self.assertEqual((t["exits"], t["grazing"]), (1, 0))
 
     def test_a_track_that_branches_or_ends_inside_the_pad_is_not_an_exit(self):
@@ -555,7 +572,8 @@ class PadExits(unittest.TestCase):
     def test_figures(self):
         t = m.Tally()
         t.update({"exits": 8, "grazing": 2, "long pads": 4, "through long side": 1})
-        self.assertEqual(m.exit_figures(t), dict(exits=8, grazing_percent=25.0, long_pad_exits=4, through_long_side_percent=25.0))
+        self.assertEqual(m.exit_figures(t),
+                         dict(exits=8, grazing_percent=25.0, long_pad_exits=4, through_long_side_percent=25.0))
         self.assertEqual(m.exit_figures(m.Tally())["grazing_percent"], 0.0)
 
 

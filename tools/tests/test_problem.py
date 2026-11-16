@@ -8,19 +8,24 @@ import support
 k = support.bridge()
 
 # The fields of src/model.rs: (all, required). The engine refuses unknown ones.
-PROBLEM = ({"window", "step", "layers", "copper", "holes", "regions", "rules", "nets", "pairs", "options"}, {"window", "step", "layers", "nets"})
+PROBLEM = ({"window", "step", "layers", "copper", "holes", "regions", "rules", "nets", "pairs", "options"},
+           {"window", "step", "layers", "nets"})
 COPPER = {"seg": {"a", "b", "w"}, "circle": {"c", "r"}, "poly": {"rings"}}
 COPPER_COMMON = ({"t", "net", "layers", "pad"}, {"t", "net", "layers"})
 HOLE = ({"xy", "net"}, {"xy", "net"})
 REGION = ({"rings", "layers", "tracks", "vias"}, {"rings"})
-RULES = ({"hole_centre_mm", "pad_drill_margin_mm", "via_in_pad", "region_margin_mm", "new_clearance_mm", "quiet_clearance_mm"}, set())
-NET = ({"key", "net", "width", "via", "layers", "clearance", "terminals", "via_penalty_mm", "layer_cost", "yield", "weight", "max_mm",
-        "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus", "bus_lane"}, {"key", "net", "width", "via", "layers", "clearance", "terminals"})
+RULES = ({"hole_centre_mm", "pad_drill_margin_mm", "via_in_pad", "region_margin_mm", "new_clearance_mm",
+          "quiet_clearance_mm"}, set())
+NET = ({"key", "net", "width", "via", "layers", "clearance", "terminals", "via_penalty_mm", "layer_cost", "yield",
+        "weight", "max_mm",
+        "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus", "bus_lane"},
+        {"key", "net", "width", "via", "layers", "clearance", "terminals"})
 CLEARANCE = ({"default", "nets"}, {"default"})
 TERMINAL = ({"xy", "layers", "piece", "turn"}, {"xy", "layers"})
-OPTIONS = ({"max_iterations", "present_start", "present_growth", "present_max", "history_step", "refine_passes", "variants", "negotiate",
-            "own_hole_free", "bend_mm", "two_pass", "sweep_margin", "exact_after", "stall_after", "patience", "drop_conflicts",
-            "threads", "max_states", "bus_pull", "bus_cross"}, set())
+OPTIONS = ({"max_iterations", "present_start", "present_growth", "present_max", "history_step", "refine_passes",
+            "variants", "negotiate",
+            "own_hole_free", "bend_mm", "two_pass", "sweep_margin", "exact_after", "stall_after", "patience",
+            "drop_conflicts", "threads", "max_states", "bus_pull", "bus_cross"}, set())
 
 
 def is_point(p):
@@ -91,12 +96,14 @@ class Shape(unittest.TestCase):
 
     def build(self, picture, settings=None, **more):
         # the distances these tests expect are worked out with a slack of 0.02 mm
-        return self.check(k.problem_of(picture, k.Rules.of(picture, settings or k.Settings(slack=0.02)), support.ask, **more))
+        return self.check(k.problem_of(picture, k.Rules.of(picture, settings or k.Settings(slack=0.02)), support.ask,
+                                       **more))
 
 
 class Structure(Shape):
     def board(self):
-        pads = [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2), support.pin(k, "B", 2, 6), support.land(k, "B", 8, 6, layer="B.Cu"),
+        pads = [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2), support.pin(k, "B", 2, 6),
+                support.land(k, "B", 8, 6, layer="B.Cu"),
                 support.land(k, "C", 12, 2), support.land(k, "C", 14, 2), support.land(k, None, 16, 8),
                 support.pin(k, None, 18, 8, drill=2.0)]
         groups = {"A": [[0], [1]], "B": [[2], [3]], "C": [[4, 5]]}  # C is joined already
@@ -132,7 +139,9 @@ class Structure(Shape):
 
     def test_rules(self):
         rules = self.build(self.board())["rules"]
-        self.assertEqual(rules, dict(hole_centre_mm=0.57, pad_drill_margin_mm=0.0, region_margin_mm=0.32, new_clearance_mm=0.22))
+        self.assertEqual(rules,
+                         dict(hole_centre_mm=0.57, pad_drill_margin_mm=0.0, region_margin_mm=0.32,
+                              new_clearance_mm=0.22))
 
     def test_copper_of_every_kind(self):
         copper = self.build(self.board())["copper"]
@@ -147,7 +156,8 @@ class Structure(Shape):
     def test_outline_and_rule_areas_become_regions(self):
         regions = self.build(self.board())["regions"]
         frame = [[-2.0, -2.0], [22.0, -2.0], [22.0, 12.0], [-2.0, 12.0]]
-        self.assertEqual(regions[0], dict(rings=[frame, [[0, 0], [20, 0], [20, 10], [0, 10]], [[9, 4], [11, 4], [11, 5], [9, 5]]]))
+        self.assertEqual(regions[0],
+                         dict(rings=[frame, [[0, 0], [20, 0], [20, 10], [0, 10]], [[9, 4], [11, 4], [11, 5], [9, 5]]]))
         # a rule area names only the layers that carry routes
         self.assertEqual(regions[1], dict(rings=support.square(k, 16, 3), layers=["F.Cu"], tracks=True, vias=False))
 
@@ -198,9 +208,11 @@ class PadsAndHoles(Shape):
         copper = self.build(p)["copper"]
         strokes = [c for c in copper if c["t"] == "seg"]
         self.assertEqual(len(strokes), 4)
-        self.assertTrue(all(c["w"] == 0.6 and c["net"] == "A" and c["layers"] == ["F.Cu"] and not c.get("pad") for c in strokes))
+        self.assertTrue(all(c["w"] == 0.6 and c["net"] == "A" and c["layers"] == ["F.Cu"] and not c.get("pad")
+                            for c in strokes))
         ring = support.square(k, 2, 2)[0]
-        self.assertEqual({(tuple(c["a"]), tuple(c["b"])) for c in strokes}, {(tuple(a), tuple(b)) for a, b in zip(ring, ring[1:] + ring[:1])})
+        self.assertEqual({(tuple(c["a"]), tuple(c["b"])) for c in strokes},
+                         {(tuple(a), tuple(b)) for a, b in zip(ring, ring[1:] + ring[:1])})
         self.assertEqual(len([c for c in copper if c["t"] == "poly"]), 2)
 
     def test_mask_opening_without_copper_under_it(self):
@@ -214,7 +226,8 @@ class PadsAndHoles(Shape):
 
     def test_pad_with_an_opening_and_no_copper_layer(self):
         """Defect 1: such a pad used to stop the bridge with an IndexError."""
-        aperture = k.Pad(net=None, at=[5, 5], layers=[], shapes={"F.Cu": [support.square(k, 5, 5)]}, openings={"F.Cu": 0.3})
+        aperture = k.Pad(net=None, at=[5, 5], layers=[], shapes={"F.Cu": [support.square(k, 5, 5)]},
+                         openings={"F.Cu": 0.3})
         p = support.picture(k, [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2), aperture])
         copper = self.build(p)["copper"]
         mine = [c for c in copper if c["net"] is None]
@@ -227,7 +240,9 @@ class PadsAndHoles(Shape):
 
     def test_pad_drills_and_vias_go_through_one_hole_rule(self):
         """Defect 4: a via's hole is kept clear of like a pad's."""
-        p = support.picture(k, [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2), support.pin(k, "B", 5, 5, drill=0.3, half=0.2)])
+        p = support.picture(k,
+                            [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2),
+                             support.pin(k, "B", 5, 5, drill=0.3, half=0.2)])
         p.vias = [k.Via([12, 5], 0.5, 0.3, "C")]
         problem = self.build(p)
         self.assertEqual(problem["holes"], [dict(xy=[5, 5], net="B"), dict(xy=[12, 5], net="C")])
@@ -238,13 +253,17 @@ class PadsAndHoles(Shape):
         self.assertEqual(problem["regions"], [])  # no hole wider than the new vias' drill
 
     def test_a_pads_own_clearance_grows_its_hole(self):
-        p = support.picture(k, [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2), support.pin(k, "B", 5, 5, drill=1.0, clearance=0.6)])
+        p = support.picture(k,
+                            [support.land(k, "A", 2, 2), support.land(k, "A", 8, 2),
+                             support.pin(k, "B", 5, 5, drill=1.0, clearance=0.6)])
         self.assertIn(dict(t="circle", c=[5, 5], r=0.9, net="B", layers=["F.Cu", "B.Cu"]), self.build(p)["copper"])
 
     def test_wide_hole_is_closed_to_vias_round_it(self):
         """Defect 5: the engine's one hole spacing is for holes of the new vias' drill; round a wider hole a
         via-only region makes up the difference, for the hole's own net too."""
-        p = support.picture(k, [support.pin(k, "A", 2, 2, drill=1.0), support.land(k, "A", 8, 2), support.land(k, None, 15, 5)])
+        p = support.picture(k,
+                            [support.pin(k, "A", 2, 2, drill=1.0), support.land(k, "A", 8, 2),
+                             support.land(k, None, 15, 5)])
         problem = self.build(p)
         self.assertEqual(problem["rules"]["hole_centre_mm"], 0.57)
         closed = [g for g in problem["regions"] if g.get("tracks") is False]
@@ -295,15 +314,18 @@ class Buses(unittest.TestCase):
         self.assertEqual({net: lane for net, (_, lane) in k.buses(across + there).items()}, dict(a=0, b=1, c=2, d=3))
 
     def test_two_rows_take_their_lanes_column_by_column(self):
-        header = lambda part, x: [support.land(k, net, x + i % 2, i // 2, half=0.3, part=part) for i, net in enumerate("abcdef")]
+        header = lambda part, x: [support.land(k, net, x + i % 2, i // 2, half=0.3, part=part)
+                                  for i, net in enumerate("abcdef")]
         lanes = {net: lane for net, (_, lane) in k.buses(header("J1", 0) + header("J2", 20)).items()}
         self.assertEqual(lanes, dict(a=0, b=1, c=2, d=3, e=4, f=5))
 
     def test_an_array_of_pads_and_a_bus_not_all_on_one_part_have_no_lanes(self):
-        grid = lambda part, x: [support.land(k, net, x + i % 3, i // 3, half=0.3, part=part) for i, net in enumerate("abcdefghi")]
+        grid = lambda part, x: [support.land(k, net, x + i % 3, i // 3, half=0.3, part=part)
+                                for i, net in enumerate("abcdefghi")]
         self.assertEqual({lane for _, lane in k.buses(grid("U1", 0) + grid("U2", 20)).values()}, {0})
         # b, c, d run between U2 and U3 as well as a, b, c between U1 and U2: one bus, no part with all of it
-        pads = self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c", "d"], 20) + self.row("U3", ["b", "c", "d", "e"], 40) + self.row("U4", ["c", "d", "e"], 60)
+        pads = self.row("U1", ["a", "b", "c"], 0) + self.row("U2", ["a", "b", "c", "d"],
+                                                             20) + self.row("U3", ["b", "c", "d", "e"], 40) + self.row("U4", ["c", "d", "e"], 60)
         bus = k.buses(pads)
         self.assertEqual(len({name for name, _ in bus.values()}), 1)
         self.assertEqual({lane for _, lane in bus.values()}, {0})
@@ -312,7 +334,8 @@ class Buses(unittest.TestCase):
         self.assertEqual(k.buses(self.row("U1", ["a", "b"], 0) + self.row("U2", ["a", "b"], 20)), {})
 
     def test_nets_side_by_side_on_one_part_only_are_not_a_bus(self):
-        pads = self.row("U1", ["a", "b", "c"], 0) + [support.land(k, n, 20 + 10 * i, 0, part=f"R{i}") for i, n in enumerate("abc")]
+        pads = self.row("U1", ["a", "b", "c"], 0) + [support.land(k, n, 20 + 10 * i, 0, part=f"R{i}")
+                                                     for i, n in enumerate("abc")]
         self.assertEqual(k.buses(pads), {})
 
     def test_nets_far_apart_on_a_part_are_not_neighbours(self):
@@ -389,17 +412,21 @@ class Decoupling(unittest.TestCase):
         self.assertEqual(sorted(net["key"] for net in self.board(decoupling=False)["nets"]), ["GND", "VCC"])
 
     def test_a_capacitor_on_a_net_of_two_pads_or_in_series_with_a_signal_is_no_decoupling(self):
-        pads = [support.land(k, "VREF", 0, 0, part="U1"), support.land(k, "VREF", 2, 0, part="C1"), support.land(k, "GND", 2, 2, part="C1"),
+        pads = [support.land(k, "VREF", 0, 0, part="U1"), support.land(k, "VREF", 2, 0, part="C1"),
+                support.land(k, "GND", 2, 2, part="C1"),
                 support.land(k, "GND", 0, 2, part="U1"), support.land(k, "GND", 9, 2, part="J1")]
         self.assertEqual(k.decoupling(pads, [[0], [1]]), [])  # nothing to choose on a net of two pads
         # a capacitor in series: its other net is the two-pad rest of the signal
-        pads = [support.land(k, "TX", 0, 0, part="U1"), support.land(k, "TX", 2, 0, part="C7"), support.land(k, "TX", 2, 4, part="TP1"),
+        pads = [support.land(k, "TX", 0, 0, part="U1"), support.land(k, "TX", 2, 0, part="C7"),
+                support.land(k, "TX", 2, 4, part="TP1"),
                 support.land(k, "TX_OUT", 4, 0, part="C7"), support.land(k, "TX_OUT", 9, 0, part="J1")]
         self.assertEqual(k.decoupling(pads, [[0], [1], [2]]), [])
 
     def test_a_resistor_or_a_capacitor_already_joined_is_no_decoupling(self):
-        pads = [support.land(k, "VCC", 0, 0, part="U1"), support.land(k, "VCC", 2, 0, part="R1"), support.land(k, "X", 2, 2, part="R1"),
-                support.land(k, "VCC", 4, 0, part="C1"), support.land(k, "GND", 4, 2, part="C1"), support.land(k, "VCC", 20, 0, part="J1"),
+        pads = [support.land(k, "VCC", 0, 0, part="U1"), support.land(k, "VCC", 2, 0, part="R1"),
+                support.land(k, "X", 2, 2, part="R1"),
+                support.land(k, "VCC", 4, 0, part="C1"), support.land(k, "GND", 4, 2, part="C1"),
+                support.land(k, "VCC", 20, 0, part="J1"),
                 support.land(k, "GND", 0, 2, part="U1"), support.land(k, "GND", 20, 2, part="J1")]
         self.assertEqual(k.decoupling(pads, [[0], [1], [3, 5]]), [])
         self.assertEqual(k.decoupling(pads, [[0], [1], [3], [5]]), [(2, 0)])
@@ -410,11 +437,16 @@ class Decoupling(unittest.TestCase):
         others = [support.land(k, f"N{i:03}", 40 + i % 2, i, part=f"R{i}") for i in range(280)]
         pads = supply("+3V3", 0) + supply("VCC", 4) + [support.land(k, "GND", 30, 9, part="J1")] + others
         picture = support.picture(k, pads)
-        keys = [net["key"] for net in k.problem_of(picture, k.Rules.of(picture), support.ask, only={"+3V3", "VCC", "GND"} | {f"N{i:03}" for i in range(0, 280, 2)})["nets"]]
+        keys = [net["key"]
+                for net in k.problem_of(picture, k.Rules.of(picture), support.ask,
+                                        only={"+3V3", "VCC", "GND"} | {f"N{i:03}" for i in range(0, 280, 2)})["nets"]]
         self.assertIn("+3V3 | C0", keys)
         self.assertIn("VCC | C4", keys)  # the last net by name has its link all the same
-        named = support.picture(k, supply("V", 0) + [support.land(k, "GND", 30, 9, part="J1"), support.land(k, "GND", 0, 9, part="U1"),
-                                                      support.land(k, "V | C0", 50, 0, part="R1"), support.land(k, "V | C0", 52, 0, part="R2")])
+        named = support.picture(k,
+                                supply("V", 0)
+                                + [support.land(k, "GND", 30, 9, part="J1"), support.land(k, "GND", 0, 9, part="U1"),
+                                                      support.land(k, "V | C0", 50, 0, part="R1"),
+                                                      support.land(k, "V | C0", 52, 0, part="R2")])
         keys = [net["key"] for net in k.problem_of(named, k.Rules.of(named), support.ask)["nets"]]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertIn("V | C0'", keys)
@@ -432,7 +464,8 @@ class Pours(unittest.TestCase):
         picture = support.picture(k, pads, {"GND": [[0, 1], [2], [3]], "SIG": [[4], [5]]})
         pour = k.Pour("GND", "F.Cu", [self.SQUARE])
         picture.pours, picture.fills = {"GND": {0: [0]}}, [pour]
-        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 4, ground=[[[[1.0, 2.6], [3.0, 2.6], [3.0, 3.4], [1.0, 3.4]]]])]
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 4,
+                                      ground=[[[[1.0, 2.6], [3.0, 2.6], [3.0, 3.4], [1.0, 3.4]]]])]
         picture.box = [-1.0, -1.0, 16.0, 14.0]
         return k.problem_of(picture, k.Rules.of(picture, k.Settings(pours=pours, **settings)), support.ask)
 
@@ -447,20 +480,24 @@ class Pours(unittest.TestCase):
         places = {(t["xy"][0], t["xy"][1], t["layers"][0]) for t in piece}
         self.assertIn((5, 5, "F.Cu"), places)  # the pour over the pad on the other side
         self.assertIn((2, 2, "F.Cu"), places)  # a pad of the group
-        self.assertTrue(any(9.5 < x < 10 and y == 5 for x, y, _ in places))  # just inside the edge, beside the pad off it
+        # just inside the edge, beside the pad off it
+        self.assertTrue(any(9.5 < x < 10 and y == 5 for x, y, _ in places))
         self.assertEqual(len(places), len(piece))  # each once
 
     def test_a_pour_and_the_spokes_of_a_pad_are_dear_ground_but_not_to_their_own_net(self):
         dear = self.board()["dear"]
-        self.assertEqual([(d["factor"], d["net"], d["layers"]) for d in dear], [(2.0, "GND", ["F.Cu"]), (4.0, "GND", ["F.Cu"])])
+        self.assertEqual([(d["factor"], d["net"], d["layers"]) for d in dear],
+                         [(2.0, "GND", ["F.Cu"]), (4.0, "GND", ["F.Cu"])])
         self.assertEqual(dear[0]["rings"], [self.SQUARE])
         self.assertNotIn("dear", self.board(pour_cost=1.0, spoke_cost=1.0))
 
     def test_each_net_is_taken_to_its_own_pours_wherever_they_stand_among_the_fills(self):
-        pads = [support.land(k, "GND", 2, 2), support.land(k, "GND", 14, 5), support.land(k, "VCC", 22, 2), support.land(k, "VCC", 34, 5)]
+        pads = [support.land(k, "GND", 2, 2), support.land(k, "GND", 14, 5), support.land(k, "VCC", 22, 2),
+                support.land(k, "VCC", 34, 5)]
         picture = support.picture(k, pads)
         far = [[20.0, 0.0], [30.0, 0.0], [30.0, 10.0], [20.0, 10.0]]
-        picture.fills = [k.Pour("VCC", "F.Cu", [far]), k.Pour("GND", "F.Cu", [self.SQUARE])]  # (not in the order of the nets)
+        # (not in the order of the nets)
+        picture.fills = [k.Pour("VCC", "F.Cu", [far]), k.Pour("GND", "F.Cu", [self.SQUARE])]
         picture.pours = {"GND": {0: [1]}, "VCC": {0: [0]}}
         picture.box = [-1.0, -1.0, 36.0, 11.0]
         nets = {net["key"]: net for net in k.problem_of(picture, k.Rules.of(picture), support.ask)["nets"]}
@@ -474,7 +511,8 @@ class Pours(unittest.TestCase):
         picture = support.picture(k, pads, {"A": [[0, 1], [2]]})
         reached = {"A": [[([4, 2], ["F.Cu"]), ([3, 3], ["B.Cu"])], [([8, 2], ["F.Cu"])]]}
         (net,) = k.build_problem(picture, k.Rules.of(picture), reached)["nets"]
-        self.assertEqual(net["terminals"], [dict(xy=[4, 2], layers=["F.Cu"], piece=0), dict(xy=[3, 3], layers=["B.Cu"], piece=0),
+        self.assertEqual(net["terminals"],
+                         [dict(xy=[4, 2], layers=["F.Cu"], piece=0), dict(xy=[3, 3], layers=["B.Cu"], piece=0),
                                             dict(xy=[8, 2], layers=["F.Cu"])])
 
     def test_without_pours_the_net_is_joined_pad_to_pad(self):

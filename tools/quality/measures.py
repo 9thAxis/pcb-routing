@@ -94,7 +94,8 @@ PAIR_REACH = 4.0         # track widths within which the halves of a differentia
 # the router goes by the same.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from bridge.beside import DECOUPLING_REACH as DECAP_REACH, NEIGHBOUR
-from bridge.names import CAPACITOR_PART as CAPACITOR, CHIP_PART as CHIP, CRYSTAL_PART as CRYSTAL, GROUND, is_supply, pair_names as pair_halves
+from bridge.names import CAPACITOR_PART as CAPACITOR, CHIP_PART as CHIP, CRYSTAL_PART as CRYSTAL
+from bridge.names import GROUND, is_supply, pair_names as pair_halves
 
 
 class Tally(collections.Counter):
@@ -379,7 +380,8 @@ def neighbour_nets(reference):
     near = collections.defaultdict(dict)
     for ref, pads in parts.items():
         for a in pads:
-            others = sorted((math.dist(a["at"], b["at"]), i) for i, b in enumerate(pads) if b is not a and math.dist(a["at"], b["at"]) > 1e-6)
+            others = sorted((math.dist(a["at"], b["at"]), i) for i, b in enumerate(pads)
+                            if b is not a and math.dist(a["at"], b["at"]) > 1e-6)
             if not others:
                 continue
             for dist, i in others:
@@ -445,7 +447,8 @@ def bus_measures(dump, pairs):
             continue
         tally["pairs"] += 1
         tally["same vias"] += vias[a] == vias[b]
-        tally["crossing"] += any(sa.crosses(sb) for l, ss in la.items() for sa in ss for l2, s2 in lb.items() if l2 != l for sb in s2)
+        tally["crossing"] += any(sa.crosses(sb) for l, ss in la.items() for sa in ss for l2, s2 in lb.items()
+                                 if l2 != l for sb in s2)
         whole = MultiLineString([s for ss in la.values() for s in ss]).length
         tally["alongside"] += share_near(la, lb, BUS_REACH * pitch) / max(whole, 1e-9)
         tally["mismatch"] += abs(length[a] - length[b]) / max(length[a], length[b], 1e-9)
@@ -487,10 +490,12 @@ def circuit_nets(reference):
         if CAPACITOR.match(ref) and len(ps) == 2:
             for supply, ground, pad in ((ps[0]["net"], ps[1]["net"], ps[0]), (ps[1]["net"], ps[0]["net"], ps[1])):
                 if supply in power and not GROUND.search(supply) and GROUND.search(ground or ""):
-                    pins = [q for q in pads[supply] if CHIP.match(q.get("ref", "")) and math.dist(q["at"], pad["at"]) <= DECAP_REACH]
+                    pins = [q for q in pads[supply]
+                            if CHIP.match(q.get("ref", "")) and math.dist(q["at"], pad["at"]) <= DECAP_REACH]
                     if pins:
                         decaps.append((supply, pad, min(pins, key=lambda q: math.dist(q["at"], pad["at"]))))
-    crystals = {p["net"] for ref, ps in parts.items() if CRYSTAL.match(ref) for p in ps if p["net"] in nets and p["net"] not in power}
+    crystals = {p["net"] for ref, ps in parts.items() if CRYSTAL.match(ref) for p in ps
+                if p["net"] in nets and p["net"] not in power}
     pairs = [(a, b) for a, b in pair_halves(nets) if a not in power and b not in power]
     return dict(pads=dict(pads), power=sorted(power), decaps=decaps, crystals=sorted(crystals), pairs=pairs)
 
@@ -521,7 +526,9 @@ def copper_path(dump, net, a, b):
         if L < 1e-6:
             on = [ta, tb]
         else:
-            on = sorted({q for q in points[t["layer"]] if abs(math.dist(ta, q) + math.dist(q, tb) - L) < 2e-3} | {ta, tb}, key=lambda q: math.dist(ta, q))
+            on = sorted({q for q in points[t["layer"]]
+                         if abs(math.dist(ta, q) + math.dist(q, tb) - L) < 2e-3} | {ta, tb},
+                         key=lambda q: math.dist(ta, q))
         for q, r in zip(on, on[1:]):
             edge((t["layer"],) + q, (t["layer"],) + r, math.dist(q, r) if L > 1e-6 and "mid" not in t else t["len"])
         ends += [(t["layer"],) + q for q in on]

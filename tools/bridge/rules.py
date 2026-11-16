@@ -22,7 +22,8 @@ class Settings:
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
     pairs: bool = True  # two nets named as the halves of a differential pair are laid side by side
     guesses: bool = True  # what a net is for is guessed from its name and parts (see intents_of)
-    lean: bool = True  # a role that is only guessed leans its net (see Rules.leaning); off for a run that joined less with it
+    # a role that is only guessed leans its net (see Rules.leaning); off for a run that joined less with it
+    lean: bool = True
     hints: object = None  # the hints file beside the board, as read (Hints)
 
 
@@ -189,7 +190,8 @@ class Rules:
         """A net's track width: its class's, or what the hints say instead; at least what its current takes,
         and the board's narrowest."""
         intent = self.intent(net)
-        return max(intent.width or self.classes[net].track_width, amps_width(intent.amps) if intent.amps else 0.0, self.minima.track_width)
+        return max(intent.width or self.classes[net].track_width, amps_width(intent.amps) if intent.amps else 0.0,
+                   self.minima.track_width)
 
     def narrow_width(self, net, smallest_pad):
         """The second try's width for a net that could not be laid at its class width: narrower than its
