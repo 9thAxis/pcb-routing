@@ -6,7 +6,7 @@ this with KiCad's Python, one scene per process, and reads what it prints).
 
 Prints one line of JSON: what the bridge reads from the scene, and where it saved the board.
 """
-import json, sys
+import json, math, sys
 from pathlib import Path
 
 import pcbnew
@@ -125,6 +125,33 @@ def groups(scene):
                 unjoined=cut.unjoined(), without=names(k.read_board(scene.board, frozenset(), ASK, pours=False)))
 
 
+def cleared(scene, room=True):
+    """A pad in a zone, and a track of another net that this run laid round three sides of it: one spoke is
+    left. The track is laid again clear of the pad; or, without `room` (its own pads stand too near the
+    pad), it is put back as it was."""
+    scene.zone("GND", pcbnew.F_Cu)
+    scene.pad("J1", "GND", 15, 10)
+    scene.pad("J2", "GND", 25, 15)
+    # (a round pad has its spokes on the diagonals: the track crosses three of them just beyond the gap)
+    ring = [[16.0, 9.0], [16.6, 10.0], [16.0, 11.0], [15.0, 11.6], [14.0, 11.0]]
+    ends = ((17.6, 7.4), (12.4, 12.6)) if room else (tuple(ring[0]), tuple(ring[-1]))
+    scene.pad("R1", "SIG", *ends[0], through=False, size=0.5); scene.pad("R2", "SIG", *ends[1], through=False, size=0.5)
+    board = k.KicadBoard(scene.board, frozenset(), ASK)
+    count = lambda picture: {picture.pads[t.pad].part: t.spokes for t in picture.thermals}
+    laid_before = k.copper_keys(board.read())
+    round_the_pad = ([list(ends[0])] if room else []) + ring + ([list(ends[1])] if room else [])
+    board.write(dict(nets=[dict(key="SIG", net="SIG", vias=[], tracks=[dict(layer="F.Cu", points=round_the_pad)])]), {"SIG": (0.25, [0.6, 0.3])})
+    picture = board.read()
+    starved = [t for t in picture.thermals if t.spokes < t.least]
+    outcome, said = k.Outcome(tracks=len(round_the_pad) - 1), []
+    done = k.cleared(board, k.Settings(), k.Engine(sys.argv[3]), outcome, picture, starved, laid_before, None, said.append)
+    after = board.read()
+    signal = sorted((t.a, t.b) for t in after.tracks if t.net == "SIG")
+    return dict(cut=count(picture), after=count(after), done=done, said=said, unjoined=after.unjoined(), tracks=[outcome.tracks, len(signal)],
+                as_it_was=signal == sorted((a, b) for a, b in zip(round_the_pad, round_the_pad[1:])),
+                nearest=min(math.dist(p, [15, 10]) for t in after.tracks if t.net == "SIG" for p in (t.a, t.b)))
+
+
 def to_route(scene):
     """A board for the whole bridge: a zone with pads on it and one beside it, and a signal across the zone."""
     scene.zone("GND", pcbnew.B_Cu, box=(1, 1, 24, 19))
@@ -135,7 +162,8 @@ def to_route(scene):
     return {}
 
 
-SCENES = dict(spokes=spokes, starved=lambda scene: spokes(scene, tie=False), groups=groups, to_route=to_route)
+SCENES = dict(spokes=spokes, starved=lambda scene: spokes(scene, tie=False), groups=groups, to_route=to_route,
+              cleared=cleared, not_cleared=lambda scene: cleared(scene, room=False))
 
 if __name__ == "__main__":
     name, directory = sys.argv[1], Path(sys.argv[2])

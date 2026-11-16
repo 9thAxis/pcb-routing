@@ -130,6 +130,8 @@ pub(super) fn thermals(layout: &Layout, pieces: &[Piece], touch: &[Touch]) -> Ve
             ground,
             outline: if starved { spoked.line.clone() } else { Vec::new() },
             fill: if starved { tied } else { Vec::new() },
+            gap: spoked.gap,
+            clearance: spoked.clearance,
         })
     };
     use rayon::prelude::*;

@@ -31,7 +31,8 @@ vias and pads that touch do, and a net meant to be joined by a zone is routed as
   be done past the tracks that did it, the run is taken back and done again with those pads joined by a track.
 - At the end every pad that is tied to its zone by fewer spokes than the board asks for (counted as KiCad's
   design rule check counts them) gets a straight track from its middle into the zone, which counts as a
-  spoke; one that no such track fits by is named.
+  spoke. Where no such track fits by because new tracks of other nets pass close by the pad, those nets are
+  laid again clear of it (and put back as they were if they cannot be). A pad still left with too few is named.
 
 What the nets are for: taken from their names and parts, and from a hints file beside the board
 (BOARD.routing.json, or --hints FILE; see docs/hints.md). Two nets named as the halves of a differential pair
@@ -175,6 +176,8 @@ class Thermal:
     ground: list = field(default_factory=list)  # the ground where a track would cut its spokes: polygons
     outline: list = field(default_factory=list)  # for a pad with too few: the ring a spoke crosses, half the gap from the pad
     fill: list = field(default_factory=list)  # and the pieces of the zone it is tied to, as indices into the picture's fills
+    gap: float = 0.0  # the gap the zone leaves round the pad
+    clearance: float = 0.0  # the clearance the zone keeps from copper of other nets
 
 
 @dataclass
@@ -939,7 +942,8 @@ def problem_of(picture, rules, ask, only=None, unpaired=frozenset(), narrow=Fals
     return build_problem(picture, rules, reach_of(picture, rules, names, ask), only=only, narrow=narrow, pairs=pairs, unpaired=unpaired, notes=notes, **more)
 
 
-def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=frozenset(), notes=None):
+def build_problem(picture, rules, reached, only=None, narrow=False, options=None, unlinked=frozenset(), stubs=None, pairs=(), unpaired=frozenset(), notes=None,
+                  closed=()):
     """The router's problem for the unjoined nets of a picture (those named in `only`, if given).
 
     `reached`: where each of those nets may be reached (see reach_of). `narrow`: the second try, with
@@ -947,7 +951,8 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     their own to the pin they stand by. `stubs`: instead of the unjoined nets, a track for each of these pads
     from its middle to its zone: [(key, Thermal, points of the zone to end on)]. `pairs`: the nets to lay as
     differential pairs (see pairs_of), `unpaired`: the keys of the pairs given up as such. `notes`: a list
-    that what is worth telling the user is added to.
+    that what is worth telling the user is added to. `closed`: ground closed to the nets of this problem beyond
+    what the board closes, as regions of the engine's.
     """
     every = picture.layers
     layers = rules.routing_layers(every)
@@ -984,6 +989,7 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
         regions.append(dict(rings=rings))
     for area in picture.areas:
         regions.append(dict(rings=area.rings, layers=[l for l in area.layers if l in layers], tracks=area.tracks, vias=area.vias))
+    regions.extend(closed)
     # A pour is cut by a track of another net, and a pad is cut off from its pour by one across its spokes: both
     # are open ground that costs more, to every net but the pour's own.
     dear = [dict(rings=pour.rings, layers=[pour.layer], factor=rules.settings.pour_cost, net=pour.net)
@@ -1207,6 +1213,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
     names = picture.unjoined(only)
     run.open_before = set(board.unjoined())
     starved_before = {(t.pad, t.layer) for t in picture.thermals if t.spokes < t.least}
+    laid_before = copper_keys(picture)
     for line in told(Rules.of(picture, settings).intents, set(names)) + unheeded(picture, settings.hints):
         say(line)
     intents = Rules.of(picture, settings).intents
@@ -1225,7 +1232,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
                 break
             run.given_up = set(board.unjoined(set(wanted))) if wanted else set()
         if settings.pours and not outcome.failure:
-            tie_starved(board, settings, engine, outcome, only, starved_before, options, say)
+            tie_starved(board, settings, engine, outcome, only, starved_before, options, say, laid_before)
     except EngineFailed as failure:
         outcome.failure = str(failure)
     # (a net that was joined and that the new tracks parted for good is one left unjoined, as much as any)
@@ -1459,18 +1466,52 @@ class _Lot:
         return True
 
 
-def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(), options=None, say=print):
-    """Give every pad that is tied to its zone by fewer spokes than the board asks for a straight track from
-    its middle into the zone, where one fits: that is a tie as good as a spoke, and counted as one. Tracks of
-    other nets across its spokes are what starve a pad: one that this run starved is tied whatever its net;
-    one that the board came with (`before`: those, as (pad, layer)) is tied as well, if its net is among
-    those named in `only` or none are named. What was done and what could not be is noted in `outcome`."""
+def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(), options=None, say=print, laid_before=None):
+    """See to every pad that is tied to its zone by fewer spokes than the board asks for. Tracks of other nets
+    across its spokes are what starve a pad: one that this run starved is seen to whatever its net; one that
+    the board came with (`before`: those, as (pad, layer)) as well, if its net is among those named in `only`
+    or none are named.
+
+    A pad gets a straight track from its middle into the zone, where one fits: that is a tie as good as a
+    spoke, and counted as one (see `tied_by_tracks`). Where none fits, the nets whose new tracks pass by it
+    are laid again clear of it (see `cleared`; `laid_before`: the tracks and vias the board came with, see
+    `copper_keys`), and the ties are tried again. What was done and what could not be is noted in `outcome`.
+    """
     name = lambda picture, thermal: f"{picture.pads[thermal.pad].part or '?'} ({thermal.net}, {thermal.layer})"
     ours = lambda t: (t.pad, t.layer) not in before or only is None or t.net in only
+    tried = collections.defaultdict(list)  # (pad, layer) -> the points of its zone already tried
+    cleared_for = set()  # the pads that nets have been laid again for
+    for again in range(CLEARINGS + 1):
+        picture, starved = tied_by_tracks(board, settings, engine, outcome, ours, tried, options, say)
+        # (a pad the board came with starved is not worth other nets' tracks: only what this run did is undone)
+        new = [t for t in starved if (t.pad, t.layer) not in before and (t.pad, t.layer) not in cleared_for]
+        if not new or again == CLEARINGS or laid_before is None:
+            break
+        cleared_for.update((t.pad, t.layer) for t in new)
+        try:
+            if not cleared(board, settings, engine, outcome, picture, new, laid_before, options, say):
+                break
+        except EngineFailed as failure:
+            say(f"nothing laid again for the pads with too few spokes: {failure}")
+            break
+        tried.clear()
+    outcome.starved = sorted(name(picture, thermal) for thermal in starved)
+    if outcome.tied:
+        say(f"{outcome.tied} pads with too few spokes to their zone tied to it by a track of their own")
+    if outcome.starved:
+        say(f"too few spokes to their zone, and no room for a track to it: {', '.join(outcome.starved)}")
+
+
+CLEARINGS = 2  # how often nets are laid again clear of pads their tracks have starved
+
+
+def tied_by_tracks(board, settings, engine, outcome, ours, tried, options, say):
+    """Give the pads with too few spokes (those `ours` holds for) tracks to their zones, in rounds: returns
+    the board's picture after them and the pads still starved. `tried`: (pad, layer) -> the points of its
+    zone already tried, which is added to."""
     routed_on = lambda picture: Rules.of(picture, settings).routing_layers(picture.layers)
     starved_of = lambda picture: [t for t in picture.thermals if t.spokes < t.least and ours(t) and t.layer in routed_on(picture)]
-    tried = collections.defaultdict(list)  # (pad, layer) -> the points of its zone already tried
-    starved = []
+    picture, starved = None, []
     for round_ in range(TIE_ROUNDS + 1):
         picture = board.read()
         starved = starved_of(picture)
@@ -1511,11 +1552,71 @@ def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(),
         if kept:
             added = board.write(dict(solution, nets=kept), {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
             outcome.tracks, outcome.tied = outcome.tracks + added[0], outcome.tied + len(kept)
-    outcome.starved = sorted(name(picture, thermal) for thermal in starved)
-    if outcome.tied:
-        say(f"{outcome.tied} pads with too few spokes to their zone tied to it by a track of their own")
-    if outcome.starved:
-        say(f"too few spokes to their zone, and no room for a track to it: {', '.join(outcome.starved)}")
+    return picture, starved
+
+
+def copper_keys(picture):
+    """The tracks and vias of a picture as things to tell them apart by: what is on the board later and not
+    among these has been laid since."""
+    return {(t.net, t.layer, tuple(t.a), tuple(t.b)) for t in picture.tracks} | {(v.net, None, tuple(v.at), tuple(v.at)) for v in picture.vias}
+
+
+def cleared(board, settings, engine, outcome, picture, starved, laid_before, options, say):
+    """Lay again, clear of pads that have too few spokes and no room for a track to their zone, the nets whose
+    new tracks pass by them: True if that was done.
+
+    A track of another net close by a pad takes the zone away from the pad's spokes, and one that goes round
+    the pad leaves no way out for a track of the pad's own. The nets that this run laid within reach of such
+    a pad (the pad, the gap, the clearance the zone keeps and a track's width) are taken out and laid again
+    with that ground closed to them. If they cannot all be joined so, they are put back as they were.
+    `board.take_out(nets)` removes what has been written for those nets and `board.put_back()` restores it
+    (both return the numbers of track segments and vias).
+    """
+    part = lambda thermal: picture.pads[thermal.pad].part or "?"
+    reach = {}  # (pad, layer) -> (its middle, how far from it a track of another net is too near)
+    for thermal in starved:
+        at = picture.pads[thermal.pad].at
+        beyond = max((math.dist(at, p) for p in thermal.outline), default=0.0)  # (the outline is half the gap from the pad)
+        reach[thermal.pad, thermal.layer] = (at, beyond + thermal.gap / 2 + thermal.clearance + KEEP_OFF)
+    def near(net, layer, a, b, half):
+        for thermal in starved:
+            at, far = reach[thermal.pad, thermal.layer]
+            vx, vy = b[0] - a[0], b[1] - a[1]
+            l2 = vx * vx + vy * vy
+            t = max(0.0, min(1.0, ((at[0] - a[0]) * vx + (at[1] - a[1]) * vy) / l2)) if l2 else 0.0
+            if net != thermal.net and layer in (None, thermal.layer) and math.dist(at, (a[0] + t * vx, a[1] + t * vy)) < far + half:
+                return True
+        return False
+    new = lambda key: key not in laid_before
+    culprits = {t.net for t in picture.tracks if t.net and new((t.net, t.layer, tuple(t.a), tuple(t.b))) and near(t.net, t.layer, t.a, t.b, t.width / 2)}
+    culprits |= {v.net for v in picture.vias if v.net and new((v.net, None, tuple(v.at), tuple(v.at))) and near(v.net, None, v.at, v.at, v.width / 2)}
+    culprits = sorted(culprits)
+    if not culprits or len(culprits) >= ENGINE_NETS:
+        return False
+    mark = board.mark()
+    taken = board.take_out(culprits)
+    after = board.read()
+    # (as single nets, without the links of capacitors: this is a repair)
+    rules = Rules.of(after, replace(settings, pairs=False, decoupling=False))
+    rules = Rules.of(after, replace(rules.settings, step=rules.step(set(culprits))))
+    closed = [dict(rings=[_disc(at, far)], layers=[layer], tracks=True, vias=True) for (_, layer), (at, far) in reach.items()]
+    problem = problem_of(after, rules, engine.ask, only=set(culprits), options=options, closed=closed)
+    solution = engine.route(problem) if problem["nets"] else dict(status="routed", nets=[])
+    done = solution["status"] == "routed"
+    if done:
+        added = board.write(solution, {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
+        done = not board.unjoined(set(culprits))
+    if not done:
+        board.rewind(mark)
+        board.put_back()
+        say(f"no way clear of {', '.join(sorted({part(t) for t in starved}))} for {', '.join(culprits)}: left as they were")
+        return False
+    outcome.tracks, outcome.vias = outcome.tracks - taken[0] + added[0], outcome.vias - taken[1] + added[1]
+    say(f"laid again clear of {', '.join(sorted({part(t) for t in starved}))}, whose spokes they cut: {', '.join(culprits)}")
+    return True
+
+
+KEEP_OFF = 0.3  # mm beyond the clearance a zone keeps: what is left of a zone nearer a track than this is no spoke
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1913,6 +2014,7 @@ class KicadBoard:
         self.picture = None  # the board as it was last read, as long as nothing has been written since
         self.last = {}  # what the last solution written laid, by entry
         self.written = []  # and each one before it, in order
+        self.out = []  # what was taken out of the board to be laid again, till it is known that it need not be put back
 
     def _fresh(self):
         if self.stale:
@@ -1952,6 +2054,30 @@ class KicadBoard:
                 self.board.Remove(item)
                 tracks, vias = tracks + (not via), vias + via
         self.stale = True
+        return tracks, vias
+
+    def take_out(self, nets):
+        tracks = vias = 0
+        self.out = []
+        for record in self.written:
+            for key, items in record.items():
+                for item in [item for item in items if item.GetNetname() in nets]:
+                    via = item.Type() == pcbnew.PCB_VIA_T
+                    self.board.Remove(item)
+                    items.remove(item)
+                    self.out.append(item)
+                    tracks, vias = tracks + (not via), vias + via
+        self.stale = True
+        return tracks, vias
+
+    def put_back(self):
+        tracks = vias = 0
+        for item in self.out:
+            via = item.Type() == pcbnew.PCB_VIA_T
+            self.board.Add(item)
+            tracks, vias = tracks + (not via), vias + via
+        self.written.append({"put back": self.out})
+        self.out, self.stale, self.last = [], True, {}
         return tracks, vias
 
     def unjoined(self, nets=None):

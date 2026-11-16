@@ -1,5 +1,6 @@
 """What `route` does for a board with pours, against a stand-in for the engine and scripted boards. No KiCad."""
-import sys, unittest
+import io, sys, unittest
+from contextlib import redirect_stdout
 
 import support
 from test_route import FakeBoard, WithEngine
@@ -214,6 +215,90 @@ class StarvedBoard:
 
     def unjoined(self, nets=None):
         return []
+
+
+class ShutInBoard:
+    """A pad of GND with one spoke and no way for a track of its own to its zone, because the signal that this
+    run laid goes round it; until the signal is laid again."""
+
+    LINE = StarvedBoard.LINE
+
+    def __init__(self):
+        self.signal = "round the pad"  # or "taken out", "clear of it"
+        self.calls = []
+
+    def read(self, nets=None):
+        pads = [support.land(k, "GND", 5, 5, part="U1"), support.land(k, "GND", 8, 8, part="U2"),
+                support.land(k, "SIG", 1, 6.3, part="R1"), support.land(k, "SIG", 9.5, 6.3, part="R2")]
+        picture = support.picture(k, pads, {"GND": [[0, 1]], "SIG": [[2], [3]] if self.signal == "taken out" else [[2, 3]]})
+        shut_in = self.signal == "round the pad"
+        picture.thermals = [k.Thermal("GND", 0, "F.Cu", 2, 1 if shut_in else 2, outline=self.LINE if shut_in else [], gap=0.5, clearance=0.2)]
+        if self.signal != "taken out":
+            y = 6.3 if shut_in else 9.0
+            picture.tracks = [k.Track(a=[1, y], b=[9.5, y], width=0.25, net="SIG", layer="F.Cu")]
+        return picture
+
+    def write(self, solution, sizes):
+        self.calls.append(("write", [n["key"] for n in solution["nets"] if n["tracks"]]))
+        self.signal = "clear of it"
+        return 3, 0
+
+    def unjoined(self, nets=None):
+        return ["SIG"] if self.signal == "taken out" else []
+
+    def take_out(self, nets):
+        self.calls.append(("take out", sorted(nets)))
+        self.signal = "taken out"
+        return 1, 0
+
+    def put_back(self):
+        self.calls.append(("put back",))
+        self.signal = "round the pad"
+        return 1, 0
+
+    def mark(self):
+        return 0
+
+    def rewind(self, mark):
+        self.calls.append(("rewind",))
+        return 0, 0
+
+
+class ShutIn(WithEngine):
+    """A pad starved by a net of this run, with no room for a track to its zone."""
+
+    def see_to(self, board, laid_before=frozenset()):
+        outcome = k.Outcome(tracks=1)
+        with redirect_stdout(io.StringIO()):
+            k.tie_starved(board, k.Settings(pours=True), k.Engine(support.ENGINE), outcome, say=self.said.append, laid_before=laid_before)
+        return outcome
+
+    def test_the_net_that_goes_round_it_is_laid_again_clear_of_it(self):
+        board = ShutInBoard()
+        outcome = self.see_to(board)
+        (problem,) = self.runs()
+        self.assertEqual([n["key"] for n in problem["nets"]], ["SIG"])
+        (closed,) = [r for r in problem["regions"] if r.get("layers") == ["F.Cu"]]
+        xs = [p[0] for p in closed["rings"][0]]
+        self.assertTrue(3 < min(xs) < 3.5 and 6.5 < max(xs) < 7, (min(xs), max(xs)))  # the pad, its gap, the clearance, and 0.3 mm
+        self.assertEqual(board.calls, [("take out", ["SIG"]), ("write", ["SIG"])])
+        self.assertEqual(self.said, ["laid again clear of U1, whose spokes they cut: SIG"])
+        self.assertEqual((outcome.starved, outcome.tracks), ([], 3))
+
+    def test_where_it_cannot_be_it_is_put_back_and_the_pad_is_named(self):
+        board = ShutInBoard()
+        self.stubborn(["SIG"])
+        outcome = self.see_to(board)
+        self.assertEqual(board.calls, [("take out", ["SIG"]), ("rewind",), ("put back",)])
+        self.assertEqual(self.said, ["no way clear of U1 for SIG: left as they were",
+                                     "too few spokes to their zone, and no room for a track to it: U1 (GND, F.Cu)"])
+        self.assertEqual((outcome.starved, outcome.tracks), (["U1 (GND, F.Cu)"], 1))
+
+    def test_a_track_the_board_came_with_is_left_where_it_is(self):
+        board = ShutInBoard()
+        outcome = self.see_to(board, laid_before=k.copper_keys(board.read()))
+        self.assertEqual((board.calls, self.runs()), ([], []))
+        self.assertEqual(outcome.starved, ["U1 (GND, F.Cu)"])
 
 
 class Spokes(WithEngine):

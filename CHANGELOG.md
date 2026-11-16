@@ -66,6 +66,10 @@ First version as a library.
   without the tracks on other layers, which tie nothing to the zone. The bridge did all of this in Python;
   it now reads the board, fills the zones and asks, and keeps what it has laid if a question gets no answer. On the largest of the public boards that takes the time spent outside the router's own
   runs from 14 s to under 4 s.
+- KiCad bridge, zones: a pad left with too few spokes and no room for a track of its own to its zone,
+  because nets of this run pass close by it, is seen to by laying those nets again with the ground round the
+  pad closed to them (the pad, its gap, the clearance the zone keeps, and 0.3 mm); they are put back as they
+  were if they cannot all be joined so.
 - Differential pairs through the KiCad bridge. Two nets named as the halves of a pair (`_P`/`_N`, `-P`/`-N`,
   `P`/`N`, `+`/`-`, `DP`/`DM`; not supplies), or said to be one in the hints, with the same number of pads
   (four at most), are laid side by side between the places where a pad of each stand side by side: a trunk

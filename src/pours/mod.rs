@@ -152,6 +152,11 @@ pub struct Thermal {
     /// For a pad with too few spokes: the pieces of the zone it is tied to, as indices into
     /// [`Layout::fills`], those that join more than this pad first. Empty otherwise.
     pub fill: Vec<usize>,
+    /// The gap the zone leaves round the pad ([`Spoked::gap`]).
+    pub gap: f64,
+    /// The clearance the zone keeps from copper of other nets ([`Spoked::clearance`]): a track nearer the
+    /// gap than this takes the zone away from the pad's spokes.
+    pub clearance: f64,
 }
 
 /// What [`survey`] finds.

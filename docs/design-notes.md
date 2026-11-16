@@ -140,6 +140,12 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   their zones on 4 boards. Which loose copper hangs together (vias and tracks that reach no pad but
   join two pieces of zone) and whether a point is still on a zone after a fill are the crate's as well:
   the bridge asks KiCad only for what KiCad alone knows.
+  A pad no track fits by: on a board outside the 119, a ground track of the run went round two sides of a
+  connector's shield pad, cut three of its spokes and left no way out for a track of the pad's own. The
+  price on spokes had not kept it off; nothing after the fact could. Now the nets whose new tracks pass
+  within reach of such a pad are taken out and laid again with that ground closed, and put back if that
+  cannot be done. (That board has since come out clean without it, as the ways taken moved; the step is
+  tested on boards made for it, in KiCad itself.)
   Still open: a custom rule for the thermal gap or the number of spokes is not read; a pad no straight
   track fits by is only named; the time a cut zone costs when a run is done again.
 * Differential pairs through the bridge. The 119 boards have three (the "seven pairs" of an earlier note

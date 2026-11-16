@@ -57,6 +57,21 @@ class RealKicad(unittest.TestCase):
         self.assertEqual(said["cut"], {"J1": 1, "J2": 4})
         self.assertEqual(self.check(said["saved"]), (["starved_thermal"], 0))
 
+    def test_a_net_laid_round_a_pad_is_laid_again_clear_of_it(self):
+        said = self.scene("cleared")
+        self.assertEqual(said["cut"]["J1"], 1)  # the track round it has cut three of its spokes
+        self.assertEqual((said["done"], said["after"]["J1"], said["unjoined"], said["as_it_was"]), (True, 4, [], False))
+        self.assertEqual(said["said"], ["laid again clear of J1, whose spokes they cut: SIG"])
+        self.assertGreater(said["nearest"], 1.9)
+        self.assertEqual(said["tracks"][0], said["tracks"][1])  # what is counted as laid is what lies there
+        self.assertEqual(self.check(said["saved"]), ([], 0))  # KiCad agrees: no pad starved, nothing unconnected
+
+    def test_a_net_that_cannot_go_clear_of_the_pad_is_put_back_as_it_was(self):
+        said = self.scene("not_cleared")
+        self.assertEqual(said["said"], ["no way clear of J1 for SIG: left as they were"])
+        self.assertEqual((said["done"], said["after"]["J1"], said["unjoined"], said["as_it_was"]), (False, 1, [], True))
+        self.assertEqual(said["tracks"][0], said["tracks"][1])
+
     def test_a_zone_joins_the_pads_it_touches_and_a_track_across_it_parts_them(self):
         said = self.scene("groups")
         self.assertEqual(said["whole"], [["J1", "J2", "J3"], ["J4"]])
