@@ -20,8 +20,9 @@ Status: 0.1, not yet on crates.io. The interfaces may still change.
       /Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3 \
       tools/kicad_route.py BOARD.kicad_pcb -o ROUTED.kicad_pcb
 
-The bridge ([`tools/kicad_route.py`](https://github.com/9thAxis/pcb-routing/blob/main/tools/kicad_route.py))
-is in the repository, not in the crate. It runs under the Python that ships with KiCad (9 or 10; the path
+The bridge ([`tools/kicad_route.py`](https://github.com/9thAxis/pcb-routing/blob/main/tools/kicad_route.py),
+with the modules in [`tools/bridge`](https://github.com/9thAxis/pcb-routing/tree/main/tools/bridge)) is in the
+repository, not in the crate. It runs under the Python that ships with KiCad (9 or 10; the path
 above is the macOS one). It reads the pads, tracks, vias, holes, outline, rule areas, zones and net classes
 of the board, routes every net whose pads are not yet joined, writes the tracks and vias back and refills
 the zones. What is already routed is kept and routed around, and what a filled zone joins is left to the

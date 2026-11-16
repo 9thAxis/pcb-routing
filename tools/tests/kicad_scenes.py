@@ -12,7 +12,7 @@ from pathlib import Path
 import pcbnew
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import kicad_route as k
+from bridge import engine, kicad, questions, route, rules, ties
 
 MM = pcbnew.FromMM
 
@@ -86,7 +86,7 @@ class Scene:
     def read(self):
         pcbnew.ZONE_FILLER(self.board).Fill(self.board.Zones())
         self.board.BuildConnectivity()
-        return k.read_board(self.board, frozenset(), ASK)
+        return kicad.read_board(self.board, frozenset(), ASK)
 
 
 def spokes(scene, tie=True):
@@ -102,7 +102,7 @@ def spokes(scene, tie=True):
     picture = scene.read()
     cut = count(picture)
     starved = [t for t in picture.thermals if t.spokes < t.least]
-    targets = k.tie_targets(picture, [(starved[0], picture.pads[starved[0].pad].at, 0.25, [])], ASK)[0] if starved else []
+    targets = questions.tie_targets(picture, [(starved[0], picture.pads[starved[0].pad].at, 0.25, [])], ASK)[0] if starved else []
     if targets and tie:
         scene.track("GND", pcbnew.F_Cu, (2.2, 2.2), tuple(targets[0]))
     return dict(whole=whole, cut=cut, targets=targets, tied=count(scene.read()),
@@ -122,7 +122,7 @@ def groups(scene):
     cut = scene.read()
     return dict(whole=names(whole), cut=names(cut), fills=[len(whole.fills), len(cut.fills)],
                 pours=[sorted(len(own) for own in picture.pours["GND"].values()) for picture in (whole, cut)],
-                unjoined=cut.unjoined(), without=names(k.read_board(scene.board, frozenset(), ASK, pours=False)))
+                unjoined=cut.unjoined(), without=names(kicad.read_board(scene.board, frozenset(), ASK, pours=False)))
 
 
 def cleared(scene, room=True):
@@ -136,15 +136,15 @@ def cleared(scene, room=True):
     ring = [[16.0, 9.0], [16.6, 10.0], [16.0, 11.0], [15.0, 11.6], [14.0, 11.0]]
     ends = ((17.6, 7.4), (12.4, 12.6)) if room else (tuple(ring[0]), tuple(ring[-1]))
     scene.pad("R1", "SIG", *ends[0], through=False, size=0.5); scene.pad("R2", "SIG", *ends[1], through=False, size=0.5)
-    board = k.KicadBoard(scene.board, frozenset(), ASK)
+    board = kicad.KicadBoard(scene.board, frozenset(), ASK)
     count = lambda picture: {picture.pads[t.pad].part: t.spokes for t in picture.thermals}
-    laid_before = k.copper_keys(board.read())
+    laid_before = ties.copper_keys(board.read())
     round_the_pad = ([list(ends[0])] if room else []) + ring + ([list(ends[1])] if room else [])
     board.write(dict(nets=[dict(key="SIG", net="SIG", vias=[], tracks=[dict(layer="F.Cu", points=round_the_pad)])]), {"SIG": (0.25, [0.6, 0.3])})
     picture = board.read()
     starved = [t for t in picture.thermals if t.spokes < t.least]
-    outcome, said = k.Outcome(tracks=len(round_the_pad) - 1), []
-    done = k.cleared(board, k.Settings(), k.Engine(sys.argv[3]), outcome, picture, starved, laid_before, None, said.append)
+    outcome, said = route.Outcome(tracks=len(round_the_pad) - 1), []
+    done = ties.cleared(board, rules.Settings(), engine.Engine(sys.argv[3]), outcome, picture, starved, laid_before, None, said.append)
     after = board.read()
     signal = sorted((t.a, t.b) for t in after.tracks if t.net == "SIG")
     return dict(cut=count(picture), after=count(after), done=done, said=said, unjoined=after.unjoined(), tracks=[outcome.tracks, len(signal)],
@@ -167,7 +167,7 @@ SCENES = dict(spokes=spokes, starved=lambda scene: spokes(scene, tie=False), gro
 
 if __name__ == "__main__":
     name, directory = sys.argv[1], Path(sys.argv[2])
-    ASK = lambda question: k.ask_engine(question, sys.argv[3])
+    ASK = lambda question: engine.ask_engine(question, sys.argv[3])
     scene = Scene()
     said = SCENES[name](scene)
     pcbnew.ZONE_FILLER(scene.board).Fill(scene.board.Zones())

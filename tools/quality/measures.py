@@ -91,10 +91,10 @@ BUS_REACH = 1.5          # pad pitches within which two bus nets run alongside
 PAIR_REACH = 4.0         # track widths within which the halves of a differential pair are coupled
 DECAP_REACH = 5.0        # mm from a capacitor's pad to the pin it decouples
 
-# What names say (supplies, grounds, pairs, capacitors, chips, crystals) is said once, in tools/net_names.py:
+# What names say (supplies, grounds, pairs, capacitors, chips, crystals) is said once, in tools/bridge/names.py:
 # the router goes by the same.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from net_names import CAPACITOR_PART as CAPACITOR, CHIP_PART as CHIP, CRYSTAL_PART as CRYSTAL, GROUND, is_supply, pair_names as pair_halves
+from bridge.names import CAPACITOR_PART as CAPACITOR, CHIP_PART as CHIP, CRYSTAL_PART as CRYSTAL, GROUND, is_supply, pair_names as pair_halves
 
 
 class Tally(collections.Counter):

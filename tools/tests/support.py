@@ -64,8 +64,8 @@ def stub_pcbnew():
     return stub
 
 
-def bridge():
-    """The bridge module, loaded against the stand-in."""
+def command():
+    """The bridge's command line (tools/kicad_route.py), loaded against the stand-in."""
     stub_pcbnew()
     if str(TOOLS) not in sys.path:
         sys.path.insert(0, str(TOOLS))
@@ -73,8 +73,18 @@ def bridge():
     return kicad_route
 
 
+def bridge():
+    """Everything the bridge defines, under one name: the modules of tools/bridge and the command line."""
+    line = command()
+    from bridge import engine, intent, kicad, names, picture, problem, questions, route, rules, ties
+    merged = types.SimpleNamespace()
+    for module in (names, picture, intent, rules, questions, problem, engine, ties, route, kicad, line):
+        vars(merged).update({name: value for name, value in vars(module).items() if not name.startswith("__")})
+    return merged
+
+
 def square(k, x, y, half=0.5):
-    return [[[k._r(x - half), k._r(y - half)], [k._r(x + half), k._r(y - half)], [k._r(x + half), k._r(y + half)], [k._r(x - half), k._r(y + half)]]]
+    return [[[k.r6(x - half), k.r6(y - half)], [k.r6(x + half), k.r6(y - half)], [k.r6(x + half), k.r6(y + half)], [k.r6(x - half), k.r6(y + half)]]]
 
 
 def land(k, net, x, y, layer="F.Cu", half=0.5, **more):
