@@ -159,7 +159,12 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     short to gather and part in. Before that, the two USB pairs the designers had coupled best (96 and
     99 %) were not laid as pairs at all.
   * A trunk is offered nine places at each end (three distances, towards the other end and 45 degrees to
-    either side), as one piece: the first version had one place, and one place is often under a pad.
+    either side), as one piece: the first version had one place, and one place is often under a pad. Laid
+    as the cheapest connection it took the furthest of them, which are nearest each other, and gave away
+    that much of the pair at either end. The places now take their turn, the nearest first
+    (`Terminal::turn`). So near its pads a pair's stubs sometimes find no way: a stretch that is not all
+    laid is done again without the nearest places before it is given up. (Turns alone, without that,
+    lost a USB pair that had been laid, and gained nothing on the whole.)
   * A pair is a wish. A stretch whose stubs find no way (the legs arrive in the wrong order and cannot cross
     on one layer) is done again as two nets, and if anything at all is left unjoined with pairs laid, once
     more without any: one board of the 13 was left incomplete by its pairs before that.

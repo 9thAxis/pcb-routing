@@ -75,9 +75,11 @@ First version as a library.
   (four at most), are laid side by side between the places where a pad of each stand side by side: a trunk
   for each stretch between two such ends far enough apart, tracks as for any net between two that are not
   and to a pad that stands alone. `pcb_routing::pairs::plan` (and the question `pairs`) finds the ends and
-  offers each trunk several places to begin and end; a trunk entry may have them as the terminals of two
-  pieces. A stretch that cannot be laid as a pair is done again as two nets, and so is everything if
-  anything is left unjoined with pairs laid (`--no-pairs` for none). On 20 pairs of 13 public boards:
+  offers each trunk several places to begin and end, by how far off the pads they are; a trunk entry has
+  them as the terminals of two pieces, the nearest first (`Terminal::turn`: of the open terminals of a
+  piece only the earliest are offered). A stretch that is not all laid as a pair is done again begun
+  further off, and in the end as two nets; where something else is left unjoined with pairs laid, the run
+  is done once without them and the one that joins more is kept (`--no-pairs` for none). On 20 pairs of 13 public boards:
   coupled for 36 % of their length (18 % without, the designers 39 %), all boards complete and clean.
 - Engine, pairs: a leg lies within the trunk it is split from. Where the trunk ended in a stretch shorter
   than the inside of its corner has room for, the inner leg ran backwards there, towards the other leg (0.008

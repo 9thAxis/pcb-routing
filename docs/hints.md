@@ -91,9 +91,11 @@ legs at the pitch asked for; each leg is joined to its pads by a short track at 
 too close for that (a protection device next to its connector), and to a pad that stands alone (a pull-up on
 one leg), the nets are joined as any net is.
 
-The legs are as wide as the nets' tracks and as far apart as the clearance, or the `gap`. A stretch that cannot
-be laid as a pair (no room for it, the legs would have to cross to reach their pads, or its line turns too
-sharply for two legs to keep their distance beside it) is laid as two nets, and the bridge says so. Where
+The legs are as wide as the nets' tracks and as far apart as the clearance, or the `gap`. A pair is begun as
+near its pads as there is room. A stretch that is not all laid as a pair (the short tracks from its legs to
+the pads find no way, the legs would have to cross to reach them, or its line turns too sharply for two legs
+to keep their distance beside it) is done again begun further off, and in the end laid as two nets; the bridge
+says so. Where
 something else is left unjoined with pairs laid, the run is done once more without them, and the pairs are
 kept unless that joins more. A pair is laid in the first try only: what needs the narrower second try is laid
 as single nets.
