@@ -4,6 +4,7 @@ use super::price::Mode;
 use super::search::{From, Query};
 use super::worker::Worker;
 use super::*;
+use crate::geom::dist;
 
 impl Engine<'_> {
     /// Lay one net among the others: ground they claim is dearer by `present` per claim, not closed. What
@@ -40,7 +41,14 @@ impl Engine<'_> {
         if hands.len() < 2 {
             return self.lay_on(n, present, hard, None, None);
         }
-        // (a hand is not followed further than the best before it came to, whole: it could not be kept)
+        // The hands are weighed by what they cost free of the other nets, in the rounds too: weighed by what
+        // the others' claims add, an entry changes hands from round to round and the rounds do not settle.
+        // A hand is not followed further than the best before it came to, whole. With the others fixed a
+        // search costs what is weighed, and nothing is cut off that could be kept. In the rounds a search
+        // costs more by the others' claims, so there a later hand is kept only if it is cheaper through those
+        // claims than the best before it is free of them: the first hand, the way round that faces the far
+        // end, is given up less readily. (Without the cut in the rounds the other hand of a line is most of
+        // a round to search, and the pairs of the one board that tells settled in twice the rounds.)
         let worth = |state: &NetState| (state.failed.len(), state.cost + state.apart);
         let mut best: Option<NetState> = None;
         for hand in hands {
@@ -179,7 +187,7 @@ impl Engine<'_> {
         }
         let line = net.terminals.iter().any(|t| t.pass);
         // (the ground of what is laid of a line, shut to what is laid of it next: its own width about each
-        // state of its path, but for the last of them, where it goes on)
+        // state of its path, but for those nearest its end, where it goes on)
         let mut own: Vec<u32> = Vec::new();
         // (a line has no branches)
         let branches = net.branch_anywhere && !line;
@@ -285,10 +293,13 @@ impl Engine<'_> {
             }
             if line {
                 let wide = self.plan.grid.disc(net.width);
-                let behind = path.len().saturating_sub((net.width / p.step).ceil() as usize + 2);
-                for &at in &path[..behind] {
+                let goes_on = self.plan.grid.xy(ec);
+                for &at in &path {
                     let (layer, cell) = space.split(at as usize);
-                    own.extend(self.plan.grid.around(cell, &wide).map(|c| space.state(layer, c) as u32));
+                    // (not so near its end that the ground it goes on into would be shut)
+                    if dist(self.plan.grid.xy(cell), goes_on) > net.width + 2.0 * p.step {
+                        own.extend(self.plan.grid.around(cell, &wide).map(|c| space.state(layer, c) as u32));
+                    }
                 }
                 own.sort_unstable();
                 own.dedup();

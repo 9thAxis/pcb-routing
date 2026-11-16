@@ -461,7 +461,7 @@ impl Engine<'_> {
                 }
                 for ll in (0..nl).filter(|&ll| ll != l) {
                     let under = ll * hw + via % hw;
-                    if prices.at(under).mult.get() >= TAKEN {
+                    if prices.at(under).mult.get() >= TAKEN || barred(under, dir) {
                         continue;
                     }
                     if let Some((to, after)) = on(under, lc[ll]) {

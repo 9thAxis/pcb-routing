@@ -138,6 +138,9 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
             note(f"{a} = {b} is laid as two nets: there is no room for it among the {ENGINE_NETS - 1} entries of a run")
         elif said and not all(on(picture.pads[group[0]]) for net in (a, b) for group in picture.groups[net]):
             note(f"{a} = {b} is laid as two nets: a pad of it is on no routing layer")
+        elif not said and not pair[4]["trunks"] and not (unpaired or {}):
+            note(f"{a} = {b} is laid as two nets: it could not be laid as a pair past the part in its middle, "
+                 "and its ends are too near that part for a pair on either side")
         elif said:
             paired |= {a, b}
             nets += entries

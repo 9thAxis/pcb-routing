@@ -83,7 +83,11 @@ impl Engine<'_> {
         for pass in &pair.passes {
             for (leg, key) in pass.iter().enumerate() {
                 let n = self.index(key)?;
-                let (run, at) = branch_at(&mut legs, leg, pad(n))
+                // (on a layer the pad is on, where the leg runs on one)
+                let on: Vec<usize> = (0..self.p.layers.len())
+                    .filter(|&l| self.p.nets[n].terminals[0].layers.contains(&self.p.layers[l]))
+                    .collect();
+                let (run, at) = branch_at(&mut legs, leg, pad(n), &on)
                     .ok_or_else(|| format!("{}: no place on its leg for the stub {key}", pair.key))?;
                 joints.push((n, leg, run, at));
                 passed.push(n);
@@ -318,10 +322,12 @@ fn through(centres: &[&[Pt]], legs: &mut Legs, on_left: [bool; 2], sizes: &Sizes
 }
 
 /// Where a branch from `pad` comes to leg `leg`: the point of the leg nearest the pad, as (the run it is on,
-/// the point). The leg gets a corner there, if it has none. None if the leg has no length.
-fn branch_at(legs: &mut Legs, leg: usize, pad: Pt) -> Option<(usize, Pt)> {
+/// the point), on one of the layers `on` (the pad's) if the leg runs on any of them. The leg gets a corner
+/// there, if it has none. None if the leg has no length.
+fn branch_at(legs: &mut Legs, leg: usize, pad: Pt, on: &[usize]) -> Option<(usize, Pt)> {
     let mut best: Option<(f64, usize, usize, Pt)> = None;
-    for (run, (_, lines)) in legs.runs.iter().enumerate() {
+    let anywhere = !legs.runs.iter().any(|(layer, _)| on.contains(layer));
+    for (run, (_, lines)) in legs.runs.iter().enumerate().filter(|(_, (layer, _))| anywhere || on.contains(layer)) {
         for (k, w) in lines[leg].windows(2).enumerate() {
             let (dx, dy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
             let length = dx * dx + dy * dy;

@@ -226,6 +226,24 @@ impl Problem {
                     None => line.push((term.piece, term.pass)),
                 }
             }
+            if line.iter().any(|&(_, pass)| pass) {
+                // (each hand lays the whole line: it has terminals of every piece)
+                let mut hands: Vec<u8> = n.terminals.iter().map(|t| t.hand).filter(|&hand| hand != 0).collect();
+                hands.sort_unstable();
+                hands.dedup();
+                for hand in hands {
+                    let of_hand = |piece: Option<u32>| {
+                        piece.is_none()
+                            || n.terminals.iter().any(|t| t.piece == piece && (t.hand == 0 || t.hand == hand))
+                    };
+                    if !line.iter().all(|&(piece, _)| of_hand(piece)) {
+                        return Err(invalid(
+                            at("terminals"),
+                            format!("hand {hand} has no terminal of one of the pieces: every hand lays the whole line"),
+                        ));
+                    }
+                }
+            }
             if line.first().is_some_and(|first| first.1) || line.last().is_some_and(|last| last.1) {
                 return Err(invalid(
                     at("terminals"),

@@ -227,6 +227,13 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     after those on the pads' own layer. 20 pairs: 50 % to 53 %. One pair is worse for it: where one pair
     of a board is laid past its part and the other cannot be, the second is left less room than before.
     Not done: a part whose pads are too near each other to pass between, with each leg through its own pad.
+    Tried after review and taken back: weighing the hands by what the searches cost in the rounds (the
+    others' claims counted) so that the cut would lose nothing; the entry then changes hands from round to
+    round, and that board took 40 rounds for 18 and lost both its pairs. And the cut left out of the
+    rounds for trunks that pass nothing: 32 rounds for 18, a pair lost. It stays as it was measured.
+    A part mounted the other way round (its pads changed over against the ends) is still offered to be
+    passed: the trunk must loop round it, which the limit on how far round mostly refuses, at the cost of
+    a run.
   * Where the time goes (17 November). On the slowest board with pairs the pairs' own searches are a
     tenth of a run; the board is routed seven times: for each stretch whose stubs find no way, and once
     more without pairs because ground was left unjoined, which no run could join without its zone. That

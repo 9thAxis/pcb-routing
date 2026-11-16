@@ -10,7 +10,8 @@
   `Pair::passes` (the stub entries of the pads passed). `pairs::plan` offers such trunks as `through`, the
   bridge takes them where the pads leave the trunk room and no other pad stands between, and falls back to
   a trunk for each stretch. A trunk that may change layer now ends on the layer of its pads where a place
-  there is open. On 20 pairs of 13 public boards: coupled for 53 % of their length (50 % before); a USB
+  there is open. An entry laid once for each hand is not followed on a later hand beyond what the best
+  before it cost. On 20 pairs of 13 public boards: coupled for 53 % of their length (50 % before); a USB
   pair 63 % to 96 % (its designer 89 %), another 77 % to 90 % (96 %), an Ethernet pair 72 % to 96 %, and
   the other pair of that board, which is not laid past its part there, 87 % to 75 % (its designer 58 %). All
   119 boards complete and clean with and without zones.
