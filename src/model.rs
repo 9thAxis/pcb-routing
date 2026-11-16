@@ -50,12 +50,16 @@ pub struct Problem {
 /// Two nets laid side by side.
 ///
 /// The pair is laid as one wide track, the `trunk`: an entry of [`Problem::nets`] with two terminals (the
-/// points where the pair gathers and where it parts, both on the grid), an electrical net name of its own (so
-/// that copper of either real net is an obstacle to it), a `width` of at least `pitch + leg_width` plus a
-/// little for the outside of corners (0.04 mm at a 0.3 mm pitch), and `no_vias` set.
+/// points where the pair gathers and where it parts, both on the grid; or several for each, as two pieces,
+/// see [`Terminal::piece`]: the trunk then runs between whichever two come cheapest), an electrical net name
+/// of its own (so that copper of either real net is an obstacle to it), a `width` of at least
+/// `pitch + leg_width`, and `no_vias` set.
 ///
-/// When the nets have settled the trunk is split into two legs `pitch` apart, and each leg is joined to its own
-/// pads by a stub at either end: four more entries of `nets`, each marked `last`, with the pad as its only
+/// When the nets have settled the trunk is split into two legs `pitch` apart, which lie within it: on the
+/// outside of a corner a leg takes what the trunk is wider than `pitch + leg_width` (0.04 mm takes a turn of
+/// 45 degrees at a pitch up to 0.48 mm) and is cut straight across where that is not enough; a stretch of the
+/// trunk too short for a leg to run beside it on the inside of its corners is left out of that leg. Each leg
+/// is joined to its own pads by a stub at either end: four more entries of `nets`, each marked `last`, with the pad as its only
 /// terminal (the end of the leg is added to it by the router).
 ///
 /// In the solution each net of the pair appears as `KEY/NET`: its leg and its two stubs.

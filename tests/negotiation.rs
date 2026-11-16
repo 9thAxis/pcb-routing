@@ -327,6 +327,33 @@ fn a_pair_runs_side_by_side_and_reaches_its_pads() {
     }
 }
 
+/// A trunk offered several places at either end runs between the two that come cheapest: here the nearer
+/// place at the first end is closed by copper, and the pair is laid all the same.
+#[test]
+fn a_trunk_with_places_to_choose_from_at_each_end_is_laid_from_one_that_is_open() {
+    let places = json!([
+        {"xy": [2.0, 3.0], "layers": ["F"], "piece": 0}, {"xy": [3.2, 3.0], "layers": ["F"], "piece": 0},
+        {"xy": [8.0, 3.0], "layers": ["F"], "piece": 1}, {"xy": [7.4, 3.0], "layers": ["F"], "piece": 1}
+    ]);
+    let stub = |key: &str, net: &str, at: [f64; 2]| {
+        entry(key, net, 0.15, json!([{"xy": at, "layers": ["F"]}]), json!({"last": true, "layers": ["F"]}))
+    };
+    let nets = vec![
+        entry("pair", "~pair", 0.59, places, json!({"no_vias": true, "layers": ["F"]})),
+        stub("p0", "P", [1.0, 2.5]),
+        stub("m0", "M", [1.0, 3.5]),
+        stub("p1", "P", [9.0, 2.5]),
+        stub("m1", "M", [9.0, 3.5]),
+    ];
+    let v = json!({"window": [0.0, 0.0, 10.0, 6.0], "step": 0.05, "layers": ["F"], "nets": nets,
+                   "copper": [{"t": "circle", "c": [2.0, 3.0], "r": 0.2, "net": "X", "layers": ["F"]}],
+                   "pairs": [{"key": "in1", "trunk": "pair", "legs": ["P", "M"], "leg_width": 0.15, "pitch": 0.3, "stubs": [["p0", "m0"], ["p1", "m1"]]}]});
+    let p: Problem = serde_json::from_value(v).unwrap();
+    let s = route(&p).unwrap();
+    assert_eq!(s.status, Status::Routed, "{} {:?}", s.message, s.conflicts);
+    assert!(joined(&s, 0, [1.0, 2.5], [9.0, 2.5]) && joined(&s, 1, [1.0, 3.5], [9.0, 3.5]));
+}
+
 /// Length of the first net's track that lies within `reach` of the second's, sampled every 0.05 mm.
 fn beside(s: &Solution, a: usize, b: usize, reach: f64) -> f64 {
     let near = |q: [f64; 2]| {

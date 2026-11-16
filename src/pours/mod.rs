@@ -22,7 +22,8 @@
 //!    ([`on_zone`] tells) is taken back; nets the new tracks parted are joined again; a pad left with too few spokes gets a straight
 //!    track into its zone, ending on one of its [`tie_targets`] and kept if it [`ties`] the pad.
 //!
-//! Every one of these is also a question the `pcb-routing pours` command answers, as JSON: see [`Ask`].
+//! Every one of these is also a question the `pcb-routing ask` command answers, as JSON: see
+//! [`Ask`](crate::ask::Ask).
 //!
 //! Two of them are of use without any zone: [`reach`] also chooses, for a group of several pads that tracks
 //! already join, the pads nearest the rest of the net, and [`parts`] tells what a run laid apart into the
@@ -31,14 +32,12 @@
 //! Lengths are in millimetres. A polygon is a list of rings, even-odd: its outline, then its holes. (KiCad
 //! gives a filled zone as outlines with the holes cut into them; both forms are taken.)
 
-mod ask;
 mod joined;
 mod parts;
 mod reach;
 mod shape;
 mod spokes;
 
-pub use ask::{answer, Answer, Ask, ReachNet, TiePad, TieTrack};
 pub use parts::parts;
 pub use reach::reach;
 pub use spokes::{tie_targets, ties};

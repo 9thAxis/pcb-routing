@@ -1,8 +1,7 @@
 //! Pairs: a settled trunk becomes two legs, each joined to its pads by stubs.
 
 use super::*;
-use crate::geom::push;
-use crate::geom::{dist, dist_segment};
+use crate::geom::{dist, dist_segment, push};
 use crate::grid::round6;
 
 impl Engine<'_> {
@@ -46,33 +45,11 @@ impl Engine<'_> {
         let side_of = |q: Pt| first[0] * (q[1] - centre[0][1]) - first[1] * (q[0] - centre[0][0]);
         let left = side_of(pad(stubs[0][0])) > side_of(pad(stubs[0][1]));
         let d = pair.pitch / 2.0;
+        // (what the trunk is wider than its two legs side by side, on either side)
+        let spare = ((self.p.nets[trunk].width - pair.pitch - pair.leg_width) / 2.0).max(0.0);
         let mut lines: [Vec<Pt>; 2] = [Vec::new(), Vec::new()];
-        let mut outward: [[Pt; 2]; 2] = [[[0.0; 2]; 2]; 2]; // [leg][end]: unit vector from the centre line to the leg
-        for leg in 0..2 {
-            let sign = if (leg == 0) == left { 1.0 } else { -1.0 };
-            for i in 0..centre.len() {
-                let normal = |a: Pt, b: Pt| {
-                    let u = unit(a, b);
-                    [-u[1] * sign, u[0] * sign]
-                };
-                let m = if i == 0 {
-                    normal(centre[0], centre[1])
-                } else if i == centre.len() - 1 {
-                    normal(centre[i - 1], centre[i])
-                } else {
-                    // at a corner the two offset lines meet on the bisector
-                    let (a, b) = (normal(centre[i - 1], centre[i]), normal(centre[i], centre[i + 1]));
-                    let f = 1.0 + a[0] * b[0] + a[1] * b[1];
-                    [(a[0] + b[0]) / f, (a[1] + b[1]) / f]
-                };
-                if i == 0 {
-                    outward[leg][0] = m;
-                }
-                if i == centre.len() - 1 {
-                    outward[leg][1] = m;
-                }
-                lines[leg].push([round6(centre[i][0] + d * m[0]), round6(centre[i][1] + d * m[1])]);
-            }
+        for (leg, line) in lines.iter_mut().enumerate() {
+            *line = beside(&centre, if (leg == 0) == left { d } else { -d }, spare);
         }
         self.unclaim(trunk);
         for leg in 0..2 {
@@ -172,6 +149,68 @@ impl Engine<'_> {
     }
 }
 
+/// The line that runs `by` to the left of a line (to its right if negative), its corners where the stretches
+/// beside two stretches meet. On the outside of a corner sharp enough for that meeting point to lie more
+/// than `spare` further from the line than `by`, the corner is cut straight across instead: the leg stays
+/// within the trunk it was split from. A stretch too short to have room on the inside of its corners is
+/// left out: beside it the line would run backwards, towards the other leg of the pair.
+fn beside(centre: &[Pt], by: f64, spare: f64) -> Vec<Pt> {
+    let along = |a: Pt, b: Pt| {
+        let (x, y) = (b[0] - a[0], b[1] - a[1]);
+        let l = (x * x + y * y).sqrt();
+        [x / l, y / l]
+    };
+    // each stretch moved aside: (where it begins, where it ends, its direction)
+    let mut stretches: Vec<(Pt, Pt, Pt)> = centre
+        .windows(2)
+        .map(|w| {
+            let u = along(w[0], w[1]);
+            let aside = [-u[1] * by, u[0] * by];
+            ([w[0][0] + aside[0], w[0][1] + aside[1]], [w[1][0] + aside[0], w[1][1] + aside[1]], u)
+        })
+        .collect();
+    loop {
+        // the stretches as they meet: each from its corner with the one before to its corner with the next
+        let mut met: Vec<(Pt, Pt)> = stretches.iter().map(|&(a, b, _)| (a, b)).collect();
+        for k in 1..stretches.len() {
+            let ((a, _, u), (c, _, v)) = (stretches[k - 1], stretches[k]);
+            let (cross, dot) = (u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]);
+            // (how much further from the line than `by` the two meet: by / cos of half the turn)
+            let out = by.abs() * ((2.0 / (1.0 + dot)).sqrt() - 1.0);
+            let outside = cross * by < 0.0;
+            if cross.abs() < 1e-9 || (outside && out > spare) {
+                continue; // in line, or cut across: each keeps its own end
+            }
+            let t = ((c[0] - a[0]) * v[1] - (c[1] - a[1]) * v[0]) / cross;
+            let corner = [a[0] + t * u[0], a[1] + t * u[1]];
+            (met[k - 1].1, met[k].0) = (corner, corner);
+        }
+        let backwards = |k: &usize| {
+            let ((p, q), u) = (met[*k], stretches[*k].2);
+            (q[0] - p[0]) * u[0] + (q[1] - p[1]) * u[1] <= 1e-9
+        };
+        match (0..stretches.len()).find(backwards).filter(|_| stretches.len() > 1) {
+            Some(k) => {
+                // (at an end, the line ends where its neighbour met it)
+                if k == 0 {
+                    stretches[1].0 = met[1].0;
+                } else if k == stretches.len() - 1 {
+                    stretches[k - 1].1 = met[k - 1].1;
+                }
+                stretches.remove(k);
+            }
+            None => {
+                let mut line = Vec::new();
+                for (from, to) in met {
+                    push(&mut line, [round6(from[0]), round6(from[1])]);
+                    push(&mut line, [round6(to[0]), round6(to[1])]);
+                }
+                return line;
+            }
+        }
+    }
+}
+
 /// The `code`-th order of four things (0 to 23); the 0th is the order given.
 fn nth_order(four: &[usize], mut code: usize) -> Vec<usize> {
     let mut left: Vec<usize> = four.to_vec();
@@ -185,7 +224,57 @@ fn nth_order(four: &[usize], mut code: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::nth_order;
+    use super::{beside, nth_order};
+    use crate::geom::dist_segments;
+
+    #[test]
+    fn the_legs_beside_a_line_keep_their_distance_at_its_corners() {
+        let centre = [[0.0, 0.0], [2.0, 0.0], [3.0, 1.0], [3.0, 3.0]];
+        let (left, right) = (beside(&centre, 0.2, 0.02), beside(&centre, -0.2, 0.02));
+        assert_eq!(left[0], [0.0, 0.2]);
+        assert_eq!(right[3], [3.2, 3.0]);
+        assert_eq!((left.len(), right.len()), (4, 4));
+        let least = |a: &[[f64; 2]], b: &[[f64; 2]]| {
+            let pairs = a.windows(2).flat_map(|s| b.windows(2).map(move |t| dist_segments(s[0], s[1], t[0], t[1])));
+            pairs.fold(f64::INFINITY, f64::min)
+        };
+        assert!((least(&left, &right) - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_outside_of_a_sharp_corner_is_cut_across_so_that_the_leg_stays_within_the_trunk() {
+        // a turn of 90 degrees: the legs would meet 0.083 mm further out than they run; the trunk has 0.02 to spare
+        let centre = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]];
+        let (inside, outside) = (beside(&centre, 0.2, 0.02), beside(&centre, -0.2, 0.02));
+        assert_eq!(inside, [[0.0, 0.2], [1.8, 0.2], [1.8, 2.0]]);
+        assert_eq!(outside, [[0.0, -0.2], [2.0, -0.2], [2.2, 0.0], [2.2, 2.0]]);
+        // every point of the outer leg is within its distance of the line, and the two keep theirs from each other
+        let from_line =
+            |p: [f64; 2]| dist_segments(p, p, centre[0], centre[1]).min(dist_segments(p, p, centre[1], centre[2]));
+        assert!(outside.iter().all(|&p| from_line(p) < 0.2 + 1e-9));
+        let least =
+            inside.windows(2).flat_map(|s| outside.windows(2).map(move |t| dist_segments(s[0], s[1], t[0], t[1])));
+        assert!(least.fold(f64::INFINITY, f64::min) > 0.4 - 1e-9);
+        // with room to spare the corner is a corner
+        assert_eq!(beside(&centre, -0.2, 0.1), [[0.0, -0.2], [2.2, -0.2], [2.2, 2.0]]);
+    }
+
+    #[test]
+    fn a_last_stretch_too_short_for_the_inside_of_its_corner_is_left_out() {
+        // a line that ends with one slanted step of the grid: beside it on the inside there is no room for it
+        let centre = [[0.0, 0.0], [2.0, 0.0], [2.05, 0.05]];
+        let (inside, outside) = (beside(&centre, 0.2, 0.02), beside(&centre, -0.2, 0.02));
+        assert_eq!(inside, [[0.0, 0.2], [1.917157, 0.2]]); // it ends where the slanted stretch would have met it
+        assert_eq!(outside.len(), 3);
+        let least = dist_segments(inside[0], inside[1], outside[1], outside[2])
+            .min(dist_segments(inside[0], inside[1], outside[0], outside[1]));
+        assert!(least > 0.4 - 1e-6, "{least}");
+        // the same at the beginning, and for a short stretch between two corners
+        let begun = beside(&[[2.05, 0.05], [2.0, 0.0], [0.0, 0.0]], -0.2, 0.02);
+        assert_eq!(begun, [[1.917157, 0.2], [0.0, 0.2]]);
+        let jog = beside(&[[0.0, 0.0], [2.0, 0.0], [2.05, 0.05], [2.05, 2.0]], 0.2, 0.02);
+        assert_eq!(jog, [[0.0, 0.2], [1.85, 0.2], [1.85, 2.0]]);
+    }
 
     #[test]
     fn the_orders_of_four_are_all_there_once_and_begin_with_the_one_given() {

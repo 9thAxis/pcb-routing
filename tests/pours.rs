@@ -1,7 +1,8 @@
 //! Zones from outside: a round with `pcb_routing::pours` as a caller without KiCad would make it, and the
 //! same questions as JSON, to the library and to the program.
 
-use pcb_routing::pours::{self, Answer, Ask, Fill, Layout, Pad};
+use pcb_routing::ask::{answer, Answer, Ask};
+use pcb_routing::pours::{self, Fill, Layout, Pad};
 use pcb_routing::{route, Problem, Status};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -27,7 +28,7 @@ fn board() -> Value {
 
 fn asked(question: Value) -> Value {
     let ask: Ask = serde_json::from_value(question).unwrap();
-    serde_json::to_value(pours::answer(&ask).unwrap()).unwrap()
+    serde_json::to_value(answer(&ask).unwrap()).unwrap()
 }
 
 #[test]
@@ -135,7 +136,7 @@ fn parts_and_ties_as_json() {
 fn a_question_that_names_what_is_not_there_is_refused() {
     let refused = |question: Value| {
         let ask: Ask = serde_json::from_value(question).unwrap();
-        pours::answer(&ask).unwrap_err().to_string()
+        answer(&ask).unwrap_err().to_string()
     };
     let mut survey = board();
     survey["ask"] = json!("survey");
@@ -182,7 +183,7 @@ fn the_answers_are_plain_lists_and_maps() {
 fn the_program_answers_from_standard_input_and_says_why_it_cannot() {
     let run = |question: &str| {
         let mut child = Command::new(env!("CARGO_BIN_EXE_pcb-routing"))
-            .arg("pours")
+            .arg("ask")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -214,7 +215,7 @@ fn the_program_answers_from_standard_input_and_says_why_it_cannot() {
     for order in [out_first, out_last] {
         let _ = std::fs::remove_file(&answered);
         let done = Command::new(env!("CARGO_BIN_EXE_pcb-routing"))
-            .arg("pours")
+            .arg("ask")
             .args(order)
             .args(["--threads", "1"])
             .output()

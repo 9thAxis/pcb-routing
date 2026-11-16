@@ -240,10 +240,20 @@ impl Problem {
                     .ok_or_else(|| invalid(field, format!("no entry of nets has the key {key}")))
             };
             let trunk = entry(at("trunk"), &pair.trunk)?;
-            if trunk.terminals.len() != 2 {
+            // (two terminals, or more that stand for two pieces: see `Terminal::piece`)
+            let mut ends: Vec<Option<u32>> = Vec::new();
+            for (t, terminal) in trunk.terminals.iter().enumerate() {
+                if terminal.piece.is_none() || !ends.contains(&terminal.piece) {
+                    ends.push(terminal.piece);
+                }
+                if ends.len() > 2 || (t == 0 && trunk.terminals.len() < 2) {
+                    break;
+                }
+            }
+            if ends.len() != 2 {
                 return Err(invalid(
                     at("trunk"),
-                    "the trunk entry has two terminals: where the pair gathers and where it parts",
+                    "the trunk entry has two terminals, or the terminals of two pieces: where the pair gathers and where it parts",
                 ));
             }
             if !trunk.no_vias {

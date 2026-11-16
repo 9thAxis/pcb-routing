@@ -46,12 +46,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod ask;
 mod engine;
 mod error;
 mod geom;
 mod grid;
 pub mod mask;
 pub mod model;
+pub mod pairs;
 pub mod pours;
 mod queue;
 mod router;

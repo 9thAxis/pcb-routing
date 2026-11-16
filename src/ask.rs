@@ -1,12 +1,15 @@
-//! The questions about zones as JSON, as the `pcb-routing pours` command takes and answers them.
+//! The questions a front end puts to the crate, as JSON: what the `pcb-routing ask` command takes and answers.
+//!
+//! They are the functions of [`pours`](crate::pours) (zones) and [`pairs`](crate::pairs) (differential pairs), each
+//! for several nets, pads or tracks at once.
 
-use super::{on_zone, parts, reach, survey, tie_targets, ties, End, Fill, Layout, Pad, Part, Place, Survey};
 use crate::error::{invalid, Error};
 use crate::model::{Net, NetResult, Pt};
+use crate::pairs::{plan, Plan};
+use crate::pours::{on_zone, parts, reach, survey, tie_targets, ties, End, Fill, Layout, Pad, Part, Place, Survey};
 use serde::{Deserialize, Serialize};
 
-/// A question about a board's zones: JSON with the kind of question in the field `ask`, answered with the
-/// JSON of an [`Answer`].
+/// A question: JSON with the kind of question in the field `ask`, answered with the JSON of an [`Answer`].
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "ask", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Ask {
@@ -43,6 +46,15 @@ pub enum Ask {
         /// The points.
         points: Vec<End>,
     },
+    /// [`plan`] of several pairs at once: answered with the plan of each.
+    Pairs {
+        /// The routing layers.
+        layers: Vec<String>,
+        /// The grid step.
+        step: f64,
+        /// The pairs.
+        pairs: Vec<PairNets>,
+    },
     /// [`tie_targets`], for several pads at once: answered with the points for each.
     TieTargets {
         /// The pieces of zone the pads name.
@@ -73,13 +85,25 @@ pub struct ReachNet {
     pub inset: f64,
 }
 
+/// The two nets of a question [`Ask::Pairs`].
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PairNets {
+    /// The pads of the first net (their places and layers).
+    pub a: Vec<Pad>,
+    /// The pads of the second.
+    pub b: Vec<Pad>,
+    /// The distance between the legs, centre to centre.
+    pub pitch: f64,
+}
+
 /// One pad with too few spokes, of a question [`Ask::TieTargets`].
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TiePad {
-    /// The pad's [`Thermal::outline`](super::Thermal::outline).
+    /// The pad's [`Thermal::outline`](crate::pours::Thermal::outline).
     pub outline: Vec<Pt>,
-    /// The pieces of zone it is tied to ([`Thermal::fill`](super::Thermal::fill)), as indices into the
+    /// The pieces of zone it is tied to ([`Thermal::fill`](crate::pours::Thermal::fill)), as indices into the
     /// question's fills.
     pub fill: Vec<usize>,
     /// The pad's middle.
@@ -95,7 +119,7 @@ pub struct TiePad {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TieTrack {
-    /// The pad's [`Thermal::outline`](super::Thermal::outline).
+    /// The pad's [`Thermal::outline`](crate::pours::Thermal::outline).
     pub outline: Vec<Pt>,
     /// The pieces of zone it is tied to, as indices into the question's fills.
     pub fill: Vec<usize>,
@@ -115,6 +139,8 @@ pub enum Answer {
     Parts(Vec<Part>),
     /// To [`Ask::OnZone`]: per point, whether it is on a zone of its net.
     OnZone(Vec<bool>),
+    /// To [`Ask::Pairs`]: per pair, its plan.
+    Pairs(Vec<Plan>),
     /// To [`Ask::TieTargets`]: per pad, the points.
     TieTargets(Vec<Vec<Pt>>),
     /// To [`Ask::Ties`]: per track, whether it ties its pad.
@@ -154,6 +180,12 @@ pub fn answer(ask: &Ask) -> Result<Answer, Error> {
         }
         Ask::Parts { pads, entries, laid } => Answer::Parts(parts(pads, entries, laid)),
         Ask::OnZone { fills, points } => Answer::OnZone(on_zone(fills, points)),
+        Ask::Pairs { layers, step, pairs } => {
+            let planned = |(k, pair): (usize, &PairNets)| {
+                plan(&pair.a, &pair.b, pair.pitch, layers, *step).map_err(|error| within(format!("pairs[{k}]"), error))
+            };
+            Answer::Pairs(pairs.iter().enumerate().map(planned).collect::<Result<_, _>>()?)
+        }
         Ask::TieTargets { fills, pads } => {
             let targets = |(k, pad): (usize, &TiePad)| {
                 let fill = pieces(fills, &pad.fill, format!("pads[{k}].fill"))?;
