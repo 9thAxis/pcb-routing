@@ -33,7 +33,7 @@ zone.
 | `--nets A,B` | route only these nets |
 | `--layers F.Cu,B.Cu` | route only on these layers |
 | `--hints FILE` | what the nets are for, where it is not in `BOARD.routing.json` beside the board ([docs/hints.md](https://github.com/9thAxis/pcb-routing/blob/main/docs/hints.md)) |
-| `--no-pours`, `--no-pairs`, `--no-guesses`, `--no-decoupling`, `--bus-pull 0` | leave out what the bridge does of its own accord: following zones, laying pairs side by side, guessing from names, linking capacitors to their pins, keeping buses together |
+| `--no-pours`, `--no-pairs`, `--no-guesses`, `--no-decoupling`, `--bus-pull 0`, `--exit-cost 0` | leave out what the bridge does of its own accord: following zones, laying pairs side by side, guessing from names, linking capacitors to their pins, keeping buses together, leaving long pads through an end |
 | `--coarse-first` | a first pass on a grid twice as coarse: about three times faster, a little more track and vias |
 
 `--help` lists the rest. The bridge says what it took for a pair or a clock and from where, what it laid
@@ -62,9 +62,9 @@ back, as the boards were drawn, the bridge follows them (its default):
 
 | Set | Boards | Clean pass | Connections made | Track laid | Vias | Time per board |
 |---|---|---|---|---|---|---|
-| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,485 mm (14,694 without zones) | 83 (73) | 0.7 s |
-| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,937 mm (5,082) | 44 (38) | 2.9 s |
-| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,735 mm (13,232) | 337 (296) | 36 s |
+| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,500 mm (14,733 without zones) | 85 (71) | 0.7 s |
+| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,990 mm (5,112) | 36 (34) | 2.9 s |
+| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,735 mm (13,249) | 333 (278) | 36 s |
 
 (The lengths move by a few millimetres from one preparation of the boards to the next, as KiCad's fills do;
 a board as saved routes the same every time.) Fewer connections are left to make, a fifth less track is
@@ -121,13 +121,13 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.90 | 1.13 | 10.7 | 1.7 | 12 | 40 |
+| pcb-routing | 0.90 | 1.13 | 10.0 | 1.8 | 13 | 44 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
 Detour is track length over the shortest tree through a net's pad centres. A short segment is one shorter
-than twice its width. pcb-routing has the least track, the fewest vias and the fewest corners;
-KiCadRoutingTools has fewer sharp turns.
+than twice its width. pcb-routing has the fewest vias, and as little track and as few corners as
+KiCadRoutingTools, which has fewer sharp turns.
 
 Buses: nets with neighbouring pads on one part and neighbouring pads on another, three or more together (54
 buses, 199 pairs of neighbours on these boards). Alongside is the share of a net's track within 1.5 pad
@@ -136,14 +136,17 @@ pitches of its neighbour on the same layer.
 | | Alongside its neighbour | Same number of vias | The two cross | Difference in length |
 |---|---|---|---|---|
 | The designer | 72% | 80% | 19% | 25% |
-| pcb-routing | 72% | 80% | 14% | 25% |
-| pcb-routing, buses left alone (`--bus-pull 0`) | 64% | 83% | 21% | 24% |
+| pcb-routing | 71% | 80% | 13% | 25% |
+| pcb-routing, buses left alone (`--bus-pull 0`) | 65% | 82% | 23% | 24% |
 | KiCadRoutingTools | 71% | 61% | 26% | 25% |
 | FreeRouting | 64% | 77% | 29% | 24% |
 
 Decoupling: a capacitor with a pin of an IC of the same net within 5 mm (51 on these boards). The designers
-have a via between the capacitor and that pin for 6% of them; pcb-routing 4% (12% with `--no-decoupling`),
+have a via between the capacitor and that pin for 6% of them; pcb-routing 6% (12% with `--no-decoupling`),
 KiCadRoutingTools 7% of those it joins directly, FreeRouting 8%.
+
+Pad exits: of the pads at least 1.5 times as long as wide, the designers leave 33% through a long side,
+pcb-routing 31% (53% with `--exit-cost 0`), FreeRouting 29%.
 
 Not in these tables: what needs to know what the circuit does (which nets are quiet and which are noisy).
 
@@ -201,6 +204,9 @@ For a front end (the KiCad bridge is one), and measured through it:
   file.
 * **Buses kept together.** Nets that leave one part and arrive at another side by side are marked as a bus,
   with lanes in the order of their pads.
+* **Long pads left through an end.** The ground beside the long sides of a pad costs the pad's own net more,
+  so its track runs out along the pad before it turns: 31 % of long pads are left through a long side, where
+  the designers have 33 % and the router without this 53 %.
 * **Decoupling capacitors joined to the pin they stand by**: a link of its own that is slow to change
   layer, given up for a net that cannot be completed with it.
 
@@ -287,7 +293,7 @@ Every field is documented on the types in `src/model.rs`. In short:
 * `window`, `step`, routing `layers` (at most seven);
 * `copper` already on the board (shapes `seg`, `circle`, `poly`, with net and layers; `pad` for solder lands);
 * `holes` already on the board; `regions` closed to tracks and/or vias; `dear` ground, open but at a price
-  (a factor on the length of track in it; nothing more for the net it belongs to);
+  (a factor on the length of track in it; nothing more for the net it belongs to, or for one net `only`);
 * `rules`: hole spacing, clearance between new nets, a larger clearance between `quiet` nets and others,
   whether a via may stand in a land of its own net;
 * `nets`: key, electrical net, width, via, layers, clearance to existing copper, terminals (those that
@@ -363,7 +369,7 @@ repository) records what each of these bought when it was added, and what was tr
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 164 in the engine and its modules for zones and pairs, 171 in the bridge, 141 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 164 in the engine and its modules for zones and pairs, 178 in the bridge, 141 in the quality tools |
 
 ## Sources
 

@@ -158,6 +158,9 @@ pub struct Region {
 /// would on the dearest layer it passes. Where several overlap, a net pays for the dearest that is not its
 /// own. The middle of a track or via is what is tested: a polygon that is to keep their edges off as well is
 /// given grown by that much.
+///
+/// Ground can also be dear to one net alone (`only`): the ground beside the long sides of a pad, say, for the
+/// pad's own net, so that its track leaves through an end.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Dear {
@@ -171,6 +174,9 @@ pub struct Dear {
     /// The electrical net whose ground it is, if any: its entries pay nothing more there.
     #[serde(default)]
     pub net: Option<String>,
+    /// The one electrical net that pays there, if any: to every other net it is ordinary ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<String>,
 }
 
 fn yes() -> bool {

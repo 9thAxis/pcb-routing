@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Long pads are left through an end. Ground can be dear to one net alone (`Dear::only`), and the KiCad bridge
+  makes the ground beside the long sides of every pad at least 1.5 times as long as wide dear to the pad's
+  own net (`--exit-cost MM`, 0.5 by default, 0 for none): a track runs out to the end of its pad before it
+  turns, where before it left at 45 degrees from the middle, through a long side. On the 111 comparable
+  public boards the share of long pads left through a long side goes from 53 % to 31 % (the designers:
+  33 %), for 0.3 % more track and no more vias; all 119 boards stay complete and clean.
+
 ## 0.1.0 (2026-11-15)
 
 First version as a library.

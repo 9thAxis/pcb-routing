@@ -11,6 +11,7 @@ them is mended. Only `kicad` knows KiCad's files and its `pcbnew` module.
     rules      the board's rules as the router's distances and sizes, and the tries a lot of nets gets
     questions  what is asked of the engine about zones (the geometry is the crate's: src/pours)
     beside     what stands beside what: buses, and capacitors by the pins they decouple
+    exits      how a track leaves a long pad
     pairs      differential pairs: which nets are laid as one, and their entries
     problem    a picture and the rules as the router's problem
     engine     the pcb-routing program: runs and questions

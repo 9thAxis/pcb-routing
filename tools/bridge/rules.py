@@ -18,6 +18,7 @@ class Settings:
     pours: bool = True  # pads that a filled zone joins count as joined, and the rest of the net is taken to the zone
     pour_cost: float = 2.0  # what a track pays for its length across another net's pour, as a factor
     spoke_cost: float = 4.0  # and across the ground where it would cut a spoke that ties a pad to its pour
+    exit_cost: float = 0.5  # mm of length a track pays more for leaving a long pad through a long side; 0: nothing
     decoupling: bool = True  # a capacitor beside a pin of an IC on its net is joined to that pin itself
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
     pairs: bool = True  # two nets named as the halves of a differential pair are laid side by side

@@ -6,6 +6,7 @@ from .lengths import r6
 from .rules import amps_width
 from .questions import reach_of
 from .beside import buses, decoupling
+from .exits import exits
 from .pairs import pair_entries, pairs_of
 from .engine import ENGINE_NETS
 
@@ -209,6 +210,8 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     problem_rules.update(region_margin_mm=r6(margin), new_clearance_mm=r6(rules.new_clearance(real)))
     if narrow:
         problem_rules["via_in_pad"] = True  # a land enclosed by another pad can only be left through a via in it
+    # A long pad is left through an end: the ground beside its long sides costs its own net more.
+    dear += exits(picture.pads, {n["net"] for n in nets}, layers, rules.settings.exit_cost, rules.settings.step)
     problem = dict(window=window, step=rules.settings.step, layers=layers, copper=copper, holes=holes, regions=regions)
     if dear:
         problem["dear"] = dear

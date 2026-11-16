@@ -86,6 +86,9 @@ def main(argv=None):
                              "(1: nothing more)")
     parser.add_argument("--spoke-cost", type=float, default=4.0,
                         help="and across the ground where it would cut a spoke that ties a pad to its pour")
+    parser.add_argument("--exit-cost", type=float, default=0.5,
+                        help="what a track pays for leaving a long pad through a long side and not an end, "
+                             "in mm of length (0: nothing)")
     parser.add_argument("--no-pairs", action="store_true",
                         help="do not lay two nets named as the halves of a differential pair (_P/_N, +/-, DP/DM) "
                              "side by side")
@@ -120,6 +123,8 @@ def main(argv=None):
         parser.error("--step takes a number of mm, or auto")
     if not 0 <= args.bus_pull <= 10:
         parser.error("--bus-pull takes a number from 0 to 10")
+    if not 0 <= args.exit_cost <= 10:
+        parser.error("--exit-cost takes a number of mm from 0 to 10")
     if not (1 <= args.pour_cost <= 100 and 1 <= args.spoke_cost <= 100):
         parser.error("--pour-cost and --spoke-cost take a number from 1 to 100")
     beside = Path(args.board).with_suffix(".routing.json")
@@ -129,7 +134,7 @@ def main(argv=None):
         parser.error(str(error))
     settings = Settings(
         hints=hints, guesses=not args.no_guesses, pairs=not args.no_pairs, decoupling=not args.no_decoupling,
-        pours=not args.no_pours, pour_cost=args.pour_cost, spoke_cost=args.spoke_cost, bus_pull=args.bus_pull,
+        pours=not args.no_pours, exit_cost=args.exit_cost, pour_cost=args.pour_cost, spoke_cost=args.spoke_cost, bus_pull=args.bus_pull,
         step=step, coarse_first=args.coarse_first, slack=args.slack, via_penalty=args.via_penalty,
         layers=names(args.layers))
     options = dict(variants=args.variants, max_states=args.max_states)

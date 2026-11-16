@@ -86,8 +86,8 @@ impl DearGround {
         if p.dear.is_empty() {
             return ground;
         }
-        // the kinds: a factor and the net it belongs to
-        let mut kinds: Vec<(f64, Option<&str>)> = Vec::new();
+        // the kinds: a factor, the net it belongs to, and the one net that pays for it
+        let mut kinds: Vec<(f64, Option<&str>, Option<&str>)> = Vec::new();
         let mut sets = Sets::new();
         ground.set = vec![0u16; space.states()];
         let mut drawn: Vec<u8> = Vec::new();
@@ -97,7 +97,7 @@ impl DearGround {
             if d.factor <= 1.0 || kinds.len() > u16::MAX as usize {
                 continue;
             }
-            let this = (d.factor, d.net.as_deref());
+            let this = (d.factor, d.net.as_deref(), d.only.as_deref());
             let kind = kinds.iter().position(|&k| k == this).unwrap_or_else(|| {
                 kinds.push(this);
                 kinds.len() - 1
@@ -113,10 +113,11 @@ impl DearGround {
                 }
             }
         }
-        // what a net pays in a set: the greatest factor among the kinds that are not its own
+        // what a net pays in a set: the greatest factor among the kinds that are not its own, and are for it
         let pays = |net: &str, set: &Vec<u16>| -> f32 {
-            let others = set.iter().map(|&k| kinds[k as usize]).filter(|k| k.1 != Some(net));
-            others.map(|k| k.0 as f32).fold(1.0, f32::max)
+            let kinds = set.iter().map(|&k| kinds[k as usize]);
+            let for_it = kinds.filter(|k| k.1 != Some(net) && k.2.map_or(true, |only| only == net));
+            for_it.map(|k| k.0 as f32).fold(1.0, f32::max)
         };
         ground.factor = p.nets.iter().map(|n| sets.kinds.iter().map(|set| pays(&n.net, set)).collect()).collect();
         ground
@@ -180,6 +181,16 @@ mod tests {
         let pays = |n: usize, x: f64| at(&g, n, 0, [x, 2.0]);
         assert_eq!([pays(0, 1.0), pays(0, 3.0), pays(0, 5.0), pays(0, 7.0), pays(0, 9.0)], [1.0, 1.0, 3.0, 3.0, 1.0]);
         assert_eq!([pays(1, 1.0), pays(1, 3.0), pays(1, 5.0), pays(1, 7.0), pays(1, 9.0)], [1.0, 5.0, 5.0, 3.0, 1.0]);
+    }
+
+    #[test]
+    fn ground_dear_to_one_net_alone_is_ordinary_ground_to_the_others() {
+        let mut beside = square([2.0, 6.0], 5.0, None, None);
+        beside["only"] = json!("A");
+        let g = ground(json!([beside, square([4.0, 8.0], 3.0, None, None)]));
+        let pays = |n: usize, x: f64| at(&g, n, 0, [x, 2.0]);
+        assert_eq!([pays(0, 3.0), pays(0, 5.0), pays(0, 7.0)], [5.0, 5.0, 3.0]);
+        assert_eq!([pays(1, 3.0), pays(1, 5.0), pays(1, 7.0)], [1.0, 3.0, 3.0]);
     }
 
     #[test]

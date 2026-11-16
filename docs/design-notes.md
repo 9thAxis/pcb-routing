@@ -81,6 +81,23 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   move must gain a hundredth. A wrong order of lanes is worse than none (six nets, lanes three apart as a
   grid of pads would give: 6 % more track), so the bridge gives lanes only where a bus is in one row or
   two on one part.
+* Pad exits (bridge). What was measured before anything was built: corners, short segments and vias were
+  already under the designers' figures, and the one figure of how a route reads that was worse was how tracks
+  leave pads. From the middle of a long pad the shortest way to anything off to the side is at 45 degrees
+  through a long side, and that is what the search took: 53 % of long pads, where the designers have 33 %.
+  The ground beside the long sides is now dear to the pad's own net alone (0.2 mm deep; what a crossing
+  costs is set in mm of length), so a track runs out to the end first: the same length on the grid, and
+  one corner more. On the 111 comparable boards, by what a crossing costs:
+
+  | Cost | Through a long side | Track, designer = 1 | Vias per 100 | Corners per connection | Short segments per 100 |
+  |---|---|---|---|---|---|
+  | none | 53.1 % | 0.901 | 10.7 | 1.70 | 40 |
+  | 0.5 mm | 30.8 % | 0.903 | 10.0 | 1.78 | 44 |
+  | 1 mm | 23.5 % | 0.904 | 9.8 | 1.81 | 48 |
+  | 2 mm | 16.4 % | 0.905 | 10.1 | 1.88 | 52 |
+
+  0.5 mm is the default: level with the designers, who leave a third of their long pads sideways because
+  that is often the right way out. All 119 boards stay complete and clean at every cost tried.
 * Decoupling (bridge): a capacitor by a pin of an IC as an entry of its own, slow to change layer. A via
   between capacitor and pin 14 to 6 % of 51 (the designers 6 %), the copper between them as short as the
   straight line; 1.4 % more track, since the capacitor no longer taps the nearest copper of its net. On
