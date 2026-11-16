@@ -1,6 +1,8 @@
 """Differential pairs: which nets are laid as one, and the entries of the problem that lay them so. Where the pads
 of two nets face each other is the engine's to say (src/pairs.rs)."""
 
+import math
+
 from .lengths import r6
 from .questions import pair_plans
 
@@ -48,6 +50,7 @@ def pairs_of(picture, rules, names, ask, notes=None):
     return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans) if plan["trunks"]]
 
 
+OFF_LAYER = 1.5  # what a trunk pays, as a factor, on a layer the tighter of its two ends is not on
 FREE = 2  # the try at which a stretch is left free of hands and headings; after it, it is laid as two nets
 
 
@@ -91,13 +94,39 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
                    ([pads[net][i].at for net, i in zip((a, b), plan["ends"][trunk["ends"][end]])] for end in (0, 1))]
         away = lambda place, end: [r6(place["xy"][0] - middles[end][0]), r6(place["xy"][1] - middles[end][1])]
         held_to = {} if tried(key) == FREE else None
-        places = [dict(xy=place["xy"], layers=place["layers"], piece=end, **(dict(turn=turn) if turn else {}),
-                       **(dict(hand=hand, heading=away(place, end)) if held_to is None else held_to))
-                  for hand, way in ((1, "gather"), (2, "round"))
-                  for end in (0, 1) for turn, lot in enumerate(trunk[way][end]) for place in lot]
+        # On a layer that the pads of an end are not on, its stubs change layer: the trunk ends further off
+        # there, where two vias have room beside each other, and nearer only where that far off is shut (a place
+        # for each layer takes its turn among those of that layer).
+        of_pads = [{layer for layer in layers if all(layer in pads[net][i].layers
+                                                      for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]))}
+                   for end in (0, 1)]
+        vias_fit = 2.5 * max(rules.via(a)[0], rules.via(b)[0]) + pitch
+        far = lambda place, end: math.dist(place["xy"], middles[end]) >= vias_fit
+        places = []
+        for hand, way in ((1, "gather"), (2, "round")):
+            for end in (0, 1):
+                for own in (True, False):
+                    lots = [[(place, [l for l in place["layers"] if (l in of_pads[end]) == own]) for place in lot]
+                            for lot in trunk[way][end]]
+                    lots = [[(place, on) for place, on in lot if on] for lot in lots]
+                    if not own:
+                        # (where there is no room so far off, nearer after all: the stubs may yet find a way)
+                        lots = ([[item for item in lot if far(item[0], end)] for lot in lots] +
+                                [[item for item in lot if not far(item[0], end)] for lot in lots])
+                    for turn, lot in enumerate(lot for lot in lots if lot or own):
+                        places += [dict(xy=place["xy"], layers=on, piece=end, **(dict(turn=turn) if turn else {}),
+                                        **(dict(hand=hand, heading=away(place, end)) if held_to is None else held_to))
+                                   for place, on in lot]
         clearance = dict(default=r6(max(rules.clearance(a), rules.clearance(b))),
                          nets={n: r6(c) for net in (a, b) for n, c in rules.stricter(net).items()})
         wide = entry(f"{key} trunk", a, places, no_vias=True)
+        # Where the two ends share no layer, the stubs of one change layer. The trunk is dearer on the layers
+        # that the end with the closer pads is not on: beside those there is the least room for a via.
+        ends = [[pads[net][i] for net, i in zip((a, b), plan["ends"][trunk["ends"][end]])] for end in (0, 1)]
+        of_end = lambda end: {layer for layer in layers if all(layer in pad.layers for pad in end)}
+        tighter = min(ends, key=lambda end: math.dist(end[0].at, end[1].at))
+        dearer = {} if of_end(ends[0]) & of_end(ends[1]) else {l: OFF_LAYER for l in layers if l not in of_end(tighter)}
+        wide = dict(wide, layer_cost=dict(wide.get("layer_cost", {}), **dearer)) if dearer else wide
         entries.append(dict(wide, net=f"~{key}", width=rules.trunk_width(width, pitch), clearance=clearance))
         stubs = [[], []]
         for end in (0, 1):

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// Two pads further apart than this, in mm, are not an end of a pair.
 const END_REACH: f64 = 5.0;
 /// A trunk is offered that many times further out from its pads, at most, than the nearest place.
-const FURTHER: [f64; 3] = [1.0, 1.5, 2.0];
+const FURTHER: [f64; 5] = [1.0, 1.5, 2.0, 3.0, 4.5];
 
 /// A trunk of a pair: the stretch laid as one, between two of its ends.
 #[non_exhaustive]
@@ -252,9 +252,9 @@ mod tests {
         // distance and the pitch off
         assert_eq!(trunk.gather[0][0][0], Place { xy: [0.9, 0.5], layers: vec!["F".to_string()] });
         assert_eq!(trunk.gather[1][0][0].xy, [19.1, 0.5]);
-        // at each of three distances: the place square to the pads, then as a lot of their own the two beside it
-        assert_eq!(trunk.gather[0].iter().map(Vec::len).collect::<Vec<_>>(), [1, 2, 1, 2, 1, 2]);
-        assert!(trunk.gather[0].iter().flatten().all(|p| p.xy[0] > 0.5 && p.xy[0] < 3.0));
+        // at each of five distances: the place square to the pads, then as a lot of their own the two beside it
+        assert_eq!(trunk.gather[0].iter().map(Vec::len).collect::<Vec<_>>(), [1, 2, 1, 2, 1, 2, 1, 2, 1, 2]);
+        assert!(trunk.gather[0].iter().flatten().all(|p| p.xy[0] > 0.5 && p.xy[0] < 5.0));
         // the other way round both ends: away from each other
         assert_eq!((trunk.round[0][0][0].xy, trunk.round[1][0][0].xy), ([-0.9, 0.5], [20.9, 0.5]));
         assert!(

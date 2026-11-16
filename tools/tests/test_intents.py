@@ -225,12 +225,12 @@ class Pairs(WithEngine):
         self.assertEqual({t["piece"] for t in trunk["terminals"]}, {0, 1})
         near = [t for t in trunk["terminals"] if t["piece"] == 0]
         # square to the pads first, then the places beside it, and the nearer to the pads the earlier
-        self.assertEqual(sorted({t.get("turn", 0) for t in near}), [0, 1, 2, 3, 4, 5])
+        self.assertEqual(sorted({t.get("turn", 0) for t in near}), list(range(10)))
         self.assertEqual([t["xy"][1] for t in near if "turn" not in t], [4.5, 4.5])  # (the pads are at y 4 and 5)
         off = lambda t: abs(t["xy"][0] - 2.0)  # (how far off the pads, which are at x 2)
         self.assertLess(max(off(t) for t in near if "turn" not in t), min(off(t) for t in near if t.get("turn") == 2))
         # a little off the pads, to either side of them
-        self.assertTrue(all(0 < off(t) < 4 for t in near))
+        self.assertTrue(all(0 < off(t) < 6 for t in near))
         self.assertEqual(pair["stubs"],
                          [["D_N = D_P D_N 1", "D_N = D_P D_P 1"], ["D_N = D_P D_N 2", "D_N = D_P D_P 2"]])
         stub = nets["D_N = D_P D_P 1"]
@@ -257,7 +257,7 @@ class Pairs(WithEngine):
         further = k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P": 1})
         trunk = {n["key"]: n for n in further["nets"]}["D_N = D_P trunk"]
         # the nearest lot of places is gone
-        self.assertEqual(sorted({t.get("turn", 0) for t in trunk["terminals"]}), [0, 1, 2, 3])
+        self.assertEqual(sorted({t.get("turn", 0) for t in trunk["terminals"]}), list(range(8)))
         # (the nearest lot reached out to 2.95)
         self.assertGreater(min(abs(t["xy"][0] - 2.0) for t in trunk["terminals"] if t["piece"] == 0), 0.95)
 

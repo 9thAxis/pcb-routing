@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Pairs are laid the right way round. A pair cannot be turned over on one layer, and a trunk that reached
+  its place from the side ended with one leg behind the other. Now: a terminal may have a `heading` (a track
+  sets out that way and comes in against it) and a `hand` (an entry is joined at terminals of one hand
+  only; it is laid once for each and the better kept); `pairs::plan` gives the places of a trunk as the two
+  ways round its ends that bring each leg to its own pad (`gather`, `round`), out to 4.5 times as far off
+  the pads as before. The bridge heads each place straight away from its pads; where the two ends share no
+  layer, the trunk is dearer on the layer of the end with the wider pads and ends further off on a layer
+  the pads are not on, where two vias have room; and the third try of a stretch is left free. On 18 pairs
+  of 12 public boards: coupled for 50 % of their length (49 % before, the designers 44 %), with a USB pair
+  at a through-hole connector from 58 to 77 % and no pair down by more than 3 points. All 119 boards
+  complete and clean with and without zones.
 - Pairs leave their pads square to them. The places a trunk may begin at were offered towards the far end
   only; where two pads stand in line with it (a part turned by 45 degrees, a row that faces away), one leg
   had to pass the other's pad and the pair was laid as two nets. The places square to the line of the two

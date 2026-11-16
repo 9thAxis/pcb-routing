@@ -93,7 +93,8 @@ too close for that (a protection device next to its connector), and to a pad tha
 one leg), the nets are joined as any net is.
 
 The legs are as wide as the nets' tracks and as far apart as the clearance, or the `gap`. A pair is begun as
-near its pads as there is room. A stretch that is not all laid as a pair (the short tracks from its legs to
+near its pads as there is room, straight away from them, and so that each leg arrives on the side of its
+own pad at the far end (the other way round both ends, where that is the way that is open). A stretch that is not all laid as a pair (the short tracks from its legs to
 the pads find no way, the legs would have to cross to reach them, or its line turns too sharply for two legs
 to keep their distance beside it) is done again begun further off, and in the end laid as two nets; the bridge
 says so. Where something else is left unjoined with pairs laid, the run is done once more without them, and
