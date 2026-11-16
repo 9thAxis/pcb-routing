@@ -53,7 +53,7 @@ pub struct Problem {
 /// points where the pair gathers and where it parts, both on the grid; or several for each, as two pieces,
 /// see [`Terminal::piece`]: the trunk then runs between whichever two come cheapest), an electrical net name
 /// of its own (so that copper of either real net is an obstacle to it), a `width` of at least
-/// `pitch + leg_width`, and `no_vias` set.
+/// `pitch + leg_width`, and `no_vias` set unless the pair may change layer (see `via_pitch`).
 ///
 /// When the nets have settled the trunk is split into two legs `pitch` apart, which lie within it: on the outside
 /// of a corner a leg takes what the trunk is wider than `pitch + leg_width` (0.04 mm takes a turn of 45 degrees at
@@ -78,6 +78,15 @@ pub struct Pair {
     pub pitch: f64,
     /// Keys of the stub entries: `stubs[end][leg]`, end 0 at the trunk's first terminal.
     pub stubs: [[String; 2]; 2],
+    /// Centre to centre distance of the two vias the pair changes layer through, side by side across its
+    /// way; 0 (the default) for a pair that stays on one layer. The trunk changes layer through one via of
+    /// its own entry's size, which must be as wide as the two together (`via_pitch` and a via of the stubs'
+    /// size) or wider, and goes on from it the way it came; each leg is drawn aside to its own via, of the
+    /// size of its stubs' vias, within the ground the trunk's via took. The trunk's drill is likewise as
+    /// wide as both, and its via wide enough that a via of another net which keeps the clearance from it
+    /// keeps [`Rules::hole_centre_mm`] from either of the two; the pair's own two keep it too.
+    #[serde(default)]
+    pub via_pitch: f64,
 }
 
 /// A piece of copper already on the board.

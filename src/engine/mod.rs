@@ -99,6 +99,8 @@ struct NetState {
     /// Copper the entry holds besides its paths, as real shapes: (layer, from, to, half width). The leg of a
     /// pair, held by the stub at its first end (see `split`).
     shapes: Vec<(usize, Pt, Pt, f64)>,
+    /// And the vias it holds so, of its own via's size, where they stand: those of a pair's leg.
+    posts: Vec<Pt>,
 }
 
 /// One attempt at a problem.
@@ -149,8 +151,8 @@ struct Laid {
 struct Pairs {
     /// Terminals an entry has besides those of the problem: the end of a pair's leg, for a stub.
     extra_terms: Vec<Vec<Term>>,
-    /// Per pair, once split: the layer and the two legs as lines.
-    legs: Vec<Option<(usize, [Vec<Pt>; 2])>>,
+    /// Per pair, once split: its two legs.
+    legs: Vec<Option<pairs::Legs>>,
 }
 
 /// What decides which look-ahead a search gets.
@@ -207,6 +209,7 @@ impl<'a> Engine<'a> {
         self.unclaim(n);
         if state.shapes.is_empty() {
             state.shapes = std::mem::take(&mut self.laid.nets[n].shapes);
+            state.posts = std::mem::take(&mut self.laid.nets[n].posts);
         }
         self.laid.nets[n] = state;
         self.claim(n);

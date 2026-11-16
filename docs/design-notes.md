@@ -201,8 +201,18 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   Before that: coupled for 40 % of their length, where the designers have 39 % and the router without pairs 18 %
   (36 % before the places took their turn and a pair was begun again further off); the lengths of the two
   halves differ by 15 % (designers 19 %, without pairs 16 %). The price is time on the boards where a pair
-  is not laid at once: each new beginning is a run of the whole lot. Still open: pairs that
-  change layer; untwisting at an end; coupling up to the pads; impedance.
+  is not laid at once: each new beginning is a run of the whole lot. Still open: untwisting
+  at an end; coupling up to the pads; impedance.
+  * Changing layer (17 November). A USB pair that the designer took under the board through two vias at
+    either end (34 mm) went 71 mm round it on the top. The trunk may now change layer: through one via as
+    wide as two of the legs' side by side (`Pair::via_pitch`), at the price of two, which the split makes
+    into the two with each leg drawn aside to its own at 45 degrees. First the trunk was only held to its
+    direction through the via, and turned a step before or after it: a leg then passes the other's via too
+    near, whichever way the two are turned (the two vias are as near each other as the rules allow, so
+    there is nothing to give). So a layer change is one move of the search: a straight run, the via in the
+    middle of it, as long a run on the other layer. That pair: 32 mm, two vias a leg, as the designer's.
+    Nothing else among the 20 pairs changed, at the price of two vias or of one: where the others fall
+    short of their designers it is at ends with three parts in a row, not for want of a layer.
 * What the nets are for (bridge). Three sources: the board, guesses from names and parts, a hints file.
   The first version let a guessed clock, crystal, switch node or sensitive net hold its shortest way
   (`yield`). On the 20 larger boards the 36 nets so guessed lost 12 vias between them and the other 760

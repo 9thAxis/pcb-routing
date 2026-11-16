@@ -275,8 +275,21 @@ impl Problem {
                     "the trunk entry has two terminals, or the terminals of two pieces: where the pair gathers and where it parts",
                 ));
             }
-            if !trunk.no_vias {
-                return Err(invalid(at("trunk"), "the trunk entry must have no_vias set: a pair stays on one layer"));
+            if !(pair.via_pitch >= 0.0 && pair.via_pitch.is_finite()) {
+                return Err(invalid(at("via_pitch"), "is a distance, or 0 for a pair that stays on one layer"));
+            }
+            if pair.via_pitch > 0.0 && pair.via_pitch < self.rules.hole_centre_mm - 1e-9 {
+                return Err(invalid(
+                    at("via_pitch"),
+                    "is less than rules.hole_centre_mm: two holes may not be so near",
+                ));
+            }
+            if pair.via_pitch == 0.0 && !trunk.no_vias {
+                return Err(invalid(
+                    at("trunk"),
+                    "the trunk entry must have no_vias set, or the pair a via_pitch: where it changes layer its \
+                     two vias stand that far apart",
+                ));
             }
             if trunk.width < pair.pitch + pair.leg_width {
                 return Err(invalid(
@@ -305,6 +318,45 @@ impl Problem {
                     }
                     if stub.terminals.len() != 1 {
                         return Err(invalid(field, "a stub entry has one terminal, its pad"));
+                    }
+                    if pair.via_pitch > 0.0 && pair.via_pitch < stub.via[0] + pair.pitch - pair.leg_width - 1e-9 {
+                        return Err(invalid(
+                            at("via_pitch"),
+                            format!(
+                                "two vias of {} so near would be nearer each other than the legs are (pitch - leg_width)",
+                                stub.via[0]
+                            ),
+                        ));
+                    }
+                    if pair.via_pitch > 0.0 && trunk.via[1] < pair.via_pitch + stub.via[1] - 1e-9 {
+                        return Err(invalid(
+                            at("trunk"),
+                            format!(
+                                "the trunk entry's drill of {} is narrower than two of {} side by side, {} apart",
+                                trunk.via[1], stub.via[1], pair.via_pitch
+                            ),
+                        ));
+                    }
+                    // (a via of another net keeps the copper clearance from the trunk's: that must hold the
+                    // hole spacing between it and either of the two)
+                    let others = self.nets.iter().filter(|n| n.key != trunk.key && !n.no_vias).map(|n| n.via[0] / 2.0);
+                    let ring = trunk.via[0] / 2.0 - pair.via_pitch / 2.0 + self.rules.new_clearance_mm;
+                    let least = others.fold(f64::INFINITY, f64::min);
+                    if pair.via_pitch > 0.0 && least.is_finite() && ring + least < self.rules.hole_centre_mm - 1e-9 {
+                        return Err(invalid(
+                            at("trunk"),
+                            "the trunk entry's via is too narrow for a via of another net that keeps its distance \
+                             from it to keep rules.hole_centre_mm from either of the pair's two",
+                        ));
+                    }
+                    if pair.via_pitch > 0.0 && trunk.via[0] < pair.via_pitch + stub.via[0] - 1e-9 {
+                        return Err(invalid(
+                            at("trunk"),
+                            format!(
+                                "the trunk entry's via of {} is narrower than two vias of {} side by side, {} apart",
+                                trunk.via[0], stub.via[0], pair.via_pitch
+                            ),
+                        ));
                     }
                 }
             }

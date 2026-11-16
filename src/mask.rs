@@ -157,14 +157,17 @@ pub(crate) fn stamp_reach(p: &Problem) -> (f64, f64, f64) {
         copper = copper.max(half + clear).max(via_r + clear).max(drill_r + p.rules.pad_drill_margin_mm);
         region = region.max(half.max(via_r) + p.rules.region_margin_mm);
     }
-    (copper, region, p.rules.hole_centre_mm)
+    let aside = p.pairs.iter().map(|pair| pair.via_pitch / 2.0).fold(0.0, f64::max);
+    (copper, region, p.rules.hole_centre_mm + aside)
 }
 
 /// The cells where a net may change layer whatever else is near: where it has a hole from the start (a hole
 /// of its electrical net, or a terminal on more than one layer). Sorted.
 pub(crate) fn free_cells(p: &Problem, g: &Grid, net: &Net) -> Vec<u32> {
     let holes = p.holes.iter().filter(|h| h.net.as_deref() == Some(net.net.as_str())).map(|h| h.xy);
-    let terminals = net.terminals.iter().filter(|t| t.layers.len() > 1).map(|t| t.xy);
+    // (the terminals of a pair's trunk are places beside its pads, not pads: there is no hole in them)
+    let trunk = p.pairs.iter().any(|pair| pair.trunk == net.key);
+    let terminals = net.terminals.iter().filter(|t| t.layers.len() > 1 && !trunk).map(|t| t.xy);
     let mut cells: Vec<u32> = holes.chain(terminals).filter_map(|xy| g.cell(xy)).map(|c| c as u32).collect();
     cells.sort_unstable();
     cells.dedup();
@@ -221,8 +224,10 @@ pub(crate) fn stamp_fixed<'a>(
             stamp_polygon(g, rect, mask, VIA_BIT, &region.rings, via_r + p.rules.region_margin_mm);
         }
     }
+    // (the via of a pair's trunk stands for two, each half their distance from its middle)
+    let aside = p.pairs.iter().find(|pair| pair.trunk == net.key).map_or(0.0, |pair| pair.via_pitch / 2.0);
     for hole in holes {
-        stamp_capsule(g, rect, mask, VIA_BIT, hole.xy, hole.xy, p.rules.hole_centre_mm);
+        stamp_capsule(g, rect, mask, VIA_BIT, hole.xy, hole.xy, p.rules.hole_centre_mm + aside);
     }
 }
 

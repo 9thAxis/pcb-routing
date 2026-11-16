@@ -103,6 +103,49 @@ fn a_pair_is_laid_on_a_coarser_grid() {
     assert_eq!(s.status, Status::Routed, "{}", s.message);
 }
 
+/// A wall across the layer of the pads: the pair changes layer to pass it and comes back, through two vias
+/// side by side each time, and its legs keep their distance from each other all the way.
+#[test]
+fn a_pair_changes_layer_through_two_vias_side_by_side() {
+    let p = pair_problem(0.05, [[1.0, 2.5], [1.0, 3.5], [9.0, 2.5], [9.0, 3.5]], [[2.0, 3.0], [8.0, 3.0]]);
+    let mut v = serde_json::to_value(&p).unwrap();
+    v["copper"] = json!([{"t": "seg", "a": [5.0, -1.0], "b": [5.0, 7.0], "w": 0.2, "net": "WALL", "layers": ["F"]}]);
+    v["nets"][0]["no_vias"] = json!(false);
+    v["nets"][0]["via"] = json!([1.05, 0.8]);
+    v["pairs"][0]["via_pitch"] = json!(0.6);
+    let s = route(&problem(v.clone())).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    let far = |p: [f64; 2], q: [f64; 2]| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt();
+    let from = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (u, w) = ([b[0] - a[0], b[1] - a[1]], [p[0] - a[0], p[1] - a[1]]);
+        let t = ((u[0] * w[0] + u[1] * w[1]) / (u[0] * u[0] + u[1] * u[1]).max(1e-12)).clamp(0.0, 1.0);
+        far(p, [a[0] + t * u[0], a[1] + t * u[1]])
+    };
+    let legs: Vec<_> = s.nets.iter().filter(|n| n.key.starts_with("in1/")).collect();
+    assert_eq!(legs.len(), 2);
+    for (me, other) in [(legs[0], legs[1]), (legs[1], legs[0])] {
+        assert_eq!(me.vias.len(), 2, "{}: {:?}", me.key, me.vias);
+        assert!(me.tracks.iter().any(|t| t.layer == "B"), "{}: nothing on the other layer", me.key);
+        for &via in &me.vias {
+            // one on either side of the wall, 0.6 mm from its fellow, and clear of the other leg's track
+            assert!(other.vias.iter().any(|&o| (far(via, o) - 0.6).abs() < 1e-5), "{via:?} {:?}", other.vias);
+            assert!(other.vias.iter().all(|&o| far(via, o) > 0.6 - 1e-5));
+            let track = other.tracks.iter().flat_map(|t| t.points.windows(2)).map(|w| from(via, w[0], w[1]));
+            assert!(
+                track.fold(f64::INFINITY, f64::min) > 0.225 + 0.15 + 0.075 - 1e-5,
+                "{}: a via by the other leg",
+                me.key
+            );
+        }
+    }
+    assert!(legs[0].vias.iter().any(|v| v[0] < 5.0) && legs[0].vias.iter().any(|v| v[0] > 5.0));
+    // without a distance for its vias a trunk may not change layer, and its via must have room for both
+    v["pairs"][0]["via_pitch"] = json!(0.0);
+    refused(v.clone(), "pairs[0] (in1).trunk");
+    v["pairs"][0]["via_pitch"] = json!(0.7);
+    refused(v, "pairs[0] (in1).trunk");
+}
+
 fn refused(v: Value, field: &str) {
     match route(&problem(v)) {
         Err(Error::Invalid { field: f, reason }) => {

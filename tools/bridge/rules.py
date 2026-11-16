@@ -112,6 +112,20 @@ class Rules:
         outside of a turn of 45 degrees (so that such a corner is a corner), 0.04 mm at the least."""
         return r6(max(pitch + width + 0.04, pitch / math.cos(math.pi / 8) + width + 0.005))
 
+    def pair_vias(self, a, b, width, pitch, nets):
+        """Where a pair changes layer among `nets`, those of the run: (how far apart its two vias stand, centre
+        to centre; the via its trunk is laid with, [diameter, drill], which takes the ground of both). The two
+        are as near as the legs' copper and two holes may be; the trunk's is as wide as both, and wide enough
+        that a via of another net that keeps its distance from it keeps the hole spacing from either."""
+        size, drill = (max(self.via(a)[k], self.via(b)[k]) for k in (0, 1))
+        apart = max(size + pitch - width, self.hole_spacing(drill, drill))
+        widest = max(self.via(net)[1] for net in nets)
+        least = min(self.via(net)[0] for net in nets) / 2
+        # (the clearance between two nets of a run is the most any of those laid asks: at least any one's)
+        kept = min(self.clearance(net) for net in nets)
+        ring = max(size / 2, self.hole_spacing(widest, widest) - kept - least)
+        return r6(apart), [r6(apart + 2 * ring), r6(apart + drill)]
+
     def leans(self, nets):
         """True if any of these nets is leaned by a role that is only guessed."""
         guessed = lambda intent: intent.role in GUESSED and intent.source.get("role") == "names"

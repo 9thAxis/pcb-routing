@@ -52,8 +52,10 @@ All lengths are in mm. A misspelt field is an error, not ignored.
    one between), and `options.bus_cross` more where it runs over or under one on another layer. In the rounds
    and in the closing passes alike, so the nets of a bus gather on one layer in the order of their pads.
 7. **Pairs** (`src/engine/pairs.rs`). A pair negotiates as one wide track; once the nets have settled it is
-   split into two legs a fixed pitch apart, each joined to its pads by a short stub. The legs are laid only
-   if they come out no nearer each other than the pitch and within the track they were split from.
+   split into two legs a fixed pitch apart, each joined to its pads by a short stub. Where it changes layer
+   (one move of the search: a straight run with one wide via in the middle of it) each leg is drawn aside to
+   a via of its own, the two side by side. The legs are laid only if they come out no nearer each other
+   than the pitch and within the track, and the via, they were split from.
 8. **Ends** (`src/engine/ends.rs`). A pad seldom stands on a cell centre. The last corner of a track slides
    along the stretch before it so that the track ends on the pad's own point and keeps its directions. What
    moves is tested off the grid against the fixed copper and the other nets. Where the corner cannot slide,
@@ -103,7 +105,7 @@ In the engine:
 * Per net: width, via size, allowed layers, a cost per layer, a wanted maximum length, readiness to give
   way, "no vias", "lay last without disturbing the others".
 * Differential pairs: two nets laid side by side at a fixed pitch as one trunk, then split into two legs
-  that are checked before they are laid.
+  that are checked before they are laid; through two vias side by side where the pair changes layer.
 * Buses: nets marked as one bus are drawn to run beside each other on one layer, in the order given, and are
   slow to cross each other.
 * Deterministic: the same problem gives the same answer, whatever the thread count.
@@ -146,9 +148,10 @@ Things other routers have and this one does not, roughly in order of how often t
   shoves; FreeRouting has both modes.
 * **Length and skew tuning** (meanders, matched groups). A wanted maximum length per net only ranks attempts.
   KiCadRoutingTools and the commercial routers tune lengths.
-* **Pairs coupled all the way to the pads, and pairs that change layer.** A pair is laid side by side on one
-  layer between two points a little off its pads, and where its legs would have to cross to reach their pads
-  it is laid as two nets. There is no impedance calculation: a pair has the width and gap it is told.
+* **Pairs coupled all the way to the pads.** A pair is laid side by side between two points a little off
+  its pads (through two vias side by side where it changes layer on the way), and where its legs would have
+  to cross to reach their pads it is laid as two nets. Two ends too near each other for a pair to gather
+  and part between them (a few millimetres) are joined as two nets. There is no impedance calculation: a pair has the width and gap it is told.
 * **Blind, buried and micro vias.** Through vias only.
 * **Fan-out of fine-pitch and BGA parts** as a step of its own. Pads are escaped by the ordinary search,
   with a narrower second try.

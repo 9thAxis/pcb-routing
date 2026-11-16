@@ -266,16 +266,22 @@ impl Engine<'_> {
     fn pair_nets(&self, mut pieces: Vec<[(Vec<Track>, Vec<Pt>); 2]>, nets: &mut Vec<NetResult>) {
         let p = self.p;
         for (k, pair) in p.pairs.iter().enumerate() {
-            if let Some((layer, lines)) = &self.pairs.legs[k] {
+            if let Some(legs) = &self.pairs.legs[k] {
                 for leg in 0..2 {
-                    let mut tracks = vec![Track { layer: p.layers[*layer].clone(), points: lines[leg].clone() }];
+                    let on = |(layer, lines): &(usize, [Vec<Pt>; 2])| Track {
+                        layer: p.layers[*layer].clone(),
+                        points: lines[leg].clone(),
+                    };
+                    let mut tracks: Vec<Track> = legs.runs.iter().map(on).collect();
                     tracks.append(&mut pieces[k][leg].0);
+                    let mut vias: Vec<Pt> = legs.vias.iter().map(|vias| vias[leg]).collect();
+                    vias.append(&mut pieces[k][leg].1);
                     nets.push(NetResult {
                         key: format!("{}/{}", pair.key, pair.legs[leg]),
                         net: pair.legs[leg].clone(),
                         length_mm: round6(length(&tracks)),
                         tracks,
-                        vias: std::mem::take(&mut pieces[k][leg].1),
+                        vias,
                     });
                 }
             }

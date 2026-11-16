@@ -5,7 +5,8 @@ from dataclasses import replace
 
 from .rules import Rules
 from .questions import tie_targets, which_tie
-from .problem import disc, build_problem, problem_of
+from .lengths import disc
+from .problem import build_problem, problem_of
 from .engine import ENGINE_NETS, EngineFailed
 
 CLEARINGS = 2  # how often nets are laid again clear of pads their tracks have starved

@@ -290,7 +290,8 @@ impl Engine<'_> {
                 .iter()
                 .filter(|shape| shape.0 == layer)
                 .all(|&(_, c, d, other)| far(c, d, half + gap + other));
-            tracks && vias && shapes
+            let posts = self.laid.nets[m].posts.iter().all(|&at| far(at, at, half + gap + net.via[0] / 2.0));
+            tracks && vias && shapes && posts
         })
     }
 }

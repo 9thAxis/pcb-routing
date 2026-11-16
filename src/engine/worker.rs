@@ -14,7 +14,8 @@ pub(super) struct Node {
     pub(super) seen: u16,
     /// How the state was reached: START; or, for a state with a direction, the direction its predecessor (the
     /// cell one step back) was reached in; or, after a layer change, VIA + 9 * the layer come from + the
-    /// direction that state was reached in.
+    /// direction that state was reached in. (For the trunk of a pair a layer change is the middle of a
+    /// straight run that is one move: that state is then the run's length back on either layer.)
     pub(super) prev: u8,
 }
 
@@ -199,6 +200,17 @@ impl Ground {
             self.flagged.push(cell);
         }
         self.via_flag[cell as usize] = FREE;
+    }
+
+    /// Note a hole of the net being laid that is no place to change layer on (the via of a pair's leg, off
+    /// the grid): no other via may be within the offsets `shut` of `cell`.
+    pub(super) fn shut_round(&mut self, grid: &Grid, cell: u32, shut: &[(i32, i32)]) {
+        for c in grid.around(cell as usize, shut) {
+            if self.via_flag[c] == 0 {
+                self.via_flag[c] = SHUT;
+                self.flagged.push(c as u32);
+            }
+        }
     }
 
     /// What a layer change costs at a cell that a hole of the net has been noted at or near (see `flag_hole`),

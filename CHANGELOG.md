@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Pairs change layer. `Pair::via_pitch`: the distance between the two vias of a pair, side by side across
+  its way; the trunk entry then has a via as wide as both and need not have `no_vias`. In the search a
+  trunk's layer change is one move, the via in the middle of a straight run, and the split draws each leg
+  aside to a via of its own. The bridge offers it to every pair whose nets may have vias, at the price of
+  two. A USB pair that went 71 mm round its board on one layer is 32 mm through two vias a leg, as its
+  designer has it (34 mm). All 119 boards complete and clean with and without zones. A problem is refused
+  where the two vias would be nearer than two holes may be, or the trunk's via too narrow to keep other
+  holes off either of them.
 - A last step of a cell or two onto a via is taken out of the track, as it is before a pad; and runs of a
   net that meet end to end and go straight on are one track. Segments under 0.1 mm away from pads on the
   119 public boards: 45 to 31.

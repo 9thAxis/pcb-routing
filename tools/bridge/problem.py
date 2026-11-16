@@ -2,21 +2,13 @@
 
 import math, sys
 
-from .lengths import r6
+from .lengths import disc, r6
 from .rules import amps_width
 from .questions import reach_of
 from .beside import buses, decoupling
 from .exits import exits
 from .pairs import pair_entries, pairs_of
 from .engine import ENGINE_NETS
-
-
-def disc(centre, radius, sides=16):
-    """A polygon that covers a disc."""
-    out = radius / math.cos(math.pi / sides)
-    return [[r6(centre[0] + out * math.cos(2 * math.pi * k / sides)),
-             r6(centre[1] + out * math.sin(2 * math.pi * k / sides))]
-            for k in range(sides)]
 
 
 def _grown(rings, grow, net, layers):
@@ -141,7 +133,7 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     for pair in pairs:
         a, b = pair[:2]
         entries, said = pair_entries(picture, rules, pair, entry, unpaired or {},
-                                     set(picture.groups) | {n["key"] for n in nets})
+                                     set(picture.groups) | {n["key"] for n in nets}, unjoined)
         if said and len(nets) + len(entries) + len(unjoined) >= ENGINE_NETS:
             note(f"{a} = {b} is laid as two nets: there is no room for it among the {ENGINE_NETS - 1} entries of a run")
         elif said and not all(on(picture.pads[group[0]]) for net in (a, b) for group in picture.groups[net]):
@@ -194,12 +186,14 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     # The engine keeps one distance between hole centres: enough for two holes of the widest new via's drill. A
     # wider hole asks more of a new via, and its own net's vias are not held off by its copper: the ground
     # round such a hole is closed to vias (a net may still change layer exactly on a hole of its own).
-    via_drill = max((n["via"][1] for n in nets), default=rules.DEFAULT_VIA_DRILL)
+    # (the trunk of a pair has a via that stands for two: it brings its own distances, see pair_entries)
+    single = [n for n in nets if n["net"] in picture.classes]
+    via_drill = max((n["via"][1] for n in single), default=rules.DEFAULT_VIA_DRILL)
     margin = rules.edge_margin()
     for hole in drilled:
-        if nets and hole.drill > via_drill:
+        if single and hole.drill > via_drill:
             # a region is closed to a via's edge, so the disc is smaller by the narrowest via's radius
-            radius = max(rules.hole_spacing(hole.drill, n["via"][1]) - n["via"][0] / 2 for n in nets) - margin
+            radius = max(rules.hole_spacing(hole.drill, n["via"][1]) - n["via"][0] / 2 for n in single) - margin
             regions.append(dict(rings=[disc(hole.at, max(radius, 0.001))], layers=[], tracks=False, vias=True))
 
     real = [n["net"] for n in nets if n["net"] in picture.classes]

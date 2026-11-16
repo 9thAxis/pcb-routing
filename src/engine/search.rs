@@ -63,8 +63,9 @@ impl Engine<'_> {
         let n = q.net;
         // (a net with terminals that are left one way only is searched in one pass: the first pass knows no
         // directions, and the bound it gives would cut off the way round that such a terminal can ask for)
-        let headed = !self.plan.heads[n].is_empty();
-        let two = if self.p.options.bend_mm > 0.0 && self.p.options.two_pass && !headed { q.from } else { None };
+        // (and so is the trunk of a pair, whose layer changes the first pass knows nothing of either)
+        let one_pass = !self.plan.heads[n].is_empty() || self.plan.runs[n].is_some();
+        let two = if self.p.options.bend_mm > 0.0 && self.p.options.two_pass && !one_pass { q.from } else { None };
         let found = self.search(Query { from: two, ..q }, worker);
         if self.shared.diagnostics.verify && two.is_some() {
             let plain = self.search(Query { from: None, ..q }, worker);
@@ -392,8 +393,48 @@ impl Engine<'_> {
                 }
                 relax(v * 9 + d2, corner[dir][d2] + len[d2] * step_cost * m2 as f64, dir as u8, s);
             }
+            if sets_out.is_some() {
+                continue;
+            }
+            // The trunk of a pair changes layer in the middle of a straight run, all of it one move: so many
+            // steps on, the layer change, and as many steps on the other layer.
+            if let Some(run) = &self.plan.runs[n] {
+                if dir == NO_DIR {
+                    continue;
+                }
+                let on = |from: usize, layer_cost: f64| {
+                    let (mut at, mut cost) = (from, 0.0);
+                    for _ in 0..run[dir] {
+                        if prices.at(at).open.get() & (1 << dir) == 0 {
+                            return None;
+                        }
+                        at = (at as isize + off[dir]) as usize;
+                        let mult = prices.at(at).mult.get();
+                        if mult >= TAKEN {
+                            return None;
+                        }
+                        cost += len[dir] * layer_cost * mult as f64;
+                    }
+                    Some((at, cost))
+                };
+                let Some((via, before)) = on(at, step_cost) else { continue };
+                let change = prices.via(via % hw);
+                if change == SHUT_COST {
+                    continue;
+                }
+                for ll in (0..nl).filter(|&ll| ll != l) {
+                    let under = ll * hw + via % hw;
+                    if prices.at(under).mult.get() >= TAKEN {
+                        continue;
+                    }
+                    if let Some((to, after)) = on(under, lc[ll]) {
+                        relax(to * 9 + dir, before + change as f64 + after, VIA + (9 * l + dir) as u8, s);
+                    }
+                }
+                continue;
+            }
             let cost = prices.via(c);
-            if cost == SHUT_COST || sets_out.is_some() {
+            if cost == SHUT_COST {
                 continue;
             }
             for ll in 0..nl {
@@ -407,11 +448,12 @@ impl Engine<'_> {
             return None;
         }
         let cost = s.node[found as usize].g as f64;
-        Some((self.walk_back(s, found), cost))
+        Some((self.walk_back(n, s, found), cost))
     }
 
-    /// The path that ends in the state `found` of a finished search, from its start, as (layer, cell) states.
-    fn walk_back(&self, s: &Search, found: u32) -> Vec<u32> {
+    /// The path of net `n` that ends in the state `found` of a finished search, from its start, as (layer,
+    /// cell) states.
+    fn walk_back(&self, n: usize, s: &Search, found: u32) -> Vec<u32> {
         let (hw, off) = (self.plan.space.hw, self.plan.steps.off);
         let mut path = vec![found];
         loop {
@@ -420,12 +462,24 @@ impl Engine<'_> {
             if how == START {
                 break;
             }
-            path.push(if dir != NO_DIR {
-                ((at as isize - off[dir]) as usize * 9) as u32 + how as u32
-            } else {
-                let (from, how) = (((how - VIA) / 9) as usize, (how - VIA) % 9);
-                ((from * hw + at % hw) * 9) as u32 + how as u32
-            });
+            if how < VIA {
+                path.push(((at as isize - off[dir]) as usize * 9) as u32 + how as u32);
+                continue;
+            }
+            let (from, how) = (((how - VIA) / 9) as usize, (how - VIA) % 9);
+            // (a trunk's layer change is the middle of a straight run that was one move: see `search`)
+            let run = self.plan.runs[n].map_or(0, |run| run[dir]);
+            let mut back = at;
+            for _ in 0..run {
+                back = (back as isize - off[dir]) as usize;
+                path.push((back * 9 + dir) as u32);
+            }
+            back = from * hw + back % hw;
+            for _ in 0..run {
+                path.push((back * 9 + dir) as u32);
+                back = (back as isize - off[dir]) as usize;
+            }
+            path.push((back * 9) as u32 + how as u32);
         }
         path.reverse();
         // the direction is only needed during the search

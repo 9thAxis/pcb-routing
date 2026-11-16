@@ -94,6 +94,14 @@ impl Engine<'_> {
         }
         holes.sort_unstable();
         holes.dedup();
+        // (the vias of a pair's leg of this net are holes too, but no place to change layer on)
+        for m in std::iter::once(n).chain(self.plan.siblings[n].iter().copied()) {
+            for &post in &self.laid.nets[m].posts {
+                if let Some(cell) = self.plan.grid.cell(post) {
+                    w.ground.shut_round(&self.plan.grid, cell as u32, &self.plan.shut_off_grid);
+                }
+            }
+        }
         // (those vias, as they are now: `holes` goes on to take the net's own)
         let lent = holes.clone();
         // the costs of the ground are drawn up as the searches come to them (see `Prices`)

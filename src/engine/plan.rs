@@ -39,10 +39,26 @@ pub(crate) struct Plan {
     /// Per net: the cells of its terminals that are left one way only (see `Terminal::heading`), each with
     /// that direction as an index into the eight.
     pub(super) heads: Vec<Vec<(u32, u8)>>,
+    /// Per net that is the trunk of a pair: for each of the eight directions, how many steps it runs straight
+    /// before a layer change and as many after it. Its two vias stand side by side across its way (see
+    /// `Pair::via_pitch`), and each leg needs that much of a straight run to come to its own and back.
+    pub(super) runs: Vec<Option<[usize; 8]>>,
     /// The offsets of the cells too close to a hole for another hole.
     pub(super) shut: Vec<(i32, i32)>,
+    /// And those too close to a hole that stands anywhere within a cell (the via of a pair's leg).
+    pub(super) shut_off_grid: Vec<(i32, i32)>,
     /// The ground that costs more without being closed.
     pub(super) dear: DearGround,
+}
+
+/// How many steps in each direction the trunk of a pair runs straight on either side of a layer change: what
+/// a leg takes to come aside to its via at 45 degrees, and what the leg on the inside of a corner is shorter
+/// than the trunk.
+fn run_of(p: &Problem, pair: &Pair) -> [usize; 8] {
+    let length = (pair.via_pitch / 2.0).max(pair.pitch);
+    super::DIRS.map(|(rows, columns)| {
+        (length / (p.step * ((rows * rows + columns * columns) as f64).sqrt()) - 1e-9).ceil() as usize
+    })
 }
 
 fn class_of(list: &mut Vec<(f64, bool)>, v: (f64, bool)) -> usize {
@@ -102,6 +118,7 @@ impl Plan {
             steps: Steps::new(grid.w),
             dear: DearGround::new(p, &grid, space),
             shut: grid.disc(p.rules.hole_centre_mm),
+            shut_off_grid: grid.disc(p.rules.hole_centre_mm + p.step),
             siblings: (0..p.nets.len())
                 .map(|n| (0..p.nets.len()).filter(|&m| m != n && p.nets[m].net == p.nets[n].net).collect())
                 .collect(),
@@ -123,6 +140,14 @@ impl Plan {
             pieces: p.nets.iter().map(|n| (0..n.terminals.len()).map(|t| piece_of(n, t)).collect()).collect(),
             exact,
             heads,
+            runs: p
+                .nets
+                .iter()
+                .map(|n| {
+                    let changes = |pair: &&Pair| pair.trunk == n.key && pair.via_pitch > 0.0 && !n.no_vias;
+                    p.pairs.iter().find(changes).map(|pair| run_of(p, pair))
+                })
+                .collect(),
         }
     }
 }

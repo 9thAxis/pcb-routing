@@ -66,6 +66,9 @@ impl Engine<'_> {
         let st = &self.laid.nets[n];
         let near: Vec<(usize, Vec<usize>)> =
             st.shapes.iter().map(|&(l, a, b, half)| (l, cells_near(grid, a, b, half + c + size))).collect();
+        let hole = if against_via { self.p.rules.hole_centre_mm } else { 0.0 };
+        let posts: Vec<Vec<usize>> =
+            st.posts.iter().map(|&at| cells_near(grid, at, at, (via_r + c + size).max(hole))).collect();
         self.claims.mark_gen += 1;
         let (mark, gen) = (&mut self.claims.mark, self.claims.mark_gen);
         let mut out: Vec<u32> = Vec::new();
@@ -94,6 +97,13 @@ impl Engine<'_> {
         for (layer, cells) in &near {
             for &cell in cells {
                 put(on(*layer), cell, &[(0, 0)]);
+            }
+        }
+        for cells in &posts {
+            for layer in 0..if against_via { 1 } else { space.nl } {
+                for &cell in cells {
+                    put(layer, cell, &[(0, 0)]);
+                }
             }
         }
         out.sort_unstable();

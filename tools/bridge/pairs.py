@@ -3,7 +3,7 @@ of two nets face each other is the engine's to say (src/pairs.rs)."""
 
 import math
 
-from .lengths import r6
+from .lengths import disc, r6
 from .questions import pair_plans
 
 PAIR_PADS = 4  # the most pads a net of a pair has: more is a rail or a bus by another name
@@ -54,7 +54,7 @@ OFF_LAYER = 1.5  # what a trunk pays, as a factor, on a layer the tighter of its
 FREE = 2  # the try at which a stretch is left free of hands and headings; after it, it is laid as two nets
 
 
-def pair_entries(picture, rules, pair, entry, unpaired, taken):
+def pair_entries(picture, rules, pair, entry, unpaired, taken, names):
     """The entries for one differential pair (see pairs_of) and what the problem's `pairs` says of it:
     (entries, pairs); nothing if every stretch of it has been given up as a pair. `unpaired`: for the key of
     a stretch that was not all laid as a pair, how many of the nearest lots of places its trunk is no longer
@@ -64,7 +64,10 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
     places a little off the pads (those of one end are one piece: the engine takes the nearest that are open), and four
     stubs that join the legs it is split into to the pads. What the trunks do not join is joined as the pads
     of any net are: the pads at the ends that trunks join stand for one piece, a pad at no end stands alone.
-    `entry` makes an entry (see build_problem); `taken`: the keys in use.
+    `entry` makes an entry (see build_problem); `taken`: the keys in use; `names`: the nets of the run.
+
+    A trunk may change layer: through one via as wide as two of the legs' side by side, which the engine makes
+    into those two (see Rules.pair_vias, and `via_pitch` in src/model.rs).
     """
     a, b, width, pitch, plan = pair
     layers = rules.routing_layers(picture.layers)
@@ -85,6 +88,7 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
     trunks = [(key, dict(trunk, **ways(key, trunk))) for key, trunk in trunks]
     trunks = [(key, trunk) for key, trunk in trunks if all(any(lots) for lots in trunk["gather"])]
     entries, said = [], []
+    margin = rules.edge_margin()
     held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
     for key, trunk in trunks:
         # (the places of an end by how far off its pads they are: the nearer take their turn first; and those
@@ -119,7 +123,20 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
                                    for place, on in lot]
         clearance = dict(default=r6(max(rules.clearance(a), rules.clearance(b))),
                          nets={n: r6(c) for net in (a, b) for n, c in rules.stricter(net).items()})
-        wide = entry(f"{key} trunk", a, places, no_vias=True)
+        wide = entry(f"{key} trunk", a, places, 2 * rules.settings.via_penalty)
+        # (the hints may keep either net of it on its layer)
+        changes = not (wide.get("no_vias") or rules.leaning(b).get("no_vias"))
+        if changes:
+            # Either via of the two keeps the hole spacing from every hole of the board. The engine sees to it
+            # for holes no wider than a via's; the ground nearer a wider hole than its spacing and half the
+            # vias' distance is shut to the trunk's via (a region is shut to a via's edge).
+            apart, via = rules.pair_vias(a, b, width, pitch, names)
+            shut = lambda hole: rules.hole_spacing(hole.drill, via[1] - apart) + apart / 2 - via[0] / 2 - margin
+            holes = [dict(rings=[disc(hole.at, max(shut(hole), 0.001))], layers=[], tracks=False, vias=True)
+                     for hole in picture.holes if hole.drill > via[1] - apart]
+            wide = dict(wide, via=via, regions=wide.get("regions", []) + holes)
+        else:
+            wide = dict(wide, no_vias=True)
         # Where the two ends share no layer, the stubs of one change layer. The trunk is dearer on the layers
         # that the end with the closer pads is not on: beside those there is the least room for a via.
         ends = [[pads[net][i] for net, i in zip((a, b), plan["ends"][trunk["ends"][end]])] for end in (0, 1)]
@@ -134,7 +151,8 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
                 entries.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], last=True),
                                     width=width))
                 stubs[end].append(entries[-1]["key"])
-        said.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs))
+        said.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs,
+                         **(dict(via_pitch=apart) if changes else {})))
         first, second = (held[end] for end in trunk["ends"])
         held = [min(first, second) if h in (first, second) else h for h in held]
     for side, net in enumerate((a, b)):

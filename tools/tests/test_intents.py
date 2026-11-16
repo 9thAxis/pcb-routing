@@ -221,7 +221,13 @@ class Pairs(WithEngine):
                           "OTHER"])
         trunk = nets[pair["trunk"]]
         # (room for a corner of 45 degrees)
-        self.assertEqual((trunk["net"], trunk["no_vias"], trunk["width"]), ("~D_N = D_P", True, 0.744241))
+        self.assertEqual((trunk["net"], trunk["width"]), ("~D_N = D_P", 0.744241))
+        # it may change layer: through a via as wide as two of the nets' vias (0.6) side by side, which stand
+        # as far apart as their copper may be (the clearance of 0.202 between them), at the price of two
+        self.assertEqual((pair["via_pitch"], trunk["via"], trunk["via_penalty_mm"], "no_vias" in trunk),
+                         (0.802, [1.402, 1.102], 20.0, False))
+        # (and the one distance the engine keeps between holes is still that of the nets' own vias)
+        self.assertEqual(problem["rules"]["hole_centre_mm"], 0.552)
         self.assertEqual({t["piece"] for t in trunk["terminals"]}, {0, 1})
         near = [t for t in trunk["terminals"] if t["piece"] == 0]
         # square to the pads first, then the places beside it, and the nearer to the pads the earlier

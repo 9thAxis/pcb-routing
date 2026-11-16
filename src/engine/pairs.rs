@@ -5,18 +5,10 @@ use crate::geom::{dist, dist_segment, dist_segments, push};
 use crate::grid::round6;
 
 impl Engine<'_> {
-    /// The centre line of a laid connection that stays on one layer, as points.
-    pub(super) fn line(&self, conn: &[u32]) -> Vec<Pt> {
-        let mut run = Vec::new();
-        for &state in conn {
-            push(&mut run, self.plan.grid.xy(self.plan.space.split(state as usize).1));
-        }
-        run
-    }
-
     /// Split the settled trunk of pair `k` into its two legs. The trunk's claim (one wide track) is given up
     /// and each leg is claimed as the shape it is, held by the stub at its first end; every stub gets the end
-    /// of its leg as second terminal. Returns the four stub entries, to be laid next.
+    /// of its leg as second terminal. Where the trunk changes layer each leg is drawn aside to a via of its
+    /// own, the two side by side across the trunk's way. Returns the four stub entries, to be laid next.
     pub(super) fn split(&mut self, k: usize) -> Result<Vec<usize>, String> {
         let pair = &self.p.pairs[k];
         let trunk = self.index(&pair.trunk)?;
@@ -25,43 +17,66 @@ impl Engine<'_> {
             [self.index(&pair.stubs[1][0])?, self.index(&pair.stubs[1][1])?],
         ];
         let conn = self.laid.nets[trunk].conns.first().ok_or_else(|| format!("{}: trunk not laid", pair.key))?.clone();
-        let layer = self.plan.space.split(conn[0] as usize).0;
-        if conn.iter().any(|&c| self.plan.space.split(c as usize).0 != layer) {
+        // the trunk's line on each layer it runs on, in turn
+        let mut centres: Vec<(usize, Vec<Pt>)> = Vec::new();
+        for &state in &conn {
+            let (layer, cell) = self.plan.space.split(state as usize);
+            match centres.last_mut() {
+                Some((on, line)) if *on == layer => push(line, self.plan.grid.xy(cell)),
+                _ => centres.push((layer, vec![self.plan.grid.xy(cell)])),
+            }
+        }
+        if centres.len() > 1 && pair.via_pitch <= 0.0 {
             return Err(format!("{}: the trunk changes layer", pair.key));
         }
-        let centre = self.line(&conn);
-        if centre.len() < 2 {
-            return Err(format!("{}: the trunk has no length", pair.key));
+        if centres.iter().any(|(_, line)| line.len() < 2) {
+            let why = if centres.len() > 1 { "changes layer where it has no length" } else { "has no length" };
+            return Err(format!("{}: the trunk {why}", pair.key));
         }
-        let unit = |a: Pt, b: Pt| {
-            let (x, y) = (b[0] - a[0], b[1] - a[1]);
-            let l = (x * x + y * y).sqrt();
-            [x / l, y / l]
-        };
         // the first net of the pair takes the side on which its pad at the first end lies further out than the
         // second net's pad (both pads can lie on one side of the trunk)
-        let first = unit(centre[0], centre[1]);
+        let start = &centres[0].1;
+        let first = unit(start[0], start[1]);
         let pad = |n: usize| self.p.nets[n].terminals[0].xy;
-        let side_of = |q: Pt| first[0] * (q[1] - centre[0][1]) - first[1] * (q[0] - centre[0][0]);
+        let side_of = |q: Pt| first[0] * (q[1] - start[0][1]) - first[1] * (q[0] - start[0][0]);
         let left = side_of(pad(stubs[0][0])) > side_of(pad(stubs[0][1]));
         let d = pair.pitch / 2.0;
         // (what the trunk is wider than its two legs side by side, on either side)
         let spare = ((self.p.nets[trunk].width - pair.pitch - pair.leg_width) / 2.0).max(0.0);
-        let mut lines: [Vec<Pt>; 2] = [Vec::new(), Vec::new()];
-        for (leg, line) in lines.iter_mut().enumerate() {
-            *line = beside(&centre, if (leg == 0) == left { d } else { -d }, spare);
+        let by = |leg: usize| if (leg == 0) == left { d } else { -d };
+        let mut beside_trunk = Legs { runs: Vec::new(), vias: Vec::new() };
+        for (layer, centre) in &centres {
+            let mut lines = [beside(centre, by(0), spare), beside(centre, by(1), spare)];
+            drawn_back(&mut lines, pair.pitch);
+            beside_trunk.runs.push((*layer, lines));
         }
-        drawn_back(&mut lines, pair.pitch);
+        let sizes = Sizes {
+            pitch: pair.pitch,
+            spare,
+            leg: pair.leg_width / 2.0,
+            via: self.p.nets[stubs[0][0]].via[0].max(self.p.nets[stubs[0][1]].via[0]) / 2.0,
+            wide: self.p.nets[trunk].via[0] / 2.0,
+            via_pitch: pair.via_pitch,
+            hole: self.p.rules.hole_centre_mm,
+        };
+        let lines: Vec<&[Pt]> = centres.iter().map(|(_, line)| &line[..]).collect();
+        let mut legs = beside_trunk;
+        through(&lines, &mut legs, [by(0) > 0.0, by(1) > 0.0], &sizes).map_err(|why| format!("{}: {why}", pair.key))?;
         // Nothing else tests the legs: they are laid only if they are what they are meant to be.
-        fit(&centre, &lines, pair.pitch, spare).map_err(|why| format!("{}: {why}", pair.key))?;
+        fit(&lines, &legs, &sizes).map_err(|why| format!("{}: {why}", pair.key))?;
         self.unclaim(trunk);
         for leg in 0..2 {
             let holder = stubs[0][leg];
             self.unclaim(holder);
-            self.laid.nets[holder].shapes =
-                lines[leg].windows(2).map(|w| (layer, w[0], w[1], pair.leg_width / 2.0)).collect();
+            let held = &mut self.laid.nets[holder];
+            held.shapes = (legs.runs.iter())
+                .flat_map(|(layer, lines)| lines[leg].windows(2).map(|w| (*layer, w[0], w[1], pair.leg_width / 2.0)))
+                .collect();
+            held.posts = legs.vias.iter().map(|vias| vias[leg]).collect();
             self.claim(holder);
             for end in 0..2 {
+                let (layer, lines) = if end == 0 { &legs.runs[0] } else { &legs.runs[legs.runs.len() - 1] };
+                let layer = *layer;
                 let at = if end == 0 { lines[leg][0] } else { *lines[leg].last().unwrap() };
                 let n = stubs[end][leg];
                 // The stub arrives on the cell nearest the leg's end from which a track of the stub still keeps
@@ -106,7 +121,7 @@ impl Engine<'_> {
                 self.exact[n].insert(cell, at);
             }
         }
-        self.pairs.legs[k] = Some((layer, lines));
+        self.pairs.legs[k] = Some(legs);
         Ok(vec![stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]])
     }
 
@@ -156,6 +171,105 @@ impl Engine<'_> {
             self.place(n, state);
         }
     }
+}
+
+/// The two legs of a split pair.
+#[derive(Clone)]
+pub(super) struct Legs {
+    /// For each layer the trunk ran on, in its order: the layer and the line of either leg there.
+    pub(super) runs: Vec<(usize, [Vec<Pt>; 2])>,
+    /// Between each of those and the next: the via of either leg.
+    pub(super) vias: Vec<[Pt; 2]>,
+}
+
+/// What the legs of a pair are measured by: half widths and distances between centres.
+struct Sizes {
+    /// From leg to leg.
+    pitch: f64,
+    /// What the trunk is wider than its two legs side by side, on either side.
+    spare: f64,
+    /// Half the width of a leg.
+    leg: f64,
+    /// The radius of a leg's via.
+    via: f64,
+    /// The radius of the trunk's via.
+    wide: f64,
+    /// From via to via where the pair changes layer.
+    via_pitch: f64,
+    /// The least distance between the centres of two holes.
+    hole: f64,
+}
+
+/// What two places worked out to a millionth of a millimetre each may be nearer than they are meant to be.
+const ROUNDED: f64 = 3e-6;
+
+/// The direction from `a` to `b`, as a vector of length 1.
+fn unit(a: Pt, b: Pt) -> Pt {
+    let (x, y) = (b[0] - a[0], b[1] - a[1]);
+    let l = (x * x + y * y).sqrt();
+    [x / l, y / l]
+}
+
+/// A line without the last `by` of its length at one end (`at_end`: its last point, else its first). None
+/// if it is no longer than that.
+fn shortened(line: &[Pt], at_end: bool, mut by: f64) -> Option<Vec<Pt>> {
+    let mut points: Vec<Pt> = line.to_vec();
+    if !at_end {
+        points.reverse();
+    }
+    while points.len() >= 2 {
+        let (p, q) = (points[points.len() - 1], points[points.len() - 2]);
+        let length = dist(p, q);
+        if length > by + 1e-9 {
+            let t = by / length;
+            let k = points.len() - 1;
+            points[k] = [round6(p[0] + t * (q[0] - p[0])), round6(p[1] + t * (q[1] - p[1]))];
+            if !at_end {
+                points.reverse();
+            }
+            return Some(points);
+        }
+        by -= length;
+        points.pop();
+    }
+    None
+}
+
+/// Take the legs through the trunk's layer changes: where its line on one layer (`centres`, in turn) ends and
+/// the next begins, each leg gets a via of its own, the two `via_pitch` apart across the trunk's way there
+/// and the leg on the left (`on_left`, per leg) to the left; and each leg leaves its line a little before
+/// to come to its via at 45 degrees, and joins its line again as far behind. (The trunk runs straight
+/// that far and more on either side of a layer change: see `Plan::runs`.)
+fn through(centres: &[&[Pt]], legs: &mut Legs, on_left: [bool; 2], sizes: &Sizes) -> Result<(), String> {
+    let aside = sizes.via_pitch / 2.0;
+    let before = (aside - sizes.pitch / 2.0).max(0.0);
+    for k in 1..centres.len() {
+        let (came, goes) = (centres[k - 1], centres[k]);
+        let at = goes[0];
+        let (u, v) = (unit(came[came.len() - 2], came[came.len() - 1]), unit(goes[0], goes[1]));
+        let way = [u[0] + v[0], u[1] + v[1]];
+        let length = (way[0] * way[0] + way[1] * way[1]).sqrt();
+        if length < 1.0 {
+            return Err("the trunk turns too sharply where it changes layer".into());
+        }
+        let way = [way[0] / length, way[1] / length];
+        let mut vias = [[0.0; 2]; 2];
+        for leg in 0..2 {
+            let by = if on_left[leg] { aside } else { -aside };
+            let via = [round6(at[0] - way[1] * by), round6(at[1] + way[0] * by)];
+            let short = || "the trunk has too little length beside a layer change for a leg to come to its via";
+            let mut comes = shortened(&legs.runs[k - 1].1[leg], true, before).ok_or_else(short)?;
+            let mut leaves = shortened(&legs.runs[k].1[leg], false, before).ok_or_else(short)?;
+            push(&mut comes, via);
+            if dist(leaves[0], via) > 1e-9 {
+                leaves.insert(0, via);
+            }
+            (legs.runs[k - 1].1[leg], legs.runs[k].1[leg]) = (comes, leaves);
+            vias[leg] = via;
+        }
+        legs.vias.push(vias);
+    }
+    Ok(())
 }
 
 /// The line that runs `by` to the left of a line (to its right if negative), its corners where the stretches
@@ -280,21 +394,52 @@ fn drawn_back(legs: &mut [Vec<Pt>; 2], pitch: f64) {
     }
 }
 
-/// Whether the two legs beside a trunk's line are fit to be laid: no nearer each other than the pitch, each of
-/// two points at least, and nowhere further from the line than half the pitch and what the trunk has to
-/// spare (so that what the trunk kept its distance from, the legs do too). Where the line turns twice in a
-/// row within less room than a leg needs on the inside of a corner, the legs beside it do not come out so.
-fn fit(centre: &[Pt], legs: &[Vec<Pt>; 2], pitch: f64, spare: f64) -> Result<(), String> {
-    if legs.iter().any(|leg| leg.len() < 2) {
+/// Whether the two legs beside a trunk's lines (`centres`: on each layer in turn) are fit to be laid: each of
+/// two points at least on every layer, no nearer each other than the pitch, no via of one nearer the other
+/// (its track or its vias) than the legs are to each other, and nowhere further from the trunk's line than
+/// half the pitch and what the trunk has to spare, but within the trunk's via where it changes layer (so that
+/// what the trunk kept its distance from, the legs do too). Where the line turns twice in a row within less
+/// room than a leg needs on the inside of a corner, the legs beside it do not come out so.
+fn fit(centres: &[&[Pt]], legs: &Legs, sizes: &Sizes) -> Result<(), String> {
+    let pitch = sizes.pitch;
+    if legs.runs.iter().any(|(_, lines)| lines.iter().any(|line| line.len() < 2)) {
         return Err("the trunk is too short to be split into legs".into());
     }
     let between = |a: &[Pt], b: &[Pt]| {
         let pairs = a.windows(2).flat_map(|s| b.windows(2).map(move |t| dist_segments(s[0], s[1], t[0], t[1])));
         pairs.fold(f64::INFINITY, f64::min)
     };
-    let apart = between(&legs[0], &legs[1]);
-    if apart < pitch - 1e-6 {
+    // (a trunk that comes back to a layer may pass itself there)
+    let mut apart = f64::INFINITY;
+    for (layer, first) in &legs.runs {
+        for (_, second) in legs.runs.iter().filter(|(other, _)| other == layer) {
+            apart = apart.min(between(&first[0], &second[1]));
+        }
+    }
+    if apart < pitch - ROUNDED {
         return Err(format!("its legs would be {apart:.4} mm apart at a corner of the trunk, for a pitch of {pitch}"));
+    }
+    let gap = pitch - 2.0 * sizes.leg;
+    for (k, vias) in legs.vias.iter().enumerate() {
+        for leg in 0..2 {
+            let via = vias[leg];
+            let tracks = legs.runs.iter().flat_map(|(_, lines)| lines[1 - leg].windows(2));
+            let track = tracks.map(|w| dist_segment(via, w[0], w[1])).fold(f64::INFINITY, f64::min);
+            let other = legs.vias.iter().map(|vias| dist(via, vias[1 - leg])).fold(f64::INFINITY, f64::min);
+            if track < sizes.via + gap + sizes.leg - ROUNDED
+                || other < (2.0 * sizes.via + gap).max(sizes.hole) - ROUNDED
+            {
+                return Err("a via of one leg would be too near the other leg where the trunk changes layer".into());
+            }
+            // (where the trunk changes layer twice with a turn between, the two vias of the leg on the inside)
+            let own = legs.vias.iter().enumerate().filter(|&(j, _)| j != k).map(|(_, vias)| dist(via, vias[leg]));
+            if own.fold(f64::INFINITY, f64::min) < sizes.hole - ROUNDED {
+                return Err("two vias of a leg would be nearer each other than two holes may be".into());
+            }
+            if dist(via, centres[k + 1][0]) > sizes.wide - sizes.via + ROUNDED {
+                return Err("a leg's via would lie beyond the trunk's".into());
+            }
+        }
     }
     // (a leg as points along it, a tenth of the pitch apart at most)
     let along = |leg: &[Pt]| -> Vec<Pt> {
@@ -308,10 +453,17 @@ fn fit(centre: &[Pt], legs: &[Vec<Pt>; 2], pitch: f64, spare: f64) -> Result<(),
         };
         leg.windows(2).flat_map(stretch).collect()
     };
-    let off = |p: Pt| centre.windows(2).map(|w| dist_segment(p, w[0], w[1])).fold(f64::INFINITY, f64::min);
-    let furthest = legs.iter().flat_map(|leg| along(leg)).map(off).fold(0.0, f64::max);
-    if furthest > pitch / 2.0 + spare + 1e-6 {
-        return Err(format!("a leg would lie {furthest:.4} mm from the middle of the trunk, beyond its width"));
+    for (k, (_, lines)) in legs.runs.iter().enumerate() {
+        let centre = centres[k];
+        // (the trunk's vias at either end of this layer's line)
+        let changes = [(k > 0).then(|| centre[0]), (k + 1 < centres.len()).then(|| centre[centre.len() - 1])];
+        let off = |p: Pt| centre.windows(2).map(|w| dist_segment(p, w[0], w[1])).fold(f64::INFINITY, f64::min);
+        let within = |p: Pt| changes.iter().flatten().any(|&at| dist(p, at) <= sizes.wide - sizes.leg + 1e-6);
+        let beyond = |p: &Pt| !within(*p);
+        let furthest = lines.iter().flat_map(|leg| along(leg)).filter(beyond).map(off).fold(0.0, f64::max);
+        if furthest > pitch / 2.0 + sizes.spare + 1e-6 {
+            return Err(format!("a leg would lie {furthest:.4} mm from the middle of the trunk, beyond its width"));
+        }
     }
     Ok(())
 }
@@ -329,14 +481,20 @@ fn nth_order(four: &[usize], mut code: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{beside, drawn_back, fit, nth_order};
-    use crate::geom::dist_segments;
+    use super::{beside, drawn_back, nth_order, through, Legs, Sizes};
+    use crate::geom::{dist, dist_segments};
 
     /// The legs beside a line at a pitch, as `split` makes them.
     fn legs(centre: &[[f64; 2]], pitch: f64, spare: f64) -> [Vec<[f64; 2]>; 2] {
         let mut both = [beside(centre, pitch / 2.0, spare), beside(centre, -pitch / 2.0, spare)];
         drawn_back(&mut both, pitch);
         both
+    }
+
+    /// Whether two legs beside a line on one layer are fit to be laid (legs 0.2 wide at the least pitch).
+    fn fit(centre: &[[f64; 2]], both: &[Vec<[f64; 2]>; 2], pitch: f64, spare: f64) -> Result<(), String> {
+        let sizes = Sizes { pitch, spare, leg: 0.1, via: 0.3, wide: 0.7, via_pitch: 0.8, hole: 0.56 };
+        super::fit(&[centre], &Legs { runs: vec![(0, both.clone())], vias: Vec::new() }, &sizes)
     }
 
     #[test]
@@ -408,7 +566,7 @@ mod tests {
                     let least = both[0]
                         .windows(2)
                         .flat_map(|s| both[1].windows(2).map(move |t| dist_segments(s[0], s[1], t[0], t[1])));
-                    assert!(least.fold(f64::INFINITY, f64::min) >= pitch - 1e-6, "{tidy:?} at {pitch}");
+                    assert!(least.fold(f64::INFINITY, f64::min) >= pitch - super::ROUNDED, "{tidy:?} at {pitch}");
                 }
                 Err(_) => refused += 1,
             }
@@ -465,6 +623,29 @@ mod tests {
         assert_eq!(begun, [[1.917157, 0.2], [0.0, 0.2]]);
         let jog = beside(&[[0.0, 0.0], [2.0, 0.0], [2.05, 0.05], [2.05, 2.0]], 0.2, 0.02);
         assert_eq!(jog, [[0.0, 0.2], [1.85, 0.2], [1.85, 2.0]]);
+    }
+
+    #[test]
+    fn where_the_trunk_changes_layer_each_leg_comes_aside_to_its_own_via() {
+        let sizes = Sizes { pitch: 0.4, spare: 0.02, leg: 0.1, via: 0.3, wide: 0.7, via_pitch: 0.8, hole: 0.56 };
+        let split = |lines: [&[[f64; 2]]; 2]| {
+            let runs = lines.iter().enumerate().map(|(layer, line)| (layer, legs(line, 0.4, 0.02))).collect();
+            let mut both = Legs { runs, vias: Vec::new() };
+            through(&lines, &mut both, [true, false], &sizes)
+                .and_then(|()| super::fit(&lines, &both, &sizes))
+                .map(|()| both)
+        };
+        // straight through: the vias across the way, the left leg's to the left (y grows downwards on a board)
+        let both = split([&[[0.0, 0.0], [2.0, 0.0]], &[[2.0, 0.0], [4.0, 0.0]]]).unwrap();
+        assert_eq!(both.vias, [[[2.0, 0.4], [2.0, -0.4]]]);
+        // each leg leaves its line 0.2 before, at 45 degrees, and is back on it 0.2 after
+        assert_eq!(both.runs[0].1[0], [[0.0, 0.2], [1.8, 0.2], [2.0, 0.4]]);
+        assert_eq!(both.runs[1].1[1], [[2.0, -0.4], [2.2, -0.2], [4.0, -0.2]]);
+        assert!((dist(both.vias[0][0], both.vias[0][1]) - 0.8).abs() < 1e-9);
+        // a trunk that turned at the layer change would bring a leg too near the other's via: refused
+        assert!(split([&[[0.0, 0.0], [2.0, 0.0]], &[[2.0, 0.0], [3.0, 1.0]]]).is_err());
+        // and so is one with no room to come aside
+        assert!(split([&[[1.9, 0.0], [2.0, 0.0]], &[[2.0, 0.0], [4.0, 0.0]]]).is_err());
     }
 
     #[test]

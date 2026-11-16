@@ -35,7 +35,7 @@ them. The bridge is in this repository, not in the crate.
 * **Copper zones**: pads a zone joins are left to it, zones that new tracks cut are mended, thermal relief
   is kept.
 * **Differential pairs**, found by name (`_P`/`_N`, `+`/`-`, `DP`/`DM`) or named in the hints, laid side by
-  side.
+  side, through two vias side by side where they change layer.
 * **Buses** kept together, **decoupling capacitors** joined to their pin, **long pads** left through an end.
 * **Hints**: an optional file with roles, a width for a current, a clearance for a voltage, layers, pairs.
 * Partial results: what cannot be joined is named, and everything else is laid.
@@ -43,8 +43,7 @@ them. The bridge is in this repository, not in the crate.
 
 ## What it does not do
 
-Push and shove or interactive routing; length tuning; impedance; pairs that change layer; blind, buried or
-micro vias; BGA fan-out as its own step; arcs and teardrops; KiCad's custom rules. At most seven routing
+Push and shove or interactive routing; length tuning; impedance; blind, buried or micro vias; BGA fan-out as its own step; arcs and teardrops; KiCad's custom rules. At most seven routing
 layers. See [how it works](https://github.com/9thAxis/pcb-routing/blob/main/docs/how-it-works.md) for the
 full list and the limits.
 
