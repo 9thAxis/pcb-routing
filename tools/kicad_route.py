@@ -1170,13 +1170,22 @@ class Outcome:
         return self.tracks + self.vias > 0
 
 
-def batches(names, most=ENGINE_NETS, size=BATCH_NETS):
-    """The nets in lots the engine accepts: all at once if fewer than `most`, else evenly in lots of at most `size`."""
+def batches(names, most=ENGINE_NETS, size=BATCH_NETS, together=()):
+    """The nets in lots the engine accepts: all at once if fewer than `most`, else evenly in lots of at most
+    `size`. `together`: pairs of nets that go in one lot (the halves of a differential pair); the second
+    joins the first where they would be parted."""
     if len(names) < most:
         return [list(names)] if names else []
     count = math.ceil(len(names) / size)
     each = math.ceil(len(names) / count)
-    return [list(names[k:k + each]) for k in range(0, len(names), each)]
+    lots = [list(names[k:k + each]) for k in range(0, len(names), each)]
+    lot_of = {name: lot for lot in lots for name in lot}
+    for a, b in together:
+        if a in lot_of and b in lot_of and lot_of[a] is not lot_of[b]:
+            lot_of[b].remove(b)
+            lot_of[a].append(b)
+            lot_of[b] = lot_of[a]
+    return [lot for lot in lots if lot]
 
 
 def route(board, settings, engine, only=None, options=None, say=print):
@@ -1200,7 +1209,8 @@ def route(board, settings, engine, only=None, options=None, say=print):
     starved_before = {(t.pad, t.layer) for t in picture.thermals if t.spokes < t.least}
     for line in told(Rules.of(picture, settings).intents, set(names)) + unheeded(picture, settings.hints):
         say(line)
-    lots = batches(names)
+    intents = Rules.of(picture, settings).intents
+    lots = batches(names, together=[(a, intents[a].pair) for a in names if intents[a].pair and a < intents[a].pair])
     if len(lots) > 1:
         say(f"{len(names)} nets to join, more than the engine takes in one run: routed in {len(lots)} batches of at most "
             f"{max(len(l) for l in lots)}, each against the board as the batch before left it")

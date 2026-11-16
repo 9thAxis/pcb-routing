@@ -248,6 +248,14 @@ class Batches(WithEngine):
         self.assertEqual([len(b) for b in k.batches(names)], [200] * 5)
         self.assertEqual(sum(k.batches(names[:777]), []), names[:777])  # every net once, in order
 
+    def test_nets_that_go_together_are_not_parted(self):
+        names = [f"N{i:03}" for i in range(300)]
+        first, second = k.batches(names, together=[("N149", "N150"), ("N010", "N020"), ("N299", "N000"), ("N007", "GONE")])
+        self.assertEqual((len(first), len(second)), (150, 150))
+        self.assertTrue({"N149", "N150", "N010", "N020"} <= set(first))  # the second of two joins the first
+        self.assertTrue({"N299", "N000"} <= set(second))
+        self.assertEqual(sorted(first + second), names)
+
     def test_fewer_than_the_engine_limit_go_in_one_run(self):
         outcome = self.route(FakeBoard(249))
         self.assertEqual([len(p["nets"]) for p in self.runs()], [249])
