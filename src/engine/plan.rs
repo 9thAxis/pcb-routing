@@ -42,12 +42,54 @@ pub(crate) struct Plan {
     /// before a layer change and as many after it. Its two vias stand side by side across its way (see
     /// `Pair::via_pitch`), and each leg needs that much of a straight run to come to its own and back.
     pub(super) runs: Vec<Option<[usize; 8]>>,
+    /// Per net that is the trunk of a pair: the cells it may not enter, in order. Those on the line between
+    /// two pads it passes between (see `Pair::passes`): it crosses that line where it is to pass, and nowhere
+    /// else, or it could come through the wrong way and turn round on the spot.
+    pub(super) bars: Vec<Vec<u32>>,
     /// The offsets of the cells too close to a hole for another hole.
     pub(super) shut: Vec<(i32, i32)>,
     /// And those too close to a hole that stands anywhere within a cell (the via of a pair's leg).
     pub(super) shut_off_grid: Vec<(i32, i32)>,
     /// The ground that costs more without being closed.
     pub(super) dear: DearGround,
+}
+
+/// The cells the trunk of a pair may not enter (see `Plan::bars`): for each two pads it passes between, those
+/// on the line from one to the other and the ones beside them, but for the cell it passes in and the three
+/// before and behind it on its way.
+fn bars_of(p: &Problem, grid: &Grid, pair: &Pair, trunk: &Net) -> Vec<u32> {
+    // the pieces it passes, in their order: each is between the pads of the stubs of that number
+    let mut passed: Vec<Option<u32>> = Vec::new();
+    for t in trunk.terminals.iter().filter(|t| t.pass) {
+        if !passed.contains(&t.piece) {
+            passed.push(t.piece);
+        }
+    }
+    let pad = |key: &String| p.nets.iter().find(|n| &n.key == key).and_then(|n| n.terminals.first()).map(|t| t.xy);
+    let w = grid.w as i64;
+    let mut bars: Vec<u32> = Vec::new();
+    for (piece, two) in passed.iter().zip(&pair.passes) {
+        let (Some(from), Some(to)) = (pad(&two[0]), pad(&two[1])) else { continue };
+        let mut free: Vec<i64> = Vec::new();
+        for t in trunk.terminals.iter().filter(|t| t.pass && t.piece == *piece) {
+            let (Some(cell), Some(way)) = (grid.cell(t.xy), t.heading) else { continue };
+            let (dj, di) = super::DIRS[super::nearest_dir(way)];
+            let on = (dj as i64) * w + di as i64;
+            free.extend((-3..=3).map(|k| cell as i64 + k * on));
+        }
+        let pieces = (dist(from, to) / (p.step / 2.0)).ceil().max(1.0) as usize;
+        for k in 0..=pieces {
+            let t = k as f64 / pieces as f64;
+            let Some(cell) = grid.cell([from[0] + t * (to[0] - from[0]), from[1] + t * (to[1] - from[1])]) else {
+                continue;
+            };
+            let beside = grid.around(cell, &[(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]);
+            bars.extend(beside.filter(|&c| !free.contains(&(c as i64))).map(|c| c as u32));
+        }
+    }
+    bars.sort_unstable();
+    bars.dedup();
+    bars
 }
 
 /// How many steps in each direction the trunk of a pair runs straight on either side of a layer change: what
@@ -88,6 +130,13 @@ impl Plan {
             let terminals = n.terminals.iter().map(|t| t.xy);
             exact.push(holes.chain(terminals).filter_map(|xy| Some((grid.cell(xy)? as u32, xy))).collect());
         }
+        let bars: Vec<Vec<u32>> = p
+            .nets
+            .iter()
+            .map(|n| {
+                p.pairs.iter().find(|pair| pair.trunk == n.key).map_or(Vec::new(), |pair| bars_of(p, &grid, pair, n))
+            })
+            .collect();
         let fixed_free: Vec<Vec<u32>> = (0..p.nets.len()).map(|n| fixed.free(n).to_vec()).collect();
         let mut terms = Vec::new();
         let mut heads: Vec<Vec<Head>> = Vec::new();
@@ -148,6 +197,7 @@ impl Plan {
                     p.pairs.iter().find(changes).map(|pair| run_of(p, pair))
                 })
                 .collect(),
+            bars,
         }
     }
 }

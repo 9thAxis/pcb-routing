@@ -42,6 +42,26 @@ pub struct Trunk {
     /// a second try, where the first side of an end is shut in. A trunk between a place of `gather` and one
     /// of `round` would arrive with its legs changed over, and is never to be offered.
     pub round: [Vec<Vec<Place>>; 2],
+    /// The ends it passes on its way from the first of `ends` to the second, in that order: it runs on
+    /// between the two pads of each. None for a trunk of [`Plan::trunks`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passes: Vec<Pass>,
+}
+
+/// An end that a trunk passes: it runs on between the end's two pads, and each leg gets a branch to its own.
+#[non_exhaustive]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Pass {
+    /// The end, as an index into [`Plan::ends`].
+    pub end: usize,
+    /// Where the trunk passes: half way between the two pads, on the grid, on the routing layers both are on
+    /// that the trunk is offered on. For a terminal with [`Terminal::pass`](crate::Terminal::pass) set.
+    pub place: Place,
+    /// The way a trunk that leaves its ends by [`Trunk::gather`] goes through, as a direction: square to the
+    /// line of the two pads, to the side that takes each leg past its own pad.
+    pub gather: Pt,
+    /// And one that leaves them by [`Trunk::round`]: the other way.
+    pub round: Pt,
 }
 
 /// How two nets are to be laid as a pair.
@@ -58,6 +78,16 @@ pub struct Plan {
     pub trunks: Vec<Trunk>,
     /// The pads of each net that are at no end: they are joined to their net as the pads of any net are.
     pub loose: [Vec<usize>; 2],
+    /// The trunks of a pair that may run on past an end in its middle, between that end's two pads (a part
+    /// both nets pass on their way: the pair then stays side by side from its first end to its last). Where
+    /// two stretches of the shortest way meet at an end that no third comes to, one trunk takes the place of
+    /// both and passes that end ([`Trunk::passes`]); it is offered even where one of the two is too short for
+    /// a trunk of its own. The other trunks are as in `trunks`. Empty where no end can be passed.
+    ///
+    /// These are instead of `trunks`, for a front end to choose: a trunk is as wide as both legs and the
+    /// distance between them, and passes only where the two pads leave it that much room and its clearance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub through: Vec<Trunk>,
 }
 
 /// How two nets may be laid as a pair.
@@ -81,45 +111,150 @@ pub fn plan(a: &[Pad], b: &[Pad], pitch: f64, layers: &[String], step: f64) -> R
     let middle = |end: [usize; 2]| between(a[end[0]].at, b[end[1]].at);
     // How far off its pads a trunk begins at the least: room for the stubs to come in at 45 degrees from the
     // pads' distance to the legs'.
-    let off = |end: [usize; 2]| dist(a[end[0]].at, b[end[1]].at) / 2.0 + pitch;
+    let off = |end: usize| dist(a[ends[end][0]].at, b[ends[end][1]].at) / 2.0 + pitch;
     let middles: Vec<Pt> = ends.iter().map(|&end| middle(end)).collect();
+    // The line of the two pads of an end, from the second net's to the first's.
+    let across = |end: usize| {
+        let (p, q) = (b[ends[end][1]].at, a[ends[end][0]].at);
+        let apart = dist(p, q).max(1e-9);
+        [(q[0] - p[0]) / apart, (q[1] - p[1]) / apart]
+    };
+    let pads = |end: usize| [&a[ends[end][0]], &b[ends[end][1]]];
+    let way = |from: usize, to: usize| {
+        let (p, q) = (middles[from], middles[to]);
+        let apart = dist(p, q).max(1e-9);
+        [(q[0] - p[0]) / apart, (q[1] - p[1]) / apart]
+    };
+    // An end is left with the first net's leg on the left or on the right; the other end must then be left
+    // with it on the other hand, for the trunk arrives there the other way about. Of the two ways to choose,
+    // the first is the one whose square places face the way the trunk sets out from either end (`next`
+    // and `before`: the ends it comes to first from its first end, and last before its last).
+    let first_hand = |i: usize, next: usize, before: usize, j: usize| {
+        let faces = |hand: f64| {
+            let (one, other) = (square(across(i), hand), square(across(j), -hand));
+            let (out, back) = (way(i, next), way(j, before));
+            one[0] * out[0] + one[1] * out[1] + other[0] * back[0] + other[1] * back[1]
+        };
+        if faces(1.0) >= faces(-1.0) {
+            1.0
+        } else {
+            -1.0
+        }
+    };
+    let tree = shortest_tree(&middles);
     let mut trunks = Vec::new();
-    for [i, j] in shortest_tree(&middles) {
-        let (from, to) = (middles[i], middles[j]);
+    for &[i, j] in &tree {
         // Between the places where it gathers and where it parts, a trunk is as long again as both are off
         // their pads at the least: so the furthest places are offered only where the ends are far enough apart,
         // and two ends too close for the nearest are joined as the pads of any net are.
-        let reach = off(ends[i]) + off(ends[j]);
-        let lots: Vec<f64> = FURTHER.into_iter().filter(|further| dist(from, to) >= (further + 1.0) * reach).collect();
-        let on = trunk_layers([&a[ends[i][0]], &b[ends[i][1]]], [&a[ends[j][0]], &b[ends[j][1]]], layers);
+        let reach = off(i) + off(j);
+        let apart = dist(middles[i], middles[j]);
+        let lots: Vec<f64> = FURTHER.into_iter().filter(|further| apart >= (further + 1.0) * reach).collect();
+        let on = trunk_layers(pads(i), pads(j), layers);
         if lots.is_empty() || on.is_empty() {
             continue;
         }
-        // The line of the two pads of an end, from the second net's to the first's.
-        let across = |end: [usize; 2]| {
-            let (p, q) = (b[end[1]].at, a[end[0]].at);
-            let apart = dist(p, q).max(1e-9);
-            [(q[0] - p[0]) / apart, (q[1] - p[1]) / apart]
-        };
-        // An end is left with the first net's leg on the left or on the right; the other end must then be left
-        // with it on the other hand, for the trunk arrives there the other way about. Of the two ways to
-        // choose, the first is the one whose square places face each other.
-        let faces = |hand: f64| {
-            let (one, other) = (square(across(ends[i]), hand), square(across(ends[j]), -hand));
-            let way = [(to[0] - from[0]) / dist(from, to), (to[1] - from[1]) / dist(from, to)];
-            one[0] * way[0] + one[1] * way[1] - other[0] * way[0] - other[1] * way[1]
-        };
-        let hand = if faces(1.0) >= faces(-1.0) { 1.0 } else { -1.0 };
-        let gather = |end: usize, from: Pt, to: Pt, hand: f64| {
-            places(from, to, across(ends[end]), hand, off(ends[end]), &lots, &on, step)
+        let hand = first_hand(i, j, i, j);
+        let gather = |end: usize, to: usize, hand: f64| {
+            places(middles[end], middles[to], across(end), hand, off(end), &lots, &on, step)
         };
         trunks.push(Trunk {
             ends: [i, j],
-            gather: [gather(i, from, to, hand), gather(j, to, from, -hand)],
-            round: [gather(i, from, to, -hand), gather(j, to, from, hand)],
+            gather: [gather(i, j, hand), gather(j, i, -hand)],
+            round: [gather(i, j, -hand), gather(j, i, hand)],
+            passes: Vec::new(),
         });
     }
-    Ok(Plan { ends, trunks, loose })
+    // A trunk that runs on past the ends in the middle of a line of them.
+    let passing = |line: &[usize]| -> Option<Trunk> {
+        let (i, next, before, j) = (line[0], line[1], line[line.len() - 2], line[line.len() - 1]);
+        // (on the layers of its two ends, as any trunk; and where an end it passes is on none of those, on
+        // the layers of either end: it changes layer on its way)
+        let on_both = |on: &[String], end: usize| on.iter().any(|l| pads(end).iter().all(|pad| pad.layers.contains(l)));
+        let on_either =
+            |layer: &&String| [i, j].iter().any(|&end| pads(end).iter().all(|pad| pad.layers.contains(layer)));
+        let mut on = trunk_layers(pads(i), pads(j), layers);
+        if !line[1..line.len() - 1].iter().all(|&end| on_both(&on, end)) {
+            on = layers.iter().filter(on_either).cloned().collect();
+        }
+        // (an end is left no further off than leaves the trunk two pitches before the end it passes next)
+        let lots = |end: usize, to: usize| -> Vec<f64> {
+            let apart = dist(middles[end], middles[to]);
+            FURTHER.into_iter().filter(|further| apart >= further * off(end) + 2.0 * pitch).collect()
+        };
+        let (near, far) = (lots(i, next), lots(j, before));
+        let hand = first_hand(i, next, before, j);
+        let mut passes = Vec::new();
+        for &end in &line[1..line.len() - 1] {
+            let both: Vec<String> =
+                on.iter().filter(|layer| pads(end).iter().all(|pad| pad.layers.contains(layer))).cloned().collect();
+            if both.is_empty() {
+                return None;
+            }
+            let on_grid = |v: f64| round6((v / step).round() * step);
+            passes.push(Pass {
+                end,
+                place: Place { xy: [on_grid(middles[end][0]), on_grid(middles[end][1])], layers: both },
+                gather: square(across(end), hand),
+                round: square(across(end), -hand),
+            });
+        }
+        if near.is_empty() || far.is_empty() || on.is_empty() {
+            return None;
+        }
+        let gather = |end: usize, to: usize, hand: f64, lots: &[f64]| {
+            places(middles[end], middles[to], across(end), hand, off(end), lots, &on, step)
+        };
+        Some(Trunk {
+            ends: [i, j],
+            gather: [gather(i, next, hand, &near), gather(j, before, -hand, &far)],
+            round: [gather(i, next, -hand, &near), gather(j, before, hand, &far)],
+            passes,
+        })
+    };
+    let mut through = Vec::new();
+    let mut passed = false;
+    for line in lines_of(&tree, ends.len()) {
+        let stretches = line.windows(2).map(|w| [w[0], w[1]]);
+        let own = |stretch: [usize; 2]| trunks.iter().find(|t| t.ends == stretch || t.ends == [stretch[1], stretch[0]]);
+        match Some(&line).filter(|line| line.len() > 2).and_then(|line| passing(line)) {
+            Some(trunk) => {
+                passed = true;
+                through.push(trunk);
+            }
+            None => through.extend(stretches.filter_map(own).cloned()),
+        }
+    }
+    if !passed {
+        through.clear();
+    }
+    Ok(Plan { ends, trunks, loose, through })
+}
+
+/// A tree of points (`tree`: its stretches, as pairs of indices below `count`) as its lines: each from a
+/// point where the tree ends or branches, through points that two stretches meet at, to the next such point.
+/// Every stretch is in one line.
+fn lines_of(tree: &[[usize; 2]], count: usize) -> Vec<Vec<usize>> {
+    let beside = |at: usize| tree.iter().filter_map(move |&[i, j]| (i == at).then_some(j).or((j == at).then_some(i)));
+    let on_the_way = |at: usize| beside(at).count() == 2;
+    let mut lines = Vec::new();
+    for from in (0..count).filter(|&at| !on_the_way(at)) {
+        for first in beside(from) {
+            let mut line = vec![from, first];
+            while on_the_way(line[line.len() - 1]) {
+                let (before, at) = (line[line.len() - 2], line[line.len() - 1]);
+                match beside(at).find(|&next| next != before) {
+                    Some(next) => line.push(next),
+                    None => break,
+                }
+            }
+            // (each line is found from both its ends: the one from its lower end is kept)
+            if line[0] < line[line.len() - 1] {
+                lines.push(line);
+            }
+        }
+    }
+    lines
 }
 
 /// The point half way between two.
@@ -293,6 +428,39 @@ mod tests {
         let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
         assert_eq!(found.ends.len(), 3);
         assert_eq!(found.trunks.iter().map(|t| t.ends).collect::<Vec<_>>(), [[1, 2]]);
+    }
+
+    #[test]
+    fn a_part_in_the_middle_of_a_pair_may_be_passed_by_one_trunk_from_end_to_end() {
+        // a connector, a part 2 mm from it with its pads 1.6 mm apart, and the far end
+        let a = [land(0.0, 0.0, "F"), land(2.0, -0.3, "F"), land(30.0, 0.0, "F")];
+        let b = [land(0.0, 1.0, "F"), land(2.0, 1.3, "F"), land(30.0, 1.0, "F")];
+        let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
+        assert_eq!(found.trunks.iter().map(|t| t.ends).collect::<Vec<_>>(), [[1, 2]]);
+        assert_eq!(found.through.len(), 1);
+        let trunk = &found.through[0];
+        assert_eq!((trunk.ends, trunk.passes.len()), ([0, 2], 1));
+        let pass = &trunk.passes[0];
+        assert_eq!((pass.end, pass.place.xy, &pass.place.layers), (1, [2.0, 0.5], &vec!["F".to_string()]));
+        // left towards the part, it is passed the same way; round the connector, the other way
+        assert_eq!((trunk.gather[0][0][0].xy, pass.gather, pass.round), ([0.9, 0.5], [1.0, 0.0], [-1.0, 0.0]));
+        assert!(trunk.round[0][0][0].xy[0] < 0.0 && trunk.gather[1][0][0].xy[0] < 30.0);
+        // the connector is left no further off than leaves room before the part
+        assert!(trunk.gather[0].iter().flatten().all(|place| place.xy[0] < 1.2), "{:?}", trunk.gather[0]);
+        // two ends have nothing to pass, and a part on the other side of the board is not passed
+        let found = plan(&a[..1], &b[..1], 0.4, &layers(), 0.1).unwrap();
+        assert!(found.through.is_empty());
+        let under = [land(0.0, 1.0, "F"), land(2.0, 1.3, "B"), land(30.0, 1.0, "F")];
+        assert!(plan(&a, &under, 0.4, &layers(), 0.1).unwrap().through.is_empty());
+    }
+
+    #[test]
+    fn the_lines_of_a_tree_run_between_its_ends_and_its_forks() {
+        assert_eq!(lines_of(&[[0, 1], [1, 2]], 3), [vec![0, 1, 2]]);
+        assert_eq!(lines_of(&[[0, 1], [0, 2]], 3), [vec![1, 0, 2]]);
+        // a fork at 1: three lines from it, one of them through 3
+        assert_eq!(lines_of(&[[0, 1], [1, 2], [1, 3], [3, 4]], 5), [vec![0, 1], vec![1, 2], vec![1, 3, 4]]);
+        assert!(lines_of(&[], 1).is_empty());
     }
 
     #[test]

@@ -35,7 +35,8 @@ them. The bridge is in this repository, not in the crate.
 * **Copper zones**: pads a zone joins are left to it, zones that new tracks cut are mended, thermal relief
   is kept.
 * **Differential pairs**, found by name (`_P`/`_N`, `+`/`-`, `DP`/`DM`) or named in the hints, laid side by
-  side, through two vias side by side where they change layer.
+  side, through two vias side by side where they change layer, and on between the two pads of a part in
+  their middle.
 * **Buses** kept together, **decoupling capacitors** joined to their pin, **long pads** left through an end.
 * **Hints**: an optional file with roles, a width for a current, a clearance for a voltage, layers, pairs.
 * Partial results: what cannot be joined is named, and everything else is laid.

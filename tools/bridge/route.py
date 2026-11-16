@@ -245,7 +245,8 @@ class _Lot:
         # if it joins more, for the rest of the lot; else the first.
         said = solution.get("unrouted", []) + [c.get("key", "") + ":" for c in solution.get("conflicts", [])]
         leaned = Rules.of(self.picture, self.at_step()).leans(n["net"] for n in problem["nets"])
-        of_pair = lambda pair: [pair["key"], pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
+        of_pair = lambda pair: ([pair["key"], pair["trunk"]]
+                                + [stub for two in pair["stubs"] + pair.get("passes", []) for stub in two])
         broken = {pair["key"] for pair in problem.get("pairs", [])
                   if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
         if self.weighing is not None:

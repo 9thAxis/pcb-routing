@@ -326,6 +326,54 @@ class Pairs(WithEngine):
             solution = k.run_engine(problem, support.PROGRAM)
         self.assertEqual(solution["status"], "routed", solution.get("message"))
 
+    def with_a_part(self, apart, between=None):
+        """The pair's two nets with a part 4 mm from their first pads, its two pads `apart`; `between`: a pad
+        of another net half way between the two."""
+        picture = self.picture(names=("D_P", "D_N"))
+        for name, y in (("D_P", 4.5 - apart / 2), ("D_N", 4.5 + apart / 2)):
+            picture.pads.append(support.land(k, name, 6.0, y, half=0.3))
+            picture.groups[name].append([len(picture.pads) - 1])
+        if between:
+            picture.pads.append(support.land(k, between, 6.0, 4.5, half=0.1))
+        return picture
+
+    def test_a_pair_runs_on_between_the_pads_of_a_part_in_its_middle_where_there_is_room(self):
+        problem, notes = self.problem(self.with_a_part(3.0))
+        (pair,) = problem["pairs"]
+        nets = {n["key"]: n for n in problem["nets"]}
+        key = "D_N = D_P (through)"
+        # one trunk from end to end, the stubs of both ends and one more for either pad of the part; nothing
+        # is left for an entry of the nets themselves
+        self.assertEqual((pair["key"], pair["passes"]), (key, [[f"{key} D_N 3", f"{key} D_P 3"]]))
+        self.assertEqual(sorted(nets), sorted([f"{key} {net} {n}" for net in ("D_N", "D_P") for n in (1, 2, 3)]
+                                              + [f"{key} trunk"]))
+        self.assertEqual(nets[f"{key} D_N 3"]["terminals"][0]["xy"], [6.0, 6.0])
+        # the trunk passes half way between the two pads, one way on either hand, between its two ends
+        passed = [t for t in nets[f"{key} trunk"]["terminals"] if t.get("pass")]
+        self.assertEqual([(t["xy"], t["piece"], t["hand"], t["heading"]) for t in passed],
+                         [([6.0, 4.5], 2, 1, [1.0, 0.0]), ([6.0, 4.5], 2, 2, [-1.0, 0.0])])
+        pieces = [t["piece"] for t in nets[f"{key} trunk"]["terminals"] if t["hand"] == 1]
+        self.assertEqual(sorted(set(pieces), key=pieces.index), [0, 2, 1])
+        with redirect_stdout(io.StringIO()):
+            solution = k.run_engine(problem, support.PROGRAM)
+        self.assertEqual(solution["status"], "routed", solution.get("message"))
+        legs = [n for n in solution["nets"] if n["key"].startswith(key + "/")]
+        self.assertEqual([len(n["tracks"]) for n in legs], [4, 4])  # the leg and three stubs
+        for leg in legs:
+            self.assertTrue(leg["tracks"][0]["points"][0][0] < 4.0 and leg["tracks"][0]["points"][-1][0] > 16.0)
+
+    def test_a_part_without_room_between_its_pads_is_not_passed_nor_one_tried_and_not_laid(self):
+        through = lambda problem: [pair["key"] for pair in problem["pairs"] if "passes" in pair]
+        # pads 1.4 mm apart leave 0.8 mm: the trunk and its clearance take more
+        self.assertEqual(through(self.problem(self.with_a_part(1.4))[0]), [])
+        # a pad of another net stands where the pair would pass
+        self.assertEqual(through(self.problem(self.with_a_part(3.0, between="OTHER"))[0]), [])
+        # not all laid so, it is laid stretch by stretch (here the one from the part on: the other is too short)
+        picture = self.with_a_part(3.0)
+        rules = k.Rules.of(picture, k.Settings())
+        again = k.problem_of(picture, rules, support.ask, unpaired={"D_N = D_P (through)": 1})
+        self.assertEqual([pair["key"] for pair in again["pairs"]], ["D_N = D_P"])
+
     def test_the_hints_set_the_gap_and_the_width(self):
         picture = self.picture()
         said = hints(pairs=[dict(nets=["D_P", "D_N"], gap=0.4, width=0.3)], nets={"OTHER": dict(pair=False)})

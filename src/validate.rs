@@ -226,13 +226,11 @@ impl Problem {
                     None => line.push((term.piece, term.pass)),
                 }
             }
-            if line.iter().any(|&(_, pass)| pass) {
-                if line[0].1 || line[line.len() - 1].1 {
-                    return Err(invalid(
-                        at("terminals"),
-                        "a terminal that is passed is of neither the first piece nor the last: those are the ends",
-                    ));
-                }
+            if line.first().is_some_and(|first| first.1) || line.last().is_some_and(|last| last.1) {
+                return Err(invalid(
+                    at("terminals"),
+                    "a terminal that is passed is of neither the first piece nor the last: those are the ends",
+                ));
             }
             for (t, term) in n.terminals.iter().enumerate() {
                 point(at(&format!("terminals[{t}].xy")), term.xy)?;

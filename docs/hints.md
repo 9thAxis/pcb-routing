@@ -90,7 +90,11 @@ and a pad of each stand side by side (no more than 5 mm apart, each the other's 
 more. Between two such ends far enough apart, the pair is laid as one wide track and split into two
 legs at the pitch asked for; each leg is joined to its pads by a short track at either end. Where that is
 the shorter way by far, the pair changes layer: through two vias side by side, as near each other as the
-rules allow, each leg drawn aside to its own (not if either net has `vias: none`). Between two ends
+rules allow, each leg drawn aside to its own (not if either net has `vias: none`). A part in the middle of
+a pair (a protection device, a pair of termination resistors) is passed: where its two pads leave the wide
+track room between them and no other pad stands there, the pair runs on between the two, side by side from
+its first end to its last, with a short branch from either leg to its pad; if it cannot be laid so, it is
+laid stretch by stretch. Between two ends
 too close for that (a protection device next to its connector), and to a pad that stands alone (a pull-up on
 one leg), the nets are joined as any net is.
 

@@ -38,16 +38,24 @@ impl Engine<'_> {
         hands.sort_unstable();
         hands.dedup();
         if hands.len() < 2 {
-            return self.lay_on(n, present, hard, None);
+            return self.lay_on(n, present, hard, None, None);
         }
+        // (a hand is not followed further than the best before it came to, whole: it could not be kept)
         let worth = |state: &NetState| (state.failed.len(), state.cost + state.apart);
-        let laid = hands.into_iter().map(|hand| self.lay_on(n, present, hard, Some(hand)));
-        laid.min_by(|a, b| worth(a).partial_cmp(&worth(b)).unwrap_or(std::cmp::Ordering::Equal))
-            .expect("there are two hands at least")
+        let mut best: Option<NetState> = None;
+        for hand in hands {
+            let most = best.as_ref().filter(|best| best.failed.is_empty()).map(|best| best.cost + best.apart);
+            let state = self.lay_on(n, present, hard, Some(hand), most);
+            if best.as_ref().map_or(true, |best| worth(&state) < worth(best)) {
+                best = Some(state);
+            }
+        }
+        best.expect("there are two hands at least")
     }
 
-    /// Lay a net at its terminals of one hand (all of them, without one).
-    fn lay_on(&self, n: usize, present: f64, hard: bool, hand: Option<u8>) -> NetState {
+    /// Lay a net at its terminals of one hand (all of them, without one). `most`: what it may cost at the most,
+    /// if that is known; what would cost more is left unjoined.
+    fn lay_on(&self, n: usize, present: f64, hard: bool, hand: Option<u8>, most: Option<f64>) -> NetState {
         let mut w = Worker::take(self.shared, self.plan.space.states(), self.plan.space.hw);
         let mine: Vec<usize> = std::iter::once(n).chain(self.plan.siblings[n].iter().copied()).collect();
         for &m in &mine {
@@ -59,7 +67,7 @@ impl Engine<'_> {
             }
         }
         self.mark_bus(n, &mut w);
-        let mut result = self.route_alone(n, present, hard, hand, &mut w);
+        let mut result = self.route_alone(n, present, hard, hand, most, &mut w);
         result.was_apart = self.apart_of(n, &w.ground);
         w.ground.clear_bus();
         for &m in &mine {
@@ -75,7 +83,15 @@ impl Engine<'_> {
     }
 
     /// Lay net `n` (see `lay`), with the search memory `w` in which the net's own claims and its bus are marked.
-    fn route_alone(&self, n: usize, present: f64, hard: bool, hand: Option<u8>, w: &mut Worker) -> NetState {
+    fn route_alone(
+        &self,
+        n: usize,
+        present: f64,
+        hard: bool,
+        hand: Option<u8>,
+        most: Option<f64>,
+        w: &mut Worker,
+    ) -> NetState {
         let p = self.p;
         let net = &p.nets[n];
         let (space, nl) = (self.plan.space, self.plan.space.nl);
@@ -133,6 +149,10 @@ impl Engine<'_> {
                 state.failed.push(format!("{}: terminal {:?} {why}", net.key, net.terminals[t].xy));
             }
         }
+        // (a line that cannot pass where it is to pass is not laid at all)
+        if net.terminals.iter().any(|t| t.pass) && !state.failed.is_empty() {
+            return state;
+        }
         let extra = self.pairs.extra_terms[n].iter().enumerate();
         terms.extend(extra.map(|(k, &term)| (term, super::plan::piece_of(net, net.terminals.len() + k))));
         let mut left: Vec<Term> = terms.iter().map(|t| t.0).collect();
@@ -158,6 +178,9 @@ impl Engine<'_> {
             return state;
         }
         let line = net.terminals.iter().any(|t| t.pass);
+        // (the ground of what is laid of a line, shut to what is laid of it next: its own width about each
+        // state of its path, but for the last of them, where it goes on)
+        let mut own: Vec<u32> = Vec::new();
         // (a line has no branches)
         let branches = net.branch_anywhere && !line;
         let mut tree: Vec<u32> = Vec::new();
@@ -184,7 +207,10 @@ impl Engine<'_> {
                 Vec::new()
             };
             let goals = if line { &next[..] } else { &left[..] };
-            let query = Query { net: n, mode, sources: &tree, goals, from: Some(from), holes: &holes, hand };
+            // (what is laid so far counts towards the most it may cost; a little over, for rounding)
+            let cut = most.map(|most| (most - state.cost - state.apart) * 1.001 + 1.0);
+            let query =
+                Query { net: n, mode, sources: &tree, goals, from: Some(from), holes: &holes, hand, cut, shut: &own };
             let path = match self.find(query, w) {
                 Some(path) => path,
                 None if line => {
@@ -258,6 +284,14 @@ impl Engine<'_> {
                 tree.extend_from_slice(&path);
             }
             if line {
+                let wide = self.plan.grid.disc(net.width);
+                let behind = path.len().saturating_sub((net.width / p.step).ceil() as usize + 2);
+                for &at in &path[..behind] {
+                    let (layer, cell) = space.split(at as usize);
+                    own.extend(self.plan.grid.around(cell, &wide).map(|c| space.state(layer, c) as u32));
+                }
+                own.sort_unstable();
+                own.dedup();
                 // (what is joined next begins where this ended, and nowhere else)
                 tree = vec![end];
                 joined = vec![Term { cell: ec as u32, layers: 1 << el }];

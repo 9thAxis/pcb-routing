@@ -90,10 +90,10 @@ impl Engine<'_> {
             }
         }
         for leg in 0..2 {
-            for end in 0..2 {
+            for (end, of_end) in stubs.iter().enumerate() {
                 let run = if end == 0 { 0 } else { legs.runs.len() - 1 };
                 let line = &legs.runs[run].1[leg];
-                joints.push((stubs[end][leg], leg, run, if end == 0 { line[0] } else { *line.last().unwrap() }));
+                joints.push((of_end[leg], leg, run, if end == 0 { line[0] } else { *line.last().unwrap() }));
             }
         }
         let mut footholds: Vec<(usize, usize, u32, Pt)> = Vec::new();

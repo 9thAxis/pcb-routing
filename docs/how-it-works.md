@@ -54,8 +54,12 @@ All lengths are in mm. A misspelt field is an error, not ignored.
 7. **Pairs** (`src/engine/pairs.rs`). A pair negotiates as one wide track; once the nets have settled it is
    split into two legs a fixed pitch apart, each joined to its pads by a short stub. Where it changes layer
    (one move of the search: a straight run with one wide via in the middle of it) each leg is drawn aside to
-   a via of its own, the two side by side. The legs are laid only if they come out no nearer each other
-   than the pitch and within the track, and the via, they were split from.
+   a via of its own, the two side by side. A pair may pass a part in its middle: the wide track is then
+   laid as one line through a point half way between that part's two pads, in the direction that takes each
+   leg past its own pad (it may cross the line between the two pads there and nowhere else, may not cross
+   itself, and is given up where that takes it more than twice as far round as the way it would go if
+   nothing held it), and either pad gets a stub to the nearest point of its leg. The legs are laid only if
+   they come out no nearer each other than the pitch and within the track, and the via, they were split from.
 8. **Ends** (`src/engine/ends.rs`). A pad seldom stands on a cell centre. The last corner of a track slides
    along the stretch before it so that the track ends on the pad's own point and keeps its directions. What
    moves is tested off the grid against the fixed copper and the other nets. Where the corner cannot slide,
@@ -105,7 +109,8 @@ In the engine:
 * Per net: width, via size, allowed layers, a cost per layer, a wanted maximum length, readiness to give
   way, "no vias", "lay last without disturbing the others".
 * Differential pairs: two nets laid side by side at a fixed pitch as one trunk, then split into two legs
-  that are checked before they are laid; through two vias side by side where the pair changes layer.
+  that are checked before they are laid; through two vias side by side where the pair changes layer, and
+  on between two pads it passes on its way, with a branch to each.
 * Buses: nets marked as one bus are drawn to run beside each other on one layer, in the order given, and are
   slow to cross each other.
 * Deterministic: the same problem gives the same answer, whatever the thread count.
@@ -151,7 +156,9 @@ Things other routers have and this one does not, roughly in order of how often t
 * **Pairs coupled all the way to the pads.** A pair is laid side by side between two points a little off
   its pads (through two vias side by side where it changes layer on the way), and where its legs would have
   to cross to reach their pads it is laid as two nets. Two ends too near each other for a pair to gather
-  and part between them (a few millimetres) are joined as two nets. There is no impedance calculation: a pair has the width and gap it is told.
+  and part between them (a few millimetres) are joined as two nets, unless one of them is a part the pair
+  can run on past, between its two pads. A part whose pads are too near each other for that (a small
+  protection device) still ends the pair: running each leg through its own pad is not done. There is no impedance calculation: a pair has the width and gap it is told.
 * **Blind, buried and micro vias.** Through vias only.
 * **Fan-out of fine-pitch and BGA parts** as a step of its own. Pads are escaped by the ordinary search,
   with a narrower second try.

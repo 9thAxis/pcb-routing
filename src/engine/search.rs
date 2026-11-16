@@ -40,6 +40,11 @@ fn turns(bend: f64) -> ([[f64; 8]; 9], [u8; 9]) {
     (cost, allowed)
 }
 
+/// How much dearer than the way it would go if nothing held it a line may be laid: so many times, and the
+/// cost of so many mm besides.
+const LINE_ROUND: f64 = 2.0;
+const LINE_SPARE_MM: f64 = 10.0;
+
 /// One search: the cheapest path of a net from any of some states to any of some terminals.
 #[derive(Clone, Copy)]
 pub(super) struct Query<'q> {
@@ -56,6 +61,11 @@ pub(super) struct Query<'q> {
     pub(super) holes: &'q [u32],
     /// The hand the net is being laid on (see `Terminal::hand`), if it has more than one.
     pub(super) hand: Option<u8>,
+    /// What the path may cost at the most, if there is a bound: none is found that costs more.
+    pub(super) cut: Option<f64>,
+    /// States the path may not enter, in order: for a line, the ground of what is laid of it (it cannot
+    /// cross itself).
+    pub(super) shut: &'q [u32],
 }
 
 impl Engine<'_> {
@@ -258,7 +268,7 @@ impl Engine<'_> {
     /// The search proper: the cheapest path with its corners and what it costs, after a first pass if
     /// `q.from` is given.
     fn search(&self, q: Query, worker: &mut Worker) -> Option<(Vec<u32>, f64)> {
-        let Query { net: n, mode, sources, goals, from, holes, hand } = q;
+        let Query { net: n, mode, sources, goals, from, holes, hand, cut: most, shut } = q;
         let Worker { search: s, sweep, ground } = worker;
         let prices = Prices::new(self, ground, n, mode);
         let floor = self.look(n, goals, holes, sources);
@@ -322,7 +332,17 @@ impl Engine<'_> {
         // cannot take, and cheaper than any it can. What the first pass found is a look-ahead all the same:
         // what holds a path to a heading or a run only ever makes it dearer.
         let held = !self.plan.heads[n].is_empty() || self.plan.runs[n].is_some();
-        let cut = if held { f64::INFINITY } else { upper * 1.0005 + 1.0 };
+        // A line (see `Terminal::pass`) is not followed further round than twice the way it would go if nothing
+        // held it, and 10 mm: so far round it is no pair worth laying, and the search for it would be most of a run.
+        let line = self.plan.heads[n].iter().any(|head| head.pass);
+        let cut = if line {
+            upper * LINE_ROUND + LINE_SPARE_MM / self.p.step
+        } else if held {
+            f64::INFINITY
+        } else {
+            upper * 1.0005 + 1.0
+        };
+        let cut = cut.min(most.unwrap_or(f64::INFINITY));
         let (corner, allowed) = turns(bend);
         let Steps { off, len } = self.plan.steps;
         // A state is ((layer, cell), direction of arrival), the nine directions of a cell side by side in memory.
@@ -343,6 +363,16 @@ impl Engine<'_> {
         let heads = &self.plan.heads[n];
         let ours = |head: &&Head| head.hand == 0 || hand.map_or(true, |hand| head.hand == hand);
         let head_at = |cell: usize| heads.iter().filter(ours).find(|head| head.cell as usize == cell);
+        // (the cells a trunk may not enter, and whether it may enter a cell that way: one it is to pass
+        // only the way it is passed)
+        let bars = &self.plan.bars[n];
+        let barred = |state: usize, way: usize| {
+            let cell = state % hw;
+            let at_bar = || bars.binary_search(&(cell as u32)).is_ok();
+            let wrong_way = || head_at(cell).is_some_and(|head| head.pass && head.way as usize != way);
+            (!bars.is_empty() && (at_bar() || wrong_way()))
+                || (!shut.is_empty() && shut.binary_search(&(state as u32)).is_ok())
+        };
         let mut found = NONE;
         while let Some((_, u)) = s.heap.pop() {
             let ui = u as usize;
@@ -395,7 +425,7 @@ impl Engine<'_> {
                 bits &= bits - 1;
                 let v = (at as isize + off[d2]) as usize;
                 let m2 = prices.at(v).mult.get();
-                if m2 >= TAKEN {
+                if m2 >= TAKEN || barred(v, d2) {
                     continue;
                 }
                 relax(v * 9 + d2, corner[dir][d2] + len[d2] * step_cost * m2 as f64, dir as u8, s);
@@ -417,7 +447,7 @@ impl Engine<'_> {
                         }
                         at = (at as isize + off[dir]) as usize;
                         let mult = prices.at(at).mult.get();
-                        if mult >= TAKEN {
+                        if mult >= TAKEN || barred(at, dir) {
                             return None;
                         }
                         cost += len[dir] * layer_cost * mult as f64;
