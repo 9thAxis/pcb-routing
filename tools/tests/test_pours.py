@@ -223,9 +223,10 @@ class ShutInBoard:
 
     LINE = StarvedBoard.LINE
 
-    def __init__(self):
+    def __init__(self, parts=None):
         self.signal = "round the pad"  # or "taken out", "clear of it"
         self.calls = []
+        self.parts = parts  # a net that the signal's new way parts, if any
 
     def read(self, nets=None):
         pads = [support.land(k, "GND", 5, 5, part="U1"), support.land(k, "GND", 8, 8, part="U2"),
@@ -244,7 +245,7 @@ class ShutInBoard:
         return 3, 0
 
     def unjoined(self, nets=None):
-        return ["SIG"] if self.signal == "taken out" else []
+        return ["SIG"] if self.signal == "taken out" else [self.parts] if self.parts and self.signal == "clear of it" else []
 
     def take_out(self, nets):
         self.calls.append(("take out", sorted(nets)))
@@ -292,6 +293,13 @@ class ShutIn(WithEngine):
         self.assertEqual(board.calls, [("take out", ["SIG"]), ("rewind",), ("put back",)])
         self.assertEqual(self.said, ["no way clear of U1 for SIG: left as they were",
                                      "too few spokes to their zone, and no room for a track to it: U1 (GND, F.Cu)"])
+        self.assertEqual((outcome.starved, outcome.tracks), (["U1 (GND, F.Cu)"], 1))
+
+    def test_where_its_new_way_parts_another_net_it_is_put_back(self):
+        board = ShutInBoard(parts="GND")
+        outcome = self.see_to(board)
+        self.assertEqual(board.calls, [("take out", ["SIG"]), ("write", ["SIG"]), ("rewind",), ("put back",)])
+        self.assertEqual(self.said[0], "no way clear of U1 for SIG: left as they were")
         self.assertEqual((outcome.starved, outcome.tracks), (["U1 (GND, F.Cu)"], 1))
 
     def test_a_track_the_board_came_with_is_left_where_it_is(self):

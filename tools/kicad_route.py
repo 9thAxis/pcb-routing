@@ -1577,7 +1577,8 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     A track of another net close by a pad takes the zone away from the pad's spokes, and one that goes round
     the pad leaves no way out for a track of the pad's own. The nets that this run laid within reach of such
     a pad (the pad, the gap, the clearance the zone keeps and a track's width) are taken out and laid again
-    with that ground closed to them. If they cannot all be joined so, they are put back as they were.
+    with that ground closed to them. If they cannot all be joined so, or the way they then take parts another
+    net (from its zone), they are put back as they were.
     `board.take_out(nets)` removes what has been written for those nets and `board.put_back()` restores it
     (both return the numbers of track segments and vias).
     """
@@ -1602,6 +1603,7 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     culprits = sorted(culprits)
     if not culprits or len(culprits) >= ENGINE_NETS:
         return False
+    open_before = set(board.unjoined())
     mark = board.mark()
     taken = board.take_out(culprits)
     after = board.read()
@@ -1614,7 +1616,8 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     done = solution["status"] == "routed"
     if done:
         added = board.write(solution, {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
-        done = not board.unjoined(set(culprits))
+        # (all joined, and no other net parted by the new way they take: it may cut a zone that the old did not)
+        done = set(board.unjoined()) <= open_before
     if not done:
         board.rewind(mark)
         board.put_back()
