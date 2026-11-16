@@ -10,7 +10,7 @@ depend on the order the nets are given in, and a net that would block three othe
 **Check every result with the design rule check of your CAD program before using it.** The router's picture
 of the board is the problem it was given.
 
-Status: 0.1, not yet on crates.io. The interfaces may still change.
+Status: 0.1. The interfaces may still change.
 
 ## Routing a KiCad board
 
@@ -22,7 +22,7 @@ Status: 0.1, not yet on crates.io. The interfaces may still change.
 
 The bridge ([`tools/kicad_route.py`](https://github.com/9thAxis/pcb-routing/blob/main/tools/kicad_route.py),
 with the modules in [`tools/bridge`](https://github.com/9thAxis/pcb-routing/tree/main/tools/bridge)) is in the
-repository, not in the crate. It runs under the Python that ships with KiCad (9 or 10; the path
+repository, not in the crate on crates.io. It runs under the Python that ships with KiCad (9 or 10; the path
 above is the macOS one). It reads the pads, tracks, vias, holes, outline, rule areas, zones and net classes
 of the board, routes every net whose pads are not yet joined, writes the tracks and vias back and refills
 the zones. What is already routed is kept and routed around, and what a filled zone joins is left to the
@@ -62,9 +62,9 @@ back, as the boards were drawn, the bridge follows them (its default):
 
 | Set | Boards | Clean pass | Connections made | Track laid | Vias | Time per board |
 |---|---|---|---|---|---|---|
-| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,480 mm (14,694 without zones) | 83 (73) | 0.7 s |
-| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,936 mm (5,082) | 44 (38) | 2.9 s |
-| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,732 mm (13,232) | 337 (296) | 35 s |
+| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,485 mm (14,694 without zones) | 83 (73) | 0.7 s |
+| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,937 mm (5,082) | 44 (38) | 2.9 s |
+| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,735 mm (13,232) | 337 (296) | 36 s |
 
 (The lengths move by a few millimetres from one preparation of the boards to the next, as KiCad's fills do;
 a board as saved routes the same every time.) Fewer connections are left to make, a fifth less track is
@@ -243,7 +243,7 @@ for net in &solution.nets {
 }
 ```
 
-Until it is on crates.io: `pcb-routing = { git = "https://github.com/9thAxis/pcb-routing" }`.
+`cargo add pcb-routing` for the library; `cargo install pcb-routing` for the program.
 
 `route` returns an error only when the problem cannot be run at all (a size or cost that makes no sense, a
 name that does not exist, a grid larger than `options.max_states`). A problem that was run and could not be
