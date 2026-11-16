@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from .lengths import r6
 from .picture import Area, Minima, NetClass, Pad, Picture, Polygon, Pour, Thermal, Track, Via
 from .questions import survey
 
@@ -46,7 +47,7 @@ def MM(value):
 
 
 def xy(p):
-    return [round(MM(p.x), 6), round(MM(p.y), 6)]
+    return [r6(MM(p.x)), r6(MM(p.y))]
 
 
 def rings_of(poly_set):

@@ -4,11 +4,6 @@ outline first, then its holes); a ring is a list of points."""
 from dataclasses import dataclass, field
 
 
-def r6(v):
-    """A length as it is written: to a millionth of a millimetre."""
-    return round(v, 6)
-
-
 @dataclass
 class NetClass:
     """What a net's class asks for."""
@@ -130,6 +125,8 @@ class Picture:
     pours: dict = field(default_factory=dict)  # net -> {index of a group: the pours that join it, as indices into fills}
     fills: list = field(default_factory=list)  # every piece of every filled zone, whatever it joins: [Pour]
     thermals: list = field(default_factory=list)  # every pad tied to a filled zone by spokes: [Thermal]
+    # What its nets are for, once worked out (rules.py keeps it here, by the hints and whether guesses are made).
+    intents: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def holes(self):
@@ -140,3 +137,9 @@ class Picture:
     def unjoined(self, only=None):
         """The nets whose pads are not all joined, by name."""
         return sorted(n for n, groups in self.groups.items() if len(groups) > 1 and (only is None or n in only))
+
+    def copper_keys(self):
+        """Its tracks and vias as things to tell them apart by: what is on the board later and not among these
+        has been laid since."""
+        tracks = {(t.net, t.layer, tuple(t.a), tuple(t.b)) for t in self.tracks}
+        return tracks | {(v.net, None, tuple(v.at), tuple(v.at)) for v in self.vias}

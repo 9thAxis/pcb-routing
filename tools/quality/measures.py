@@ -76,7 +76,7 @@ pad exits (`exit_measures`, `exit_figures`)
     long side   for pads at least 1.5 times as long as wide (by the smallest rectangle around them): the edge
                 crossed runs along the pad's length
 """
-import collections, fnmatch, heapq, itertools, math, re, sys
+import collections, fnmatch, heapq, itertools, math, sys
 from pathlib import Path
 
 import numpy as np
@@ -89,11 +89,11 @@ GAP_CAP = 5.0            # clearances: gaps are not told apart beyond this
 TIGHT = 1.1              # clearances: a gap under this is tight
 BUS_REACH = 1.5          # pad pitches within which two bus nets run alongside
 PAIR_REACH = 4.0         # track widths within which the halves of a differential pair are coupled
-DECAP_REACH = 5.0        # mm from a capacitor's pad to the pin it decouples
 
 # What names say (supplies, grounds, pairs, capacitors, chips, crystals) is said once, in tools/bridge/names.py:
 # the router goes by the same.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bridge.beside import DECOUPLING_REACH as DECAP_REACH, NEIGHBOUR
 from bridge.names import CAPACITOR_PART as CAPACITOR, CHIP_PART as CHIP, CRYSTAL_PART as CRYSTAL, GROUND, is_supply, pair_names as pair_halves
 
 
@@ -383,7 +383,7 @@ def neighbour_nets(reference):
             if not others:
                 continue
             for dist, i in others:
-                if dist > 1.3 * others[0][0]:
+                if dist > NEIGHBOUR * others[0][0]:
                     break
                 b = pads[i]
                 if a["net"] and b["net"] and a["net"] != b["net"]:

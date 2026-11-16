@@ -304,7 +304,7 @@ class ShutIn(WithEngine):
 
     def test_a_track_the_board_came_with_is_left_where_it_is(self):
         board = ShutInBoard()
-        outcome = self.see_to(board, laid_before=k.copper_keys(board.read()))
+        outcome = self.see_to(board, laid_before=board.read().copper_keys())
         self.assertEqual((board.calls, self.runs()), ([], []))
         self.assertEqual(outcome.starved, ["U1 (GND, F.Cu)"])
 

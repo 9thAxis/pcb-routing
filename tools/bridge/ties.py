@@ -22,7 +22,8 @@ def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(),
     A pad gets a straight track from its middle into the zone, where one fits: that is a tie as good as a
     spoke, and counted as one (see `tied_by_tracks`). Where none fits, the nets whose new tracks pass by it
     are laid again clear of it (see `cleared`; `laid_before`: the tracks and vias the board came with, see
-    `copper_keys`), and the ties are tried again. What was done and what could not be is noted in `outcome`.
+    `Picture.copper_keys`), and the ties are tried again. What was done and what could not be is added to
+    `outcome` (an `Outcome`).
     """
     name = lambda picture, thermal: f"{picture.pads[thermal.pad].part or '?'} ({thermal.net}, {thermal.layer})"
     ours = lambda t: (t.pad, t.layer) not in before or only is None or t.net in only
@@ -97,12 +98,6 @@ def tied_by_tracks(board, settings, engine, outcome, ours, tried, options, say):
             added = board.write(dict(solution, nets=kept), {n["key"]: (n["width"], n["via"]) for n in problem["nets"]})
             outcome.tracks, outcome.tied = outcome.tracks + added[0], outcome.tied + len(kept)
     return picture, starved
-
-
-def copper_keys(picture):
-    """The tracks and vias of a picture as things to tell them apart by: what is on the board later and not
-    among these has been laid since."""
-    return {(t.net, t.layer, tuple(t.a), tuple(t.b)) for t in picture.tracks} | {(v.net, None, tuple(v.at), tuple(v.at)) for v in picture.vias}
 
 
 def cleared(board, settings, engine, outcome, picture, starved, laid_before, options, say):

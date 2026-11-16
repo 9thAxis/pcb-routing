@@ -3,7 +3,7 @@
 import math
 from dataclasses import dataclass
 
-from .picture import r6
+from .lengths import r6
 from .intent import GUESSED, Intent, LEANING, intents_of
 
 
@@ -62,11 +62,10 @@ class Rules:
     @classmethod
     def of(cls, picture, settings=None):
         settings = settings or Settings()
-        known = picture.__dict__.setdefault("_intents", {})  # (worked out once for a picture, hints and guesses)
-        key = (id(settings.hints), settings.guesses)
-        if key not in known:
-            known[key] = intents_of(picture, settings.hints, settings.guesses)
-        return cls(picture.minima, picture.classes, picture.ignored, settings, known[key])
+        key = (id(settings.hints), settings.guesses)  # (worked out once for a picture, hints and guesses)
+        if key not in picture.intents:
+            picture.intents[key] = intents_of(picture, settings.hints, settings.guesses)
+        return cls(picture.minima, picture.classes, picture.ignored, settings, picture.intents[key])
 
     def intent(self, net):
         return self.intents.get(net) or Intent()

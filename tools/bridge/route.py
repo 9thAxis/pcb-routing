@@ -1,34 +1,19 @@
 """Joining the nets of a board: the lots they go in, and each lot through its tries."""
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 
 from .intent import told, unheeded
 from .rules import Rules
 from .questions import on_zone, parts_of
 from .problem import problem_of
 from .engine import ENGINE_NETS, EngineFailed
-from .ties import copper_keys, tie_starved
+from .outcome import Outcome
+from .ties import tie_starved
 
 BATCH_NETS = 200  # the nets of one lot, where a board has more than the engine takes in one run
 POUR_REPEATS = 8  # how often nets that new tracks have parted from their pour are joined again, for one lot of nets
 POUR_AGAINS = 3  # and how often the lot is taken back and laid again to hold a cut pour together
-
-
-@dataclass
-class Outcome:
-    status: str = "routed"  # routed, or how the engine's last incomplete run ended (unroutable, conflicts)
-    wanted: int = 0  # nets that were to be joined
-    left: int = 0  # of them, those still not joined
-    tracks: int = 0
-    vias: int = 0
-    failure: object = None  # what the engine said, if a run of it failed
-    tied: int = 0  # pads with too few spokes to their zone that were given a track to it
-    starved: list = field(default_factory=list)  # and those left with too few, by name
-
-    @property
-    def laid(self):
-        return self.tracks + self.vias > 0
 
 
 def batches(names, most=ENGINE_NETS, size=BATCH_NETS, together=()):
@@ -68,7 +53,7 @@ def route(board, settings, engine, only=None, options=None, say=print):
     names = picture.unjoined(only)
     run.open_before = set(board.unjoined())
     starved_before = {(t.pad, t.layer) for t in picture.thermals if t.spokes < t.least}
-    laid_before = copper_keys(picture)
+    laid_before = picture.copper_keys()
     for line in told(Rules.of(picture, settings).intents, set(names)) + unheeded(picture, settings.hints):
         say(line)
     intents = Rules.of(picture, settings).intents

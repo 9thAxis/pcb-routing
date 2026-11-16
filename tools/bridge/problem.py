@@ -1,11 +1,12 @@
 """The problem: a picture and the rules as the router's JSON (src/model.rs). Nothing here touches KiCad."""
 
-import collections, itertools, math, sys
+import math, sys
 
-from .names import CAPACITOR_PART, CHIP_PART
-from .picture import r6
+from .lengths import r6
 from .rules import amps_width
-from .questions import pair_plans, reach_of
+from .questions import reach_of
+from .beside import buses, decoupling
+from .pairs import pair_entries, pairs_of
 from .engine import ENGINE_NETS
 
 
@@ -26,191 +27,7 @@ def _grown(rings, grow, net, layers):
     return out
 
 
-def buses(pads, nets=None):
-    """Which nets run as buses: net name -> (name of its bus, its lane across it), among `nets` if given.
-
-    Two nets are neighbours on a part if they have pads there no further apart than 1.3 times the distance
-    from one of them to its nearest pad, whatever that pad is of. A bus is three or more nets joined by being
-    neighbours on the same two parts; a net that is in two such groups joins them into one bus.
-    """
-    parts = {}
-    for pad in pads:
-        if pad.part:
-            parts.setdefault(pad.part, []).append(pad)
-    wanted = lambda net: net is not None and (nets is None or net in nets)
-    beside = {}  # (net, net) -> the parts they are neighbours on
-    for part, own in sorted(parts.items()):
-        for a in own:
-            others = sorted(((math.dist(a.at, b.at), b.net or "") for b in own if b is not a and math.dist(a.at, b.at) > 1e-6))
-            for distance, net in others:
-                if distance > 1.3 * others[0][0]:
-                    break
-                if wanted(a.net) and wanted(net or None) and net != a.net:
-                    beside.setdefault(tuple(sorted((a.net, net))), set()).add(part)
-    links = {}  # (part, part) -> the pairs of nets that are neighbours on both
-    for pair, where in sorted(beside.items()):
-        for two in itertools.combinations(sorted(where), 2):
-            links.setdefault(two, []).append(pair)
-
-    def find(leader, net):
-        while leader.setdefault(net, net) != net:
-            net = leader[net]
-        return net
-
-    bus = {}
-    for two, pairs in sorted(links.items()):
-        group = {}  # nets joined within these two parts
-        for a, b in pairs:
-            group[find(group, a)] = find(group, b)
-        sizes = collections.Counter(find(group, net) for net in group)
-        for a, b in pairs:
-            if sizes[find(group, a)] >= 3:
-                bus[find(bus, a)] = find(bus, b)
-    names = {net: "bus " + find(bus, net) for net in bus}
-    return {net: (name, lane) for name in sorted(set(names.values()))
-            for net, lane in _lanes({net for net in names if names[net] == name}, parts).items()}
-
-
-def _lanes(nets, parts):
-    """The place of each net across its bus: its rank along the row of pads on the part that has most of the
-    bus's nets (along the longer side of what those pads cover, then across). All 0, which is no order, unless
-    that part has all of the bus's nets, each once, in one row or two: an array of pads has no order across it.
-    """
-    def on(part):
-        return [pad for pad in parts[part] if pad.net in nets]
-    part = max(sorted(parts), key=lambda part: len({pad.net for pad in on(part)}))
-    pads = on(part)
-    wide = max(p.at[0] for p in pads) - min(p.at[0] for p in pads) >= max(p.at[1] for p in pads) - min(p.at[1] for p in pads)
-    along, across = (0, 1) if wide else (1, 0)
-    rows = {round(p.at[across], 3) for p in pads}
-    if len(pads) != len(nets) or {p.net for p in pads} != set(nets) or len(rows) > 2:
-        return {net: 0 for net in nets}
-    order = [pad.net for pad in sorted(pads, key=lambda p: (p.at[along], p.at[across]))]
-    return {net: lane for lane, net in enumerate(order)}
-
-
-DECOUPLING_REACH = 5.0  # mm from a capacitor's pad to the pin it is taken to stand by
 DECOUPLING_VIA_PENALTY = 5.0  # times the usual: the detour accepted before the link to the pin changes layer
-
-
-def decoupling(pads, groups):
-    """The capacitors of a net that stand by a pin of an IC on it: [(group of the capacitor's pad, pad index of
-    the pin)], for `groups`, the net's groups of joined pads as indices into `pads`.
-
-    A capacitor is a part C.. of two pads whose pad on the net is joined to nothing yet, and whose two nets
-    have three pads or more each (a supply and its return; not a capacitor in series with a signal). The pin
-    is the nearest pad of a part U.. or IC.. on the net, in another group, within DECOUPLING_REACH.
-    """
-    by_part, size = collections.defaultdict(list), collections.Counter(pad.net for pad in pads if pad.net)
-    for pad in pads:
-        if pad.part:
-            by_part[pad.part].append(pad)
-    def is_cap(pad):
-        both = by_part.get(pad.part, [])
-        return bool(pad.part) and CAPACITOR_PART.match(pad.part) and len(both) == 2 and all(size[p.net] >= 3 for p in both)
-    is_pin = lambda pad: bool(pad.part) and CHIP_PART.match(pad.part)
-    links = []
-    for g, group in enumerate(groups):
-        if len(group) != 1 or not is_cap(pads[group[0]]):
-            continue
-        cap = pads[group[0]]
-        pins = [(math.dist(cap.at, pads[i].at), i) for h, other in enumerate(groups) if h != g for i in other if is_pin(pads[i])]
-        if pins and min(pins)[0] <= DECOUPLING_REACH:
-            links.append((g, min(pins)[1]))
-    return links
-
-
-PAIR_PADS = 4  # the most pads a net of a pair has: more is a rail or a bus by another name
-
-
-def pairs_of(picture, rules, names, ask, notes=None):
-    """Which of these unjoined nets are to be laid as differential pairs, and how: [(first net, second net,
-    leg width, pitch, plan)], the plan as the engine gives it (src/pairs.rs: the ends of the pair, the trunks
-    between them and where each may begin and end, the pads at no end).
-
-    Two nets are a pair if their names or the hints say so (see intents_of), neither has more than four pads,
-    a zone, or a pad joined to another yet, both or neither are held apart as sensitive, and the engine finds
-    them pads side by side at two ends or more, far enough apart to run together between. Why a pair by
-    name is laid as two nets is added to `notes`, if given.
-    """
-    note = lambda a, b, why: notes.append(f"{a} = {b} is laid as two nets: {why}") if notes is not None else None
-    other = lambda net: rules.intent(net).pair
-    quiet = lambda net: bool(rules.leaning(net).get("quiet"))
-    def why_not(a, b):
-        if max(len(picture.groups[a]), len(picture.groups[b])) > PAIR_PADS:
-            return f"one of them has more than {PAIR_PADS} pads"
-        if a in picture.pours or b in picture.pours:
-            return "one of them has a zone"
-        if not all(len(group) == 1 for net in (a, b) for group in picture.groups[net]):
-            return "some of their pads are joined already"
-        if quiet(a) != quiet(b):
-            return "one of them is sensitive by the hints and the other is not"
-    named = []
-    for a, b in [(a, other(a)) for a in names if other(a) in names and a < other(a)]:
-        why = why_not(a, b)
-        if why:
-            note(a, b, why)
-        else:
-            named.append((a, b))
-    if not named:
-        return []
-    sizes = [rules.pair(a, b, names) for a, b in named]
-    plans = pair_plans(picture, rules, [(a, b, pitch) for (a, b), (_, pitch) in zip(named, sizes)], ask)
-    for (a, b), plan in zip(named, plans):
-        if not plan["trunks"]:
-            few = len(plan["ends"]) < 2
-            note(a, b, "no two places where a pad of each stands by the other" if few
-                 else "its ends are too near each other, or share no routing layer")
-    return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans) if plan["trunks"]]
-
-
-def pair_entries(picture, rules, pair, entry, unpaired, taken):
-    """The entries for one differential pair (see pairs_of) and what the problem's `pairs` says of it:
-    (entries, pairs); nothing if every stretch of it has been given up as a pair. `unpaired`: for the key of
-    a stretch that was not all laid as a pair, how many of the nearest lots of places its trunk is no longer
-    offered (it is begun further from its pads; with none left it is given up).
-
-    For each stretch between two of its ends, a trunk: laid as one wide track of a net of its own between
-    places a little off the pads (those of one end are one piece: the engine takes the nearest that are open), and four
-    stubs that join the legs it is split into to the pads. What the trunks do not join is joined as the pads
-    of any net are: the pads at the ends that trunks join stand for one piece, a pad at no end stands alone.
-    `entry` makes an entry (see build_problem); `taken`: the keys in use.
-    """
-    a, b, width, pitch, plan = pair
-    layers = rules.routing_layers(picture.layers)
-    terminal = lambda pad: dict(xy=pad.at, layers=[l for l in layers if l in pad.layers])
-    pads = {net: [picture.pads[group[0]] for group in picture.groups[net]] for net in (a, b)}
-    name = f"{a} = {b}"
-    while any(key == name or key.startswith(name + " ") for key in taken):
-        name += "'"  # (a net may be named just so)
-    key_of = lambda number: name + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
-    further = lambda key, trunk: [lots[min(unpaired.get(key, 0), len(lots)):] for lots in trunk["gather"]]
-    trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"])]
-    trunks = [(key, dict(trunk, gather=further(key, trunk))) for key, trunk in trunks]
-    trunks = [(key, trunk) for key, trunk in trunks if all(trunk["gather"])]
-    entries, said = [], []
-    held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
-    for key, trunk in trunks:
-        # (the places of an end by how far off its pads they are: the nearer take their turn first)
-        places = [dict(xy=place["xy"], layers=place["layers"], piece=end, **(dict(turn=turn) if turn else {}))
-                  for end in (0, 1) for turn, lot in enumerate(trunk["gather"][end]) for place in lot]
-        clearance = dict(default=r6(max(rules.clearance(a), rules.clearance(b))),
-                         nets={n: r6(c) for net in (a, b) for n, c in rules.stricter(net).items()})
-        wide = entry(f"{key} trunk", a, places, no_vias=True)
-        entries.append(dict(wide, net=f"~{key}", width=rules.trunk_width(width, pitch), clearance=clearance))
-        stubs = [[], []]
-        for end in (0, 1):
-            for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
-                entries.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], last=True), width=width))
-                stubs[end].append(entries[-1]["key"])
-        said.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs))
-        first, second = (held[end] for end in trunk["ends"])
-        held = [min(first, second) if h in (first, second) else h for h in held]
-    for side, net in enumerate((a, b)):
-        at_ends = [dict(terminal(pads[net][end[side]]), piece=held[k]) for k, end in enumerate(plan["ends"])]
-        if trunks and len(set(held)) + len(plan["loose"][side]) > 1:
-            entries.append(entry(net, net, [terminal(pads[net][i]) for i in plan["loose"][side]] + at_ends))
-    return entries, said
 
 
 def problem_of(picture, rules, ask, only=None, unpaired=None, narrow=False, notes=None, **more):

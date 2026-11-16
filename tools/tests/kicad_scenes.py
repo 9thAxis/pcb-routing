@@ -12,7 +12,7 @@ from pathlib import Path
 import pcbnew
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bridge import engine, kicad, questions, route, rules, ties
+from bridge import engine, kicad, outcome, questions, route, rules, ties
 
 MM = pcbnew.FromMM
 
@@ -138,16 +138,16 @@ def cleared(scene, room=True):
     scene.pad("R1", "SIG", *ends[0], through=False, size=0.5); scene.pad("R2", "SIG", *ends[1], through=False, size=0.5)
     board = kicad.KicadBoard(scene.board, frozenset(), ASK)
     count = lambda picture: {picture.pads[t.pad].part: t.spokes for t in picture.thermals}
-    laid_before = ties.copper_keys(board.read())
+    laid_before = board.read().copper_keys()
     round_the_pad = ([list(ends[0])] if room else []) + ring + ([list(ends[1])] if room else [])
     board.write(dict(nets=[dict(key="SIG", net="SIG", vias=[], tracks=[dict(layer="F.Cu", points=round_the_pad)])]), {"SIG": (0.25, [0.6, 0.3])})
     picture = board.read()
     starved = [t for t in picture.thermals if t.spokes < t.least]
-    outcome, said = route.Outcome(tracks=len(round_the_pad) - 1), []
-    done = ties.cleared(board, rules.Settings(), engine.Engine(sys.argv[3]), outcome, picture, starved, laid_before, None, said.append)
+    counted, said = outcome.Outcome(tracks=len(round_the_pad) - 1), []
+    done = ties.cleared(board, rules.Settings(), engine.Engine(sys.argv[3]), counted, picture, starved, laid_before, None, said.append)
     after = board.read()
     signal = sorted((t.a, t.b) for t in after.tracks if t.net == "SIG")
-    return dict(cut=count(picture), after=count(after), done=done, said=said, unjoined=after.unjoined(), tracks=[outcome.tracks, len(signal)],
+    return dict(cut=count(picture), after=count(after), done=done, said=said, unjoined=after.unjoined(), tracks=[counted.tracks, len(signal)],
                 as_it_was=signal == sorted((a, b) for a, b in zip(round_the_pad, round_the_pad[1:])),
                 nearest=min(math.dist(p, [15, 10]) for t in after.tracks if t.net == "SIG" for p in (t.a, t.b)))
 
