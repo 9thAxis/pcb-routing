@@ -7,9 +7,10 @@ from .intent import told, unheeded
 from .rules import Rules
 from .questions import on_zone, parts_of
 from .problem import problem_of
-from .engine import BATCH_NETS, ENGINE_NETS, EngineFailed
+from .engine import ENGINE_NETS, EngineFailed
 from .ties import copper_keys, tie_starved
 
+BATCH_NETS = 200  # the nets of one lot, where a board has more than the engine takes in one run
 POUR_REPEATS = 8  # how often nets that new tracks have parted from their pour are joined again, for one lot of nets
 POUR_AGAINS = 3  # and how often the lot is taken back and laid again to hold a cut pour together
 

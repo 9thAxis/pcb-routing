@@ -56,10 +56,10 @@ import argparse, os, sys
 from pathlib import Path
 
 from bridge.intent import read_hints
-from bridge.rules import Settings, ignored_checks
+from bridge.rules import Settings
 from bridge.engine import Engine, EngineFailed
 from bridge.route import route
-from bridge.kicad import KicadBoard, kicad_is_here, load_board, save_board
+from bridge.kicad import KicadBoard, ignored_checks, kicad_is_here, load_board, save_board
 
 
 def main(argv=None):
@@ -90,7 +90,7 @@ def main(argv=None):
                              " side")
     parser.add_argument("--hints",
                         help="what the nets are for, as a JSON file (default: BOARD.routing.json beside the board, if it"
-                             " is there; see read_hints)")
+                             " is there; see docs/hints.md)")
     parser.add_argument("--no-guesses", action="store_true",
                         help="do not guess what a net is for from its name and parts (clocks, crystals, switch nodes, "
                              "pairs): only the hints say")

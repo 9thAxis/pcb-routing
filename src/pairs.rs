@@ -113,8 +113,10 @@ fn shortest_tree(points: &[Pt]) -> Vec<[usize; 2]> {
     let mut tree = Vec::new();
     while joined.len() < points.len() {
         let apart = |&[i, j]: &[usize; 2]| dist(points[i], points[j]);
-        let left = (0..points.len()).filter(|j| !joined.contains(j));
-        let next = left.flat_map(|j| joined.iter().map(move |&i| [i, j])).min_by(|x, y| apart(x).total_cmp(&apart(y)));
+        // (in this order: of several that are as near, the one joined earliest, then the lowest)
+        let left = || (0..points.len()).filter(|j| !joined.contains(j));
+        let ways = joined.iter().flat_map(|&i| left().map(move |j| [i, j]));
+        let next = ways.min_by(|x, y| apart(x).total_cmp(&apart(y)));
         let Some([i, j]) = next else { break };
         tree.push([i, j]);
         joined.push(j);
@@ -167,6 +169,12 @@ mod tests {
 
     fn layers() -> Vec<String> {
         vec!["F".to_string(), "B".to_string()]
+    }
+
+    #[test]
+    fn of_ends_as_near_the_one_joined_earliest_is_joined_to() {
+        let corners = [[0., 0.], [10., 0.], [10., 20.], [0., 20.]];
+        assert_eq!(shortest_tree(&corners), [[0, 1], [0, 3], [3, 2]]);
     }
 
     #[test]

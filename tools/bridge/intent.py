@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .names import CRYSTAL_PART, GROUND, NAMED, is_supply, pair_names
-from .picture import r6
 
 ROLES = ("supply", "ground", "clock", "crystal", "sensitive", "noisy")
 # How a role leans a net: (how readily it gives way, its weight among results, its via penalty as a factor).
@@ -198,18 +197,3 @@ def told(intents, only=None):
                 text = f"{net} {what} {said}" + (" (not acted on)" if what in NOT_ACTED_ON else "")
             lines.setdefault(source, []).append(text)
     return [f"from {'the net names and parts' if source == 'names' else source}: {'; '.join(found)}" for source, found in sorted(lines.items())]
-
-
-def amps_width(amps):
-    """The width of an outer track of 35 um copper that carries a current with a rise of 10 degrees, in mm
-    (IPC-2221: I = 0.048 dT^0.44 A^0.725, A in square mils)."""
-    area = (amps / (0.048 * 10 ** 0.44)) ** (1 / 0.725)
-    return r6(area / 1.378 * 0.0254)
-
-
-def volts_clearance(volts):
-    """The distance between bare outer conductors for a voltage, in mm (IPC-2221B table 6-1, column B2)."""
-    for most, distance in ((30, 0.1), (150, 0.6), (300, 1.25), (500, 2.5)):
-        if volts <= most:
-            return distance
-    return r6(2.5 + (volts - 500) * 0.005)

@@ -4,8 +4,8 @@ import collections, itertools, math, sys
 
 from .names import CAPACITOR_PART, CHIP_PART
 from .picture import r6
-from .intent import amps_width
-from .questions import spots, reach_of
+from .rules import amps_width
+from .questions import pair_plans, reach_of
 from .engine import ENGINE_NETS
 
 
@@ -154,10 +154,8 @@ def pairs_of(picture, rules, names, ask, notes=None):
             named.append((a, b))
     if not named:
         return []
-    pads_of = lambda net: spots(picture.pads[group[0]] for group in picture.groups[net])
     sizes = [rules.pair(a, b, names) for a, b in named]
-    plans = ask(dict(ask="pairs", layers=rules.routing_layers(picture.layers), step=rules.settings.step,
-                     pairs=[dict(a=pads_of(a), b=pads_of(b), pitch=pitch) for (a, b), (_, pitch) in zip(named, sizes)]))
+    plans = pair_plans(picture, rules, [(a, b, pitch) for (a, b), (_, pitch) in zip(named, sizes)], ask)
     for (a, b), plan in zip(named, plans):
         if not plan["trunks"]:
             few = len(plan["ends"]) < 2

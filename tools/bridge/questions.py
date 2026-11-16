@@ -63,9 +63,26 @@ def tie_targets(picture, starved, ask):
     return ask(dict(ask="tie_targets", fills=named.fills, pads=pads)) if pads else []
 
 
-def ties(picture, tracks, ask):
+def which_tie(picture, tracks, ask):
     """For tracks laid to tie a pad to its zone, as [(Thermal, the track's points)]: whether each counts as a
     spoke of its pad for KiCad."""
     named = _Named(picture)
     tracks = [dict(outline=thermal.outline, fill=named(thermal.fill), points=points) for thermal, points in tracks]
     return ask(dict(ask="ties", fills=named.fills, tracks=tracks)) if tracks else []
+
+
+def pair_plans(picture, rules, pairs, ask):
+    """For each of some pairs (net, net, pitch): where its pads face each other and where it may be laid as one
+    (src/pairs.rs: `plan`). A group of pads that are joined already counts as its first pad."""
+    pads_of = lambda net: spots(picture.pads[group[0]] for group in picture.groups[net])
+    asked = [dict(a=pads_of(a), b=pads_of(b), pitch=pitch) for a, b, pitch in pairs]
+    return ask(dict(ask="pairs", layers=rules.routing_layers(picture.layers), step=rules.settings.step, pairs=asked))
+
+
+def survey(pads, wires, groups, fills, spoked, ask):
+    """What the filled zones of a board join, and how they tie each pad (src/pours: `survey`)."""
+    zoned = {pour.net for pour in fills}
+    copper = lambda pad: {layer: pad.shapes[layer] for layer in pad.layers} if pad.net in zoned else {}
+    return ask(dict(ask="survey", pads=[dict(net=pad.net, at=pad.at, layers=pad.layers, shapes=copper(pad)) for pad in pads],
+                    wires=wires, groups=groups, spoked=spoked,
+                    fills=[dict(net=pour.net, layer=pour.layer, rings=pour.rings, zone=pour.zone) for pour in fills]))

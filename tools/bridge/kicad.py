@@ -1,6 +1,10 @@
 """KiCad: the only code that uses pcbnew."""
 
+import json
+from pathlib import Path
+
 from .picture import Area, Minima, NetClass, Pad, Picture, Polygon, Pour, Thermal, Track, Via
+from .questions import survey
 
 try:
     import pcbnew
@@ -13,6 +17,16 @@ ARC_ERROR = 0.002  # mm: how far the corners of a polygon drawn for a round shap
 def kicad_is_here():
     """True if this Python has KiCad's `pcbnew` module."""
     return pcbnew is not None
+
+
+def ignored_checks(board_path):
+    """The design rule checks the board's project sets to 'ignore' (KiCad keeps them in the .kicad_pro)."""
+    try:
+        project = json.loads(Path(board_path).with_suffix(".kicad_pro").read_text())
+        severities = project["board"]["design_settings"]["rule_severities"]
+        return frozenset(name for name, level in severities.items() if level == "ignore")
+    except Exception:
+        return frozenset()
 
 
 def load_board(path):
@@ -369,12 +383,7 @@ def read_board(board, ignored, ask, pours=True):
     picture.fills = zone_fills(board) if pours else []
     if picture.fills:
         # what the zones join, and how they tie each pad: the engine's to work out from the plain geometry
-        zoned = {pour.net for pour in picture.fills}
-        copper = lambda pad: {layer: pad.shapes[layer] for layer in pad.layers} if pad.net in zoned else {}
-        pads = [dict(net=pad.net, at=pad.at, layers=pad.layers, shapes=copper(pad)) for pad in picture.pads]
-        found = ask(dict(ask="survey", pads=pads, wires=zone_wires(board, of), groups=picture.groups,
-                         fills=[dict(net=pour.net, layer=pour.layer, rings=pour.rings, zone=pour.zone) for pour in picture.fills],
-                         spoked=spoked_pads(board, index)))
+        found = survey(picture.pads, zone_wires(board, of), picture.groups, picture.fills, spoked_pads(board, index), ask)
         picture.groups = found["groups"]
         picture.pours = {net: {g: pieces for g, pieces in enumerate(own) if pieces} for net, own in found["pours"].items()}
         picture.thermals = [Thermal(**thermal) for thermal in found["thermals"]]

@@ -6,7 +6,6 @@ from pathlib import Path
 
 # The engine refuses a problem of this many entries or more; a board with more is routed in batches.
 ENGINE_NETS = 250
-BATCH_NETS = 200
 
 
 class EngineFailed(Exception):

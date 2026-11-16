@@ -2,7 +2,7 @@
 
 A board is read into a picture (plain data), the picture and the board's rules become the router's problem, the
 engine runs it, and what it laid is written back; then the zones are filled again and what the new tracks did to
-them is mended. Only `kicad` touches KiCad.
+them is mended. Only `kicad` knows KiCad's files and its `pcbnew` module.
 
     picture    a board as plain data: pads, tracks, vias, zones as filled, groups of joined pads
     names      what the names of nets and parts say they are (supplies, pairs, clocks, crystals)

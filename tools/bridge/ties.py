@@ -4,10 +4,12 @@ import collections, math
 from dataclasses import replace
 
 from .rules import Rules
-from .questions import tie_targets, ties
+from .questions import tie_targets, which_tie
 from .problem import disc, build_problem, problem_of
 from .engine import ENGINE_NETS, EngineFailed
 
+CLEARINGS = 2  # how often nets are laid again clear of pads their tracks have starved
+KEEP_OFF = 0.3  # mm beyond the clearance a zone keeps: what is left of a zone nearer a track than this is no spoke
 TIE_ROUNDS = 3  # how often pads with too few spokes are given a track of their own to their zone
 
 
@@ -47,9 +49,6 @@ def tie_starved(board, settings, engine, outcome, only=None, before=frozenset(),
         say(f"too few spokes to their zone, and no room for a track to it: {', '.join(outcome.starved)}")
 
 
-CLEARINGS = 2  # how often nets are laid again clear of pads their tracks have starved
-
-
 def tied_by_tracks(board, settings, engine, outcome, ours, tried, options, say):
     """Give the pads with too few spokes (those `ours` holds for) tracks to their zones, in rounds: returns
     the board's picture after them and the pads still starved. `tried`: (pad, layer) -> the points of its
@@ -80,7 +79,7 @@ def tied_by_tracks(board, settings, engine, outcome, ours, tried, options, say):
             laid = {net["key"]: net for net in solution["nets"]}
             alone = [(thermal, laid[key]["tracks"][0]["points"]) for key, thermal, _ in stubs
                      if key in laid and len(laid[key]["tracks"]) == 1 and not laid[key].get("vias")]
-            tying = {id(thermal) for (thermal, _), tied in zip(alone, ties(picture, alone, engine.ask)) if tied}
+            tying = {id(thermal) for (thermal, _), tied in zip(alone, which_tie(picture, alone, engine.ask)) if tied}
         except EngineFailed as failure:
             say(f"no tracks to the zones of pads with too few spokes: {failure}")
             break
@@ -163,6 +162,3 @@ def cleared(board, settings, engine, outcome, picture, starved, laid_before, opt
     outcome.tracks, outcome.vias = outcome.tracks - taken[0] + added[0], outcome.vias - taken[1] + added[1]
     say(f"laid again clear of {', '.join(sorted({part(t) for t in starved}))}, whose spokes they cut: {', '.join(culprits)}")
     return True
-
-
-KEEP_OFF = 0.3  # mm beyond the clearance a zone keeps: what is left of a zone nearer a track than this is no spoke

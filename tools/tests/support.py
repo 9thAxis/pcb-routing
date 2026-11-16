@@ -79,7 +79,10 @@ def bridge():
     from bridge import engine, intent, kicad, names, picture, problem, questions, route, rules, ties
     merged = types.SimpleNamespace()
     for module in (names, picture, intent, rules, questions, problem, engine, ties, route, kicad, line):
-        vars(merged).update({name: value for name, value in vars(module).items() if not name.startswith("__")})
+        for name, value in vars(module).items():
+            if not name.startswith("__") and not isinstance(value, types.ModuleType):
+                assert getattr(merged, name, value) is value, f"{name} means two things in the bridge"
+                setattr(merged, name, value)
     return merged
 
 

@@ -1,11 +1,10 @@
 """The rules: what the board asks of the router, each stated once. Nothing here touches KiCad."""
 
-import json, math
+import math
 from dataclasses import dataclass
-from pathlib import Path
 
 from .picture import r6
-from .intent import GUESSED, Intent, LEANING, amps_width, intents_of, volts_clearance
+from .intent import GUESSED, Intent, LEANING, intents_of
 
 
 @dataclass
@@ -27,14 +26,19 @@ class Settings:
     hints: object = None  # the hints file beside the board, as read (Hints)
 
 
-def ignored_checks(board_path):
-    """The design rule checks the board's project sets to 'ignore' (KiCad keeps them in the .kicad_pro)."""
-    try:
-        project = json.loads(Path(board_path).with_suffix(".kicad_pro").read_text())
-        severities = project["board"]["design_settings"]["rule_severities"]
-        return frozenset(name for name, level in severities.items() if level == "ignore")
-    except Exception:
-        return frozenset()
+def amps_width(amps):
+    """The width of an outer track of 35 um copper that carries a current with a rise of 10 degrees, in mm
+    (IPC-2221: I = 0.048 dT^0.44 A^0.725, A in square mils)."""
+    area = (amps / (0.048 * 10 ** 0.44)) ** (1 / 0.725)
+    return r6(area / 1.378 * 0.0254)
+
+
+def volts_clearance(volts):
+    """The distance between bare outer conductors for a voltage, in mm (IPC-2221B table 6-1, column B2)."""
+    for most, distance in ((30, 0.1), (150, 0.6), (300, 1.25), (500, 2.5)):
+        if volts <= most:
+            return distance
+    return r6(2.5 + (volts - 500) * 0.005)
 
 
 class Rules:

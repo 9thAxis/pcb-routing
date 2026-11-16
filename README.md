@@ -362,7 +362,7 @@ repository) records what each of these bought when it was added, and what was tr
 | Independent clearance check without the grid: 29 nets, 73 tracks, 45 vias against 4,725 fixed shapes | 0 violations; a track moved by 0.12 mm as a control is caught |
 | Two-pass search against one-pass, every search of a full run (`--verify`) | None differs by more than a quarter of a grid step |
 | Page-wise masks against whole-board masks, 150 random problems in the tests (4,900 in review) | Identical |
-| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 163 in the engine and its modules for zones and pairs, 171 in the bridge, 141 in the quality tools |
+| Tests (`cargo test`, `python3 -m unittest discover -s tools/tests`) | 164 in the engine and its modules for zones and pairs, 171 in the bridge, 141 in the quality tools |
 
 ## Sources
 
