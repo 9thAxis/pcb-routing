@@ -361,10 +361,11 @@ class Pairs(WithEngine):
 
     def test_a_net_left_unjoined_with_pairs_laid_is_tried_once_without_them_and_the_pairs_are_kept_if_that_is_no_better(self):
         board = PairBoard()
-        self.stubborn(["OTHER"])  # (whatever the pairs: but that is not known)
+        self.stubborn(["OTHER"], crowded=True)  # (joined by itself: something is in its way, perhaps the pair)
         outcome = self.route(board)
-        first, second, third = self.runs()
-        self.assertEqual(("pairs" in first, "pairs" in second), (True, False))
+        first, alone, second, third = self.runs()
+        self.assertEqual([n["key"] for n in alone["nets"]], ["OTHER"])
+        self.assertEqual(("pairs" in first, "pairs" in second, len(second["nets"])), (True, False, 3))
         kept = [line for line in self.said if "pair" in line]
         self.assertEqual(kept,
                          ["from the net names and parts: pair D_N = D_P", "not all joined: once more without pairs",
@@ -372,6 +373,17 @@ class Pairs(WithEngine):
         self.assertIn("no more is joined without: they are kept", self.said)
         self.assertEqual(board.writes[0], ["D_N = D_P/D_N", "D_N = D_P/D_P"])  # the first run's pair is what is written
         self.assertEqual([n["key"] for n in third["nets"]], ["OTHER"])  # then the narrower try for what is left
+        self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("routed", 3, 0))  # (by itself, as said)
+
+
+    def test_a_net_that_is_not_joined_by_itself_either_costs_no_run_without_the_pairs(self):
+        board = PairBoard()
+        self.stubborn(["OTHER"])
+        outcome = self.route(board)
+        first, alone, narrower = self.runs()  # no run of all the nets without the pair
+        self.assertEqual(("pairs" in first, [n["key"] for n in alone["nets"]]), (True, ["OTHER"]))
+        self.assertEqual([line for line in self.said if "pair" in line],
+                         ["from the net names and parts: pair D_N = D_P", "laid as a pair: D_N = D_P"])
         self.assertEqual((outcome.status, outcome.wanted, outcome.left), ("unroutable", 3, 1))
 
 
@@ -385,9 +397,9 @@ class Guessed(WithEngine):
 
     def test_a_net_left_unjoined_is_tried_once_without_what_the_names_were_taken_to_ask(self):
         board = self.board()
-        self.stubborn(["OTHER"])
+        self.stubborn(["OTHER"], crowded=True)
         outcome = self.route(board)
-        first, second, third = self.runs()
+        first, _, second, third = self.runs()
         penalty = lambda problem: {n["key"]: n["via_penalty_mm"] for n in problem["nets"]}["CLK"]
         # a clock by its name, then a net like any other
         self.assertEqual((penalty(first), penalty(second)), (20.0, 10.0))
@@ -396,7 +408,7 @@ class Guessed(WithEngine):
                           "not all joined: once more without what the nets' names were taken to ask",
                                          "no more is joined without: they are kept"])
         self.assertEqual([n["key"] for n in third["nets"]], ["OTHER"])
-        self.assertEqual((outcome.status, outcome.left), ("unroutable", 1))
+        self.assertEqual((outcome.status, outcome.left), ("routed", 0))  # (by itself it is joined)
 
     def test_all_joined_at_once_nothing_is_weighed(self):
         board = self.board()

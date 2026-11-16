@@ -61,11 +61,7 @@ impl Engine<'_> {
     /// may branch off anywhere along its copper).
     pub(super) fn find(&self, q: Query, worker: &mut Worker) -> Option<Vec<u32>> {
         let n = q.net;
-        // (a net with terminals that are left one way only is searched in one pass: the first pass knows no
-        // directions, and the bound it gives would cut off the way round that such a terminal can ask for)
-        // (and so is the trunk of a pair, whose layer changes the first pass knows nothing of either)
-        let one_pass = !self.plan.heads[n].is_empty() || self.plan.runs[n].is_some();
-        let two = if self.p.options.bend_mm > 0.0 && self.p.options.two_pass && !one_pass { q.from } else { None };
+        let two = if self.p.options.bend_mm > 0.0 && self.p.options.two_pass { q.from } else { None };
         let found = self.search(Query { from: two, ..q }, worker);
         if self.shared.diagnostics.verify && two.is_some() {
             let plain = self.search(Query { from: None, ..q }, worker);
@@ -317,8 +313,13 @@ impl Engine<'_> {
         }
         let (open_mark, closed) = (s.gen, s.gen + 1);
         s.heap.clear();
-        // no state is wanted that cannot be on a path as cheap as one already known (with room for rounding)
-        let cut = upper * 1.0005 + 1.0;
+        // No state is wanted that cannot be on a path as cheap as one already known (with room for rounding).
+        // Not so for a net with terminals that are left one way only, or the trunk of a pair, whose layer
+        // changes are whole runs: the first pass knows neither, so the path it followed may be one the net
+        // cannot take, and cheaper than any it can. What the first pass found is a look-ahead all the same:
+        // what holds a path to a heading or a run only ever makes it dearer.
+        let held = !self.plan.heads[n].is_empty() || self.plan.runs[n].is_some();
+        let cut = if held { f64::INFINITY } else { upper * 1.0005 + 1.0 };
         let (corner, allowed) = turns(bend);
         let Steps { off, len } = self.plan.steps;
         // A state is ((layer, cell), direction of arrival), the nine directions of a cell side by side in memory.

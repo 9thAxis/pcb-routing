@@ -213,6 +213,13 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     middle of it, as long a run on the other layer. That pair: 32 mm, two vias a leg, as the designer's.
     Nothing else among the 20 pairs changed, at the price of two vias or of one: where the others fall
     short of their designers it is at ends with three parts in a row, not for want of a layer.
+  * Where the time goes (17 November). On the slowest board with pairs the pairs' own searches are a
+    tenth of a run; the board is routed seven times: for each stretch whose stubs find no way, and once
+    more without pairs because ground was left unjoined, which no run could join without its zone. That
+    last run is now spared where the unjoined net is not joined by itself either, and the searches of
+    trunks and headed nets have their first pass back (as a look-ahead that cuts nothing off). Still one
+    run of the whole board for every stretch begun again: laying it again with all else fixed was tried
+    and finds no room that the whole board laid again does.
 * What the nets are for (bridge). Three sources: the board, guesses from names and parts, a hints file.
   The first version let a guessed clock, crystal, switch node or sensitive net hold its shortest way
   (`yield`). On the 20 larger boards the 36 nets so guessed lost 12 vias between them and the other 760

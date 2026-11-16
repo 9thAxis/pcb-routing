@@ -10,7 +10,8 @@ under the keys of the trunk and the stubs. What it does
 otherwise is told by files in the directory named by FAKE_ENGINE_DIR:
 
     runs/N.json     written: the problem of run N (from 1)
-    stubborn.json   {"nets": [...], "below": W}: these nets are left unrouted unless their width is under W
+    stubborn.json   {"nets": [...], "below": W}: these nets are left unrouted unless their width is under W;
+                    with "crowded": true only while the problem has other nets than these
     fail_on         a run number: that run writes no solution and ends with status 2
     fail_pours      a number: from that question about zones on (from 1), a question gets no answer
 
@@ -45,6 +46,8 @@ if fail_on.exists() and int(fail_on.read_text()) == number:
     sys.exit(2)
 
 stubborn = json.loads((control / "stubborn.json").read_text()) if (control / "stubborn.json").exists() else {"nets": [], "below": 0}
+if stubborn.get("crowded") and all(net["net"] in stubborn["nets"] for net in problem["nets"]):
+    stubborn = {"nets": [], "below": 0}
 nets, unrouted = [], []
 by_key = {net["key"]: net for net in problem["nets"]}
 of_pairs = set()

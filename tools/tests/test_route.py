@@ -50,8 +50,9 @@ class WithEngine(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.said = []
 
-    def stubborn(self, nets, below=0.0):
-        (self.dir / "stubborn.json").write_text(json.dumps(dict(nets=nets, below=below)))
+    def stubborn(self, nets, below=0.0, crowded=False):
+        """Nets the engine leaves unjoined (unless narrower than `below`; `crowded`: only among other nets)."""
+        (self.dir / "stubborn.json").write_text(json.dumps(dict(nets=nets, below=below, crowded=crowded)))
 
     def fail_on(self, run):
         (self.dir / "fail_on").write_text(str(run))

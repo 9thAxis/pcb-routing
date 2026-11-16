@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Faster where pairs or guesses are in play. A net with a heading, and the trunk of a pair, are searched
+  in two passes like any other: the first pass, which knows neither headings nor a trunk's layer changes,
+  is their look-ahead, only no path is cut off by what it found. And the bridge no longer runs a whole
+  board once more without pairs and guesses for a net that is not joined with the board to itself either
+  (a ground net whose zone is gone): it lays that net alone first, which takes a fraction of a second. On
+  12 public boards with pairs: 652 s to 516 s in all, the same pairs laid.
 - Pairs change layer. `Pair::via_pitch`: the distance between the two vias of a pair, side by side across
   its way; the trunk entry then has a via as wide as both and need not have `no_vias`. In the search a
   trunk's layer change is one move, the via in the middle of a straight run, and the split draws each leg

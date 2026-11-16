@@ -108,8 +108,8 @@ class _Lot:
 
     - without the links of capacitors to their pins, for a net that was not all laid with them;
     - with a pair begun further from its pads, and in the end as two nets, where the pair was not all laid;
-      and, where something else is left unjoined, once without any pair and without what was only guessed
-      of the nets, of which the one that joins more is kept.
+      and, where something else is left unjoined that is joined when laid by itself, once without any pair
+      and without what was only guessed of the nets, of which the one that joins more is kept.
 
     And after it is written, for the zones:
 
@@ -206,6 +206,21 @@ class _Lot:
         run.noted.update(notes)
         return problem
 
+    def joined_alone(self, nets, narrow):
+        """How much is left unjoined of these nets laid by themselves, with no pair and nothing guessed, as
+        the engine counts it: 0 if they are all joined so, or if that cannot be told."""
+        run = self.run
+        settings = replace(self.at_step(), pairs=False, lean=False)
+        problem = problem_of(self.picture, Rules.of(self.picture, settings), run.engine.ask, only=set(nets),
+                             narrow=narrow, options=run.options, unlinked=self.unlinked | set(nets))
+        if not problem["nets"]:
+            return 0
+        try:
+            solution = run.engine.route(problem)
+        except EngineFailed:
+            return 0
+        return len(solution.get("unrouted", [])) + len(solution.get("conflicts", []))
+
     def without_wishes(self, problem, solution):
         """What of a run is kept, as (problem, solution); None if it is to be done over without a wish that
         was not granted: nothing of it is written then."""
@@ -242,12 +257,16 @@ class _Lot:
             run.say("not all laid as pairs: again, begun further from their pads or as single nets, for "
                     f"{', '.join(sorted(broken))}")
         elif said and not self.weighed and not self.again and (problem.get("pairs") or leaned):
-            wishes = (["pairs"] if problem.get("pairs")
-                      else []) + (["what the nets' names were taken to ask"] if leaned else [])
-            run.say(f"not all joined: once more without {' and '.join(wishes)}")
-            self.weighing, self.weighed, self.plain = (problem, solution, len(said)), True, True
-            self.reread = False
-            return None
+            self.weighed = True
+            # (a net that is not joined with the board to itself is not left unjoined by any wish: the whole
+            # run once more would join no more of it, and is spared)
+            if self.joined_alone(failed & set(self.lot), narrow) < len(said):
+                wishes = (["pairs"] if problem.get("pairs")
+                          else []) + (["what the nets' names were taken to ask"] if leaned else [])
+                run.say(f"not all joined: once more without {' and '.join(wishes)}")
+                self.weighing, self.plain = (problem, solution, len(said)), True
+                self.reread = False
+                return None
         if not broken:
             return problem, solution
         self.unpaired.update({key: self.unpaired.get(key, 0) + 1 for key in broken})
