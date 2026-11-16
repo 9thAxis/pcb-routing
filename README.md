@@ -40,11 +40,26 @@ and KiCad's design rule check reports no error that the unrouted board did not h
 |---|---|---|---|---|---|
 | D3-A (small) | 99 | 2 to 13 | 99 of 99 | 1,301 of 1,301 | 0.6 s |
 | D3-B (medium) | 10 | 5 to 42 | 10 of 10 | 445 of 445 | 2.5 s |
-| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 15 s |
+| D3-C (large) | 10 | 27 to 79 | 10 of 10 | 1,178 of 1,178 | 20 s |
 
-Run on 15 November 2026 through the KiCad bridge with its defaults, on an idle Apple M5 Max laptop; the time
-is the whole run, including loading and saving the board in KiCad. A single attempt uses one core, so the
+Run on 15 November 2026 through the KiCad bridge with its defaults, on an Apple M5 Max laptop (idle for the
+two smaller sets; the large set was timed again later the same day with the machine in use); the time is
+the whole run, including loading and saving the board in KiCad. A single attempt uses one core, so the
 thread count does not change these figures.
+
+The benchmark strips the boards of their copper zones as well as their tracks. With the designers' zones put
+back, as the boards were drawn, the bridge follows them (its default):
+
+| Set | Boards | Clean pass | Connections made | Track laid | Vias | Time per board |
+|---|---|---|---|---|---|---|
+| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,480 mm (14,694 without zones) | 83 (73) | 0.7 s |
+| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,936 mm (5,082) | 44 (38) | 3.0 s |
+| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,732 mm (13,232) | 337 (296) | 43 s |
+
+Fewer connections are left to make, a fifth less track is laid, and a few more vias (a pad on one side taken
+down to a zone on the other). The large boards take longer: after each run the zones are filled again and
+what the new tracks cut is mended, and a board that is not all joined at once is laid again without pairs
+and without what was guessed from the nets' names.
 
 ### Against other open routers, on the same machine
 
@@ -61,7 +76,7 @@ board's project file. Times are each tool's whole run.
 | D3-B (10) | pcb-routing | 10 | 10 | 100% | 2.5 s |
 | | KiCadRoutingTools | 8 | 8 | 100% | 2.0 s |
 | | FreeRouting | 4 | 8 | 99.3% | 3.7 s |
-| D3-C (10) | pcb-routing | 10 | 10 | 100% | 15 s |
+| D3-C (10) | pcb-routing | 10 | 10 | 100% | 20 s |
 | | KiCadRoutingTools | 6 | 6 | 99.5% | 8.2 s |
 | | FreeRouting | 0 | 7 | 96.5% | 12.4 s |
 
@@ -72,9 +87,11 @@ How to read it:
   which KiCad reports as an error. The fourth column counts a board as clean when those are its only errors.
   With FreeRouting's `automatic_neckdown` turned off it leaves more connections open and does worse in both
   columns (69, 2 and 1 clean), so the table shows it as shipped.
-- **Speed on large boards.** KiCadRoutingTools is the faster router there, by about half again. The times of
-  pcb-routing include what keeps buses together and links capacitors to their pins, which added about a
-  seventh; one crowded board is routed twice, the second time without those links.
+- **Speed on large boards.** KiCadRoutingTools is the faster router there, more than twice as fast. The times
+  of pcb-routing include what keeps buses together and links capacitors to their pins, which added about a
+  seventh; and a board that is not all joined at once, or on which a pair is not all laid, is routed again:
+  without those links, with the pair begun further from its pads, or without what was guessed from the names
+  of its nets. Three of the ten take most of the time that way.
 - **Front-ends.** KiCadRoutingTools' `autoroute.py` front-end, run with no arguments, routed every board with
   0.1 mm tracks and clearances instead of the board's own and made no board clean; the table uses `route.py`.
 - **Not the paper's protocol.** The benchmark's authors prepare the boards with a KiCad 9 pipeline, pin older
