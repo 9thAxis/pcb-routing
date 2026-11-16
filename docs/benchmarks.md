@@ -24,9 +24,9 @@ back, as the boards were drawn, the bridge follows them (its default):
 
 | Set | Boards | Clean pass | Connections made | Track laid | Vias | Time per board |
 |---|---|---|---|---|---|---|
-| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,500 mm (14,733 without zones) | 85 (71) | 0.7 s |
-| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,990 mm (5,112) | 36 (34) | 2.9 s |
-| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,735 mm (13,249) | 333 (278) | 36 s |
+| D3-A (small) | 99 | 99 of 99 | 980 of 980 | 11,497 mm (14,729 without zones) | 85 (71) | 0.7 s |
+| D3-B (medium) | 10 | 10 of 10 | 325 of 325 | 3,985 mm (5,111) | 37 (34) | 2.9 s |
+| D3-C (large) | 10 | 10 of 10 | 852 of 852 | 10,734 mm (13,247) | 333 (278) | 36 s |
 
 (The lengths move by a few millimetres from one preparation of the boards to the next, as KiCad's fills do;
 a board as saved routes the same every time.) Fewer connections are left to make, a fifth less track is
@@ -83,7 +83,7 @@ tracks and not with a copper pour:
 | | Track length, designer = 1 | Detour | Vias per 100 connections | Corners per connection | Turns of 90° or more per 100 | Short segments per 100 |
 |---|---|---|---|---|---|---|
 | The designer | 1.00 | 1.25 | 18.7 | 2.5 | 25 | 90 |
-| pcb-routing | 0.90 | 1.13 | 10.0 | 1.8 | 13 | 44 |
+| pcb-routing | 0.90 | 1.13 | 10.0 | 1.8 | 9 | 36 |
 | KiCadRoutingTools | 0.90 | 1.13 | 36.9 | 1.8 | 7 | 35 |
 | FreeRouting | 0.95 | 1.18 | 15.8 | 2.7 | 41 | 83 |
 
