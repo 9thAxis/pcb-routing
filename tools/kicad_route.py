@@ -439,6 +439,7 @@ class Settings:
     bus_pull: float = 0.2  # how strongly nets that leave and arrive side by side are drawn to run together; 0: not
     pairs: bool = True  # two nets named as the halves of a differential pair are laid side by side
     guesses: bool = True  # what a net is for is guessed from its name and parts (see intents_of)
+    lean: bool = True  # a role that is only guessed leans its net (see Rules.leaning); off for a run that joined less with it
     hints: object = None  # the hints file beside the board, as read (Hints)
 
 
@@ -522,6 +523,11 @@ class Rules:
         outside of a turn of 45 degrees (so that such a corner is a corner), 0.04 mm at the least."""
         return _r(max(pitch + width + 0.04, pitch / math.cos(math.pi / 8) + width + 0.005))
 
+    def leans(self, nets):
+        """True if any of these nets is leaned by a role that is only guessed."""
+        guessed = lambda intent: intent.role in GUESSED and intent.source.get("role") == "names"
+        return self.settings.lean and any(guessed(self.intent(net)) for net in nets)
+
     def leaning(self, net):
         """What a net's entry is given beyond its sizes, for what the net is for: fields of the engine's entry,
         and `via_penalty` as a factor on the usual. A role leans it (how readily it gives way, its weight, its
@@ -529,7 +535,8 @@ class Rules:
         length, a distance kept as a quiet net)."""
         intent, out = self.intent(net), {}
         hinted = lambda what: intent.source.get(what, "names") != "names"
-        give, weight, vias = (LEANING if hinted("role") else GUESSED).get(intent.role, (1.0, 1.0, 1.0))
+        guessed = GUESSED if self.settings.lean else {}
+        give, weight, vias = (LEANING if hinted("role") else guessed).get(intent.role, (1.0, 1.0, 1.0))
         if intent.priority == "high":
             give, weight = min(give, 0.3), max(weight, 3.0)
         if intent.vias == "few":
@@ -1272,8 +1279,8 @@ class _Lot:
 
     - without the links of capacitors to their pins, for a net that was not all laid with them;
     - with a pair begun further from its pads, and in the end as two nets, where the pair was not all laid;
-      and, where something else is left unjoined with pairs laid, once without any pair, of which the one
-      that joins more is kept.
+      and, where something else is left unjoined, once without any pair and without what was only guessed
+      of the nets, of which the one that joins more is kept.
 
     And after it is written, for the zones:
 
@@ -1288,7 +1295,9 @@ class _Lot:
         self.number, self.reread = 0, False  # the try at hand; whether the board is to be read again for it
         # the nets given up as linked; the pairs not all laid as pairs, with how far off their pads they are begun next (see pair_entries)
         self.unlinked, self.unpaired = set(), {}
-        self.weighing, self.weighed = None, False  # a run with pairs kept to be weighed against one without; whether that was done
+        # a run with wishes granted (pairs, what the names were taken to ask) kept to be weighed against one
+        # without; whether that was done; and whether the wishes are off for the rest of the lot
+        self.weighing, self.weighed, self.plain = None, False, False
         # For pours that new tracks cut: how often their nets have been joined again; the last run of the lot's
         # own nets, as (its problem, where the board's record stood before it, its picture); whether the present
         # run is one that joins a cut pour again; the entries that hold cut pours together; whether the lot's
@@ -1337,7 +1346,9 @@ class _Lot:
 
     def at_step(self):
         """The settings of the try at hand. (No pairs among nets that are only being joined again after a pour was cut.)"""
-        return replace(self.run.settings, step=self.tries[self.number][0], pairs=self.run.settings.pairs and not self.rejoining)
+        settings = self.run.settings
+        return replace(settings, step=self.tries[self.number][0], pairs=settings.pairs and not self.rejoining and not self.plain,
+                       lean=settings.lean and not self.plain)
 
     def drawn_up(self):
         """The problem of the next run; None if the try at hand is passed over (its grid would be too large)."""
@@ -1380,22 +1391,24 @@ class _Lot:
             return None
         # Then a pair that is not all laid is done again begun further from its pads (so near them its stubs
         # may have no room), and as two nets when it has been begun as far off as it is offered; and where
-        # something else is left unjoined with pairs laid, the run is done once more without any (they take
-        # room), and the pairs are kept all the same if that leaves no less unjoined.
+        # something else is left unjoined, the run is done once more without any pair (they take room) and
+        # without what was only guessed of the nets (a clock kept off vias takes room too): that run stands
+        # if it joins more, for the rest of the lot; else the first.
         said = solution.get("unrouted", []) + [c.get("key", "") + ":" for c in solution.get("conflicts", [])]
+        leaned = Rules.of(self.picture, self.at_step()).leans(n["net"] for n in problem["nets"])
         of_pair = lambda pair: [pair["key"], pair["trunk"]] + [stub for end in pair["stubs"] for stub in end]
         broken = {pair["key"] for pair in problem.get("pairs", []) if any(m.startswith(key + ":") for m in said for key in of_pair(pair))}
         if self.weighing is not None:
             if len(said) >= self.weighing[2]:
-                run.say("no more is joined without them: the pairs are kept")
-                problem, solution, _, self.unpaired = self.weighing
+                run.say("no more is joined without: they are kept")
+                (problem, solution, _), self.plain = self.weighing, False
             self.weighing, broken = None, set()
         elif broken:
             run.say(f"not all laid as pairs: again, begun further from their pads or as single nets, for {', '.join(sorted(broken))}")
-        elif said and problem.get("pairs") and not self.weighed:
-            run.say("not all joined with pairs laid: once more without them")
-            self.weighing, self.weighed = (problem, solution, len(said), dict(self.unpaired)), True
-            self.unpaired.update({pair["key"]: math.inf for pair in problem["pairs"]})
+        elif said and not self.weighed and not self.again and (problem.get("pairs") or leaned):
+            wishes = (["pairs"] if problem.get("pairs") else []) + (["what the nets' names were taken to ask"] if leaned else [])
+            run.say(f"not all joined: once more without {' and '.join(wishes)}")
+            self.weighing, self.weighed, self.plain = (problem, solution, len(said)), True, True
             self.reread = False
             return None
         if not broken:
