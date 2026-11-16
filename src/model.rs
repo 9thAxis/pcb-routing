@@ -246,6 +246,23 @@ pub struct Terminal {
     /// near its pads as there is room).
     #[serde(default)]
     pub turn: u32,
+    /// The hand it is on, 0 for none. Where the terminals of an entry are on different hands, the entry is
+    /// joined at terminals of one hand only: it is laid once for each hand, and the cheapest that joins the
+    /// most is kept. For the trunk of a [`Pair`], which cannot be turned over on one layer: the places where
+    /// it may leave its two ends go together, a way out of the one with a way into the other, or each leg
+    /// would arrive on the side of the other's pad.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hand: u8,
+    /// The way a track leaves it, as a direction (any length; the nearest of the grid's eight is taken): a
+    /// track that begins here sets out that way, and one that ends here comes in against it. Without one,
+    /// any way. For the places where the trunk of a [`Pair`] begins and ends: it is to leave them straight
+    /// away from its two pads, a leg before each, and not sideways with one leg behind the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading: Option<Pt>,
+}
+
+fn is_zero(hand: &u8) -> bool {
+    *hand == 0
 }
 
 /// One piece of work: terminals to be joined, and the rules for the copper that joins them.

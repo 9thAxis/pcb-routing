@@ -32,6 +32,22 @@ impl Engine<'_> {
     /// engine changes; the caller puts the result in place. `hard`: cells claimed by other nets are closed instead
     /// of dearer.
     fn lay(&self, n: usize, present: f64, hard: bool) -> NetState {
+        // An entry with terminals on different hands (see `Terminal::hand`) is laid once for each, and the
+        // one that joins the most for the least is kept.
+        let mut hands: Vec<u8> = self.p.nets[n].terminals.iter().map(|t| t.hand).filter(|&hand| hand != 0).collect();
+        hands.sort_unstable();
+        hands.dedup();
+        if hands.len() < 2 {
+            return self.lay_on(n, present, hard, None);
+        }
+        let worth = |state: &NetState| (state.failed.len(), state.cost + state.apart);
+        let laid = hands.into_iter().map(|hand| self.lay_on(n, present, hard, Some(hand)));
+        laid.min_by(|a, b| worth(a).partial_cmp(&worth(b)).unwrap_or(std::cmp::Ordering::Equal))
+            .expect("there are two hands at least")
+    }
+
+    /// Lay a net at its terminals of one hand (all of them, without one).
+    fn lay_on(&self, n: usize, present: f64, hard: bool, hand: Option<u8>) -> NetState {
         let mut w = Worker::take(self.shared, self.plan.space.states(), self.plan.space.hw);
         let mine: Vec<usize> = std::iter::once(n).chain(self.plan.siblings[n].iter().copied()).collect();
         for &m in &mine {
@@ -43,7 +59,7 @@ impl Engine<'_> {
             }
         }
         self.mark_bus(n, &mut w);
-        let mut result = self.route_alone(n, present, hard, &mut w);
+        let mut result = self.route_alone(n, present, hard, hand, &mut w);
         result.was_apart = self.apart_of(n, &w.ground);
         w.ground.clear_bus();
         for &m in &mine {
@@ -59,7 +75,7 @@ impl Engine<'_> {
     }
 
     /// Lay net `n` (see `lay`), with the search memory `w` in which the net's own claims and its bus are marked.
-    fn route_alone(&self, n: usize, present: f64, hard: bool, w: &mut Worker) -> NetState {
+    fn route_alone(&self, n: usize, present: f64, hard: bool, hand: Option<u8>, w: &mut Worker) -> NetState {
         let p = self.p;
         let net = &p.nets[n];
         let (space, nl) = (self.plan.space, self.plan.space.nl);
@@ -91,10 +107,12 @@ impl Engine<'_> {
         let mut terms: Vec<(Term, u64)> = Vec::new();
         let mut closed: Vec<(usize, u64, &String)> = Vec::new();
         // (of the open terminals of a piece, those whose turn it is: see `Terminal::turn`)
-        let open = || (0..net.terminals.len()).filter(|&t| self.plan.terms[n][t].is_ok());
+        // (and of the hand that is being laid: a terminal of another is as if it were not there)
+        let ours = |t: usize| hand.map_or(true, |hand| net.terminals[t].hand == 0 || net.terminals[t].hand == hand);
+        let open = || (0..net.terminals.len()).filter(|&t| ours(t) && self.plan.terms[n][t].is_ok());
         let first =
             |piece: u64| open().filter(|&t| self.plan.pieces[n][t] == piece).map(|t| net.terminals[t].turn).min();
-        for (t, at) in self.plan.terms[n].iter().enumerate() {
+        for (t, at) in self.plan.terms[n].iter().enumerate().filter(|&(t, _)| ours(t)) {
             let piece = self.plan.pieces[n][t];
             match at {
                 Ok(term) if first(piece) == Some(net.terminals[t].turn) => terms.push((*term, piece)),

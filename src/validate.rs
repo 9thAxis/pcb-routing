@@ -218,6 +218,11 @@ impl Problem {
             }
             for (t, term) in n.terminals.iter().enumerate() {
                 point(at(&format!("terminals[{t}].xy")), term.xy)?;
+                if let Some(way) = term.heading {
+                    if !(way[0].is_finite() && way[1].is_finite() && way[0].hypot(way[1]) > 1e-9) {
+                        return Err(invalid(at(&format!("terminals[{t}].heading")), "is no direction"));
+                    }
+                }
                 if term.layers.is_empty() {
                     return Err(invalid(at(&format!("terminals[{t}].layers")), "names no layer"));
                 }

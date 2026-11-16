@@ -48,6 +48,9 @@ def pairs_of(picture, rules, names, ask, notes=None):
     return [(a, b, width, pitch, plan) for (a, b), (width, pitch), plan in zip(named, sizes, plans) if plan["trunks"]]
 
 
+FREE = 2  # the try at which a stretch is left free of hands and headings; after it, it is laid as two nets
+
+
 def pair_entries(picture, rules, pair, entry, unpaired, taken):
     """The entries for one differential pair (see pairs_of) and what the problem's `pairs` says of it:
     (entries, pairs); nothing if every stretch of it has been given up as a pair. `unpaired`: for the key of
@@ -68,17 +71,30 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken):
     while any(key == name or key.startswith(name + " ") for key in taken):
         name += "'"  # (a net may be named just so)
     key_of = lambda number: name + (f" ({number + 1})" if len(plan["trunks"]) > 1 else "")
-    # (the places come as two lots for each distance from the pads: square to the pads, then the others)
-    further = lambda key, trunk: [lots[min(2 * unpaired.get(key, 0), len(lots)):] for lots in trunk["gather"]]
+    # (the places come as two lots for each distance from the pads: square to the pads, then the others; and
+    # one way round the two ends or the other, `gather` and `round`: see src/pairs.rs)
+    # A stretch not all laid as a pair is begun further from its pads; and the third time it is left free:
+    # any place with any other and from any side, which lays some pairs that have no room to be laid right.
+    tried = lambda key: unpaired.get(key, 0)
+    further = lambda key, lots: lots[2:] if tried(key) == 1 else lots if tried(key) in (0, FREE) else []
+    ways = lambda key, trunk: {way: [further(key, lots) for lots in trunk[way]] for way in ("gather", "round")}
     trunks = [(key_of(number), trunk) for number, trunk in enumerate(plan["trunks"])]
-    trunks = [(key, dict(trunk, gather=further(key, trunk))) for key, trunk in trunks]
-    trunks = [(key, trunk) for key, trunk in trunks if all(trunk["gather"])]
+    trunks = [(key, dict(trunk, **ways(key, trunk))) for key, trunk in trunks]
+    trunks = [(key, trunk) for key, trunk in trunks if all(any(lots) for lots in trunk["gather"])]
     entries, said = [], []
     held = list(range(len(plan["ends"])))  # (for each end, the first of the ends that trunks join it to)
     for key, trunk in trunks:
-        # (the places of an end by how far off its pads they are: the nearer take their turn first)
-        places = [dict(xy=place["xy"], layers=place["layers"], piece=end, **(dict(turn=turn) if turn else {}))
-                  for end in (0, 1) for turn, lot in enumerate(trunk["gather"][end]) for place in lot]
+        # (the places of an end by how far off its pads they are: the nearer take their turn first; and those
+        # of one way round on one hand, so that the trunk never leaves one way and arrives the other)
+        # (and each is left straight away from the middle of its two pads: a leg before each pad)
+        middles = [[(first[0] + second[0]) / 2, (first[1] + second[1]) / 2] for first, second in
+                   ([pads[net][i].at for net, i in zip((a, b), plan["ends"][trunk["ends"][end]])] for end in (0, 1))]
+        away = lambda place, end: [r6(place["xy"][0] - middles[end][0]), r6(place["xy"][1] - middles[end][1])]
+        held_to = {} if tried(key) == FREE else None
+        places = [dict(xy=place["xy"], layers=place["layers"], piece=end, **(dict(turn=turn) if turn else {}),
+                       **(dict(hand=hand, heading=away(place, end)) if held_to is None else held_to))
+                  for hand, way in ((1, "gather"), (2, "round"))
+                  for end in (0, 1) for turn, lot in enumerate(trunk[way][end]) for place in lot]
         clearance = dict(default=r6(max(rules.clearance(a), rules.clearance(b))),
                          nets={n: r6(c) for net in (a, b) for n, c in rules.stricter(net).items()})
         wide = entry(f"{key} trunk", a, places, no_vias=True)

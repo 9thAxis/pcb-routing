@@ -40,11 +40,21 @@ const FREE: u8 = 1; // a layer change here costs nothing: a hole of this net is 
 
 const SHUT: u8 = 2; // too close to a hole of this net for another via
 
+/// The eight steps from a cell, each as (rows, columns): down, up, right, left, and the four between.
 const DIRS: [(i32, i32); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
 
 /// A search state is (direction of arrival, layer, cell); direction 8 is "none" (a start, or just after a layer
 /// change).
 const NO_DIR: usize = 8;
+/// For each of the eight directions, the one that points the other way.
+const OPPOSITE: [usize; 8] = [1, 0, 3, 2, 7, 6, 5, 4];
+
+/// The one of the eight directions nearest a way given as a vector [x, y]. (A direction is (rows, columns):
+/// y first.)
+fn nearest_dir(way: Pt) -> usize {
+    let along = |(dj, di): (i32, i32)| (way[0] * di as f64 + way[1] * dj as f64) / ((dj * dj + di * di) as f64).sqrt();
+    (0..8).max_by(|&a, &b| along(DIRS[a]).total_cmp(&along(DIRS[b]))).unwrap_or(0)
+}
 
 /// Cost of turning from one direction to another, in units of the 45 degree corner cost; None for a turn sharper
 /// than a right angle.
@@ -204,5 +214,18 @@ impl<'a> Engine<'a> {
 
     fn index(&self, key: &str) -> Result<usize, String> {
         self.p.nets.iter().position(|n| n.key == key).ok_or_else(|| format!("no net entry with key {key}"))
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+
+    #[test]
+    fn the_nearest_direction_of_a_way_is_found_with_x_across_and_y_down() {
+        assert_eq!(DIRS[nearest_dir([1.0, 0.0])], (0, 1)); // to the right: no rows, one column
+        assert_eq!(DIRS[nearest_dir([0.0, -2.0])], (-1, 0)); // up
+        assert_eq!(DIRS[nearest_dir([-0.9, 1.0])], (1, -1)); // down and to the left
+        assert_eq!(DIRS[OPPOSITE[nearest_dir([1.0, 0.1])]], (0, -1));
     }
 }

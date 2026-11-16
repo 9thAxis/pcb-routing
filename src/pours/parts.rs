@@ -119,7 +119,14 @@ mod tests {
         .unwrap();
         entry.terminals = terminals
             .iter()
-            .map(|&(xy, layer, piece)| Terminal { xy, layers: vec![layer.into()], piece, turn: 0 })
+            .map(|&(xy, layer, piece)| Terminal {
+                xy,
+                layers: vec![layer.into()],
+                piece,
+                turn: 0,
+                hand: 0,
+                heading: None,
+            })
             .collect();
         entry
     }

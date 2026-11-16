@@ -342,8 +342,11 @@ class Pairs(WithEngine):
         first, second, third, fourth = self.runs()
         nearest = lambda problem: min(abs(t["xy"][0] - 2.0) for n in problem["nets"] if n["key"].endswith("trunk")
                                       for t in n["terminals"] if t["piece"] == 0)
-        self.assertLess(nearest(first), nearest(second))
-        self.assertLess(nearest(second), nearest(third))
+        self.assertLess(nearest(first), nearest(second))  # begun further from its pads
+        headed = lambda problem: {"heading" in t for n in problem["nets"] if n["key"].endswith("trunk")
+                                  for t in n["terminals"]}
+        # the third time free: any place, from any side
+        self.assertEqual((headed(first), headed(second), headed(third)), ({True}, {True}, {False}))
         self.assertNotIn("pairs", fourth)
         self.assertEqual(sorted(n["key"] for n in fourth["nets"]), ["D_N", "D_P", "OTHER"])
         self.assertEqual(board.writes, [["D_N", "D_P", "OTHER"]])  # nothing of the runs before is kept

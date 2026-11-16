@@ -36,6 +36,9 @@ pub(crate) struct Plan {
     /// Per net: the exact place of what stands in a cell (a hole, a terminal), where a track ending in that
     /// cell is to end. As it is before any pair is split: each attempt works on a copy.
     pub(super) exact: Vec<HashMap<u32, Pt>>,
+    /// Per net: the cells of its terminals that are left one way only (see `Terminal::heading`), each with
+    /// that direction as an index into the eight.
+    pub(super) heads: Vec<Vec<(u32, u8)>>,
     /// The offsets of the cells too close to a hole for another hole.
     pub(super) shut: Vec<(i32, i32)>,
     /// The ground that costs more without being closed.
@@ -72,10 +75,15 @@ impl Plan {
         }
         let fixed_free: Vec<Vec<u32>> = (0..p.nets.len()).map(|n| fixed.free(n).to_vec()).collect();
         let mut terms = Vec::new();
+        let mut heads: Vec<Vec<(u32, u8)>> = Vec::new();
         for (n, net) in p.nets.iter().enumerate() {
             let mut list = Vec::new();
+            heads.push(Vec::new());
             for t in &net.terminals {
                 let at = relocate(p, &grid, &|cell| fixed.mask(n, cell), net, t);
+                if let (Ok(term), Some(way)) = (&at, t.heading) {
+                    heads[n].push((term.cell, super::nearest_dir(way) as u8));
+                }
                 // a track that ends on another cell than the terminal's own does not end at the terminal's point
                 if let (Ok(term), Some(own)) = (&at, grid.cell(t.xy)) {
                     if term.cell != own as u32 {
@@ -114,6 +122,7 @@ impl Plan {
             terms,
             pieces: p.nets.iter().map(|n| (0..n.terminals.len()).map(|t| piece_of(n, t)).collect()).collect(),
             exact,
+            heads,
         }
     }
 }

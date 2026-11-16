@@ -28,12 +28,20 @@ pub struct Trunk {
     /// The two ends it runs between, as indices into [`Plan::ends`].
     pub ends: [usize; 2],
     /// Where it may begin and where it may end: for each of its two ends, places on the grid a little off
-    /// the pads towards the other end (the grid's cells are taken to be at multiples of the step), by how
-    /// far off they are: the nearest first, each half as far again, and for each distance two lots: the place
-    /// square to the line of the two pads, then those beside it. They are for terminals of
-    /// one piece that take their turn in that order ([`Terminal::turn`](crate::Terminal::turn)): the trunk
-    /// then begins as near its pads as there is room, and the pair runs side by side for longer.
+    /// the pads (the grid's cells are taken to be at multiples of the step), by how far off they are: the
+    /// nearest first, each half as far again, and for each distance two lots: the place square to the line
+    /// of the two pads, then those beside it that lead towards the other end. They are for terminals of one
+    /// piece that take their turn in that order ([`Terminal::turn`](crate::Terminal::turn)): the trunk then
+    /// begins as near its pads as there is room, and the pair runs side by side for longer.
+    ///
+    /// A pair cannot be turned over on one layer: the leg that leaves one end on the left arrives at the
+    /// other on the left. So the places of the two ends go together: a trunk from any place of the one to
+    /// any place of the other brings each leg to the side of its own pad.
     pub gather: [Vec<Vec<Place>>; 2],
+    /// The same from the other side of both ends: the pair leaves each end the other way and goes round. For
+    /// a second try, where the first side of an end is shut in. A trunk between a place of `gather` and one
+    /// of `round` would arrive with its legs changed over, and is never to be offered.
+    pub round: [Vec<Vec<Place>>; 2],
 }
 
 /// How two nets are to be laid as a pair.
@@ -87,14 +95,29 @@ pub fn plan(a: &[Pad], b: &[Pad], pitch: f64, layers: &[String], step: f64) -> R
         if lots.is_empty() || on.is_empty() {
             continue;
         }
+        // The line of the two pads of an end, from the second net's to the first's.
         let across = |end: [usize; 2]| {
-            let (p, q) = (a[end[0]].at, b[end[1]].at);
+            let (p, q) = (b[end[1]].at, a[end[0]].at);
             let apart = dist(p, q).max(1e-9);
             [(q[0] - p[0]) / apart, (q[1] - p[1]) / apart]
         };
-        let gather =
-            |end: usize, from: Pt, to: Pt| places(from, to, across(ends[end]), off(ends[end]), &lots, &on, step);
-        trunks.push(Trunk { ends: [i, j], gather: [gather(i, from, to), gather(j, to, from)] });
+        // An end is left with the first net's leg on the left or on the right; the other end must then be left
+        // with it on the other hand, for the trunk arrives there the other way about. Of the two ways to
+        // choose, the first is the one whose square places face each other.
+        let faces = |hand: f64| {
+            let (one, other) = (square(across(ends[i]), hand), square(across(ends[j]), -hand));
+            let way = [(to[0] - from[0]) / dist(from, to), (to[1] - from[1]) / dist(from, to)];
+            one[0] * way[0] + one[1] * way[1] - other[0] * way[0] - other[1] * way[1]
+        };
+        let hand = if faces(1.0) >= faces(-1.0) { 1.0 } else { -1.0 };
+        let gather = |end: usize, from: Pt, to: Pt, hand: f64| {
+            places(from, to, across(ends[end]), hand, off(ends[end]), &lots, &on, step)
+        };
+        trunks.push(Trunk {
+            ends: [i, j],
+            gather: [gather(i, from, to, hand), gather(j, to, from, -hand)],
+            round: [gather(i, from, to, -hand), gather(j, to, from, hand)],
+        });
     }
     Ok(Plan { ends, trunks, loose })
 }
@@ -142,45 +165,55 @@ fn trunk_layers(one: [&Pad; 2], other: [&Pad; 2], layers: &[String]) -> Vec<Stri
     layers.iter().filter(|l| of_end(one, l) || of_end(other, l)).cloned().collect()
 }
 
-/// The places a trunk may begin at, off the middle `from` of one of its ends towards the middle `to` of the
-/// other, in lots by preference. For each of `lots`, `off` times that far: first in the direction that is
-/// most square to the line through the two pads (`across`: that line's direction), so that each leg comes
-/// straight to its own pad and neither has to pass the other's (to either side: the part the pads belong to
-/// lies on one of them, and which is not known here; the trunk takes the one that is open, or the cheaper);
-/// then, as a lot of their own, in the other directions that lead towards the far end. The directions are
-/// those of the grid: the nearest of the eight to the far end, the two beside it, and the two square to the
-/// pads. On the grid of `step`, each place once.
-fn places(from: Pt, to: Pt, across: Pt, off: f64, lots: &[f64], on: &[String], step: f64) -> Vec<Vec<Place>> {
+/// The direction square to the line of two pads (`across`, a unit vector) on one hand of it (1 or -1).
+fn square(across: Pt, hand: f64) -> Pt {
+    [-across[1] * hand, across[0] * hand]
+}
+
+/// The places a trunk may begin at, off the middle `from` of one of its ends, on one `hand` of the line of
+/// its two pads (`across`: that line's direction), in lots by preference. For each of `lots`, `off` times
+/// that far: first in the direction square to the pads, so that each leg comes straight to its own pad and
+/// neither has to pass the other's; then, as a lot of their own, in the directions that lead towards the
+/// far end (`to`) on that hand: the nearest of the eight to it and the two beside it. The directions are
+/// those of the grid. On the grid of `step`, each place once.
+#[allow(clippy::too_many_arguments)]
+fn places(
+    from: Pt,
+    to: Pt,
+    across: Pt,
+    hand: f64,
+    off: f64,
+    lots: &[f64],
+    on: &[String],
+    step: f64,
+) -> Vec<Vec<Place>> {
     let eighth = std::f64::consts::FRAC_PI_4;
     let towards = (to[1] - from[1]).atan2(to[0] - from[0]);
     let straight = (towards / eighth).round();
     let nearer = if towards >= straight * eighth { 1.0 } else { -1.0 };
-    // (how much of a direction runs along the line of the pads: 0 square to it, 1 along it)
-    let along = |turns: f64| ((turns * eighth).cos() * across[0] + (turns * eighth).sin() * across[1]).abs();
-    let square = (across[0].atan2(-across[1]) / eighth).round();
-    let mut ways: Vec<f64> = vec![straight, straight + nearer, straight - nearer];
-    for turns in [square, square + 4.0] {
-        let same = |way: &f64| (way - turns).rem_euclid(8.0) < 1e-9;
-        if !ways.iter().any(same) {
-            ways.push(turns);
-        }
-    }
-    let squarest = ways.iter().map(|&way| along(way)).fold(f64::MAX, f64::min);
+    let out = square(across, hand);
+    // (how far a direction leads out on this hand: 1 square to the pads, 0 along their line)
+    let leads = |turns: f64| (turns * eighth).cos() * out[0] + (turns * eighth).sin() * out[1];
+    let squarest = (out[1].atan2(out[0]) / eighth).round();
+    let same = |one: f64, other: f64| (one - other).rem_euclid(8.0) < 1e-9;
+    let beside: Vec<f64> = [straight, straight + nearer, straight - nearer]
+        .into_iter()
+        .filter(|&way| leads(way) > 0.3 && !same(way, squarest))
+        .collect();
     let on_grid = |v: f64| round6((v / step).round() * step);
     let mut found: Vec<Vec<Place>> = Vec::new();
     for further in lots {
-        for first in [true, false] {
+        for ways in [&[squarest][..], &beside[..]] {
             let mut lot: Vec<Place> = Vec::new();
-            for &way in ways.iter().filter(|&&way| (along(way) <= squarest + 1e-9) == first) {
+            for &way in ways {
                 let (angle, far) = (way * eighth, further * off);
                 let xy = [on_grid(from[0] + far * angle.cos()), on_grid(from[1] + far * angle.sin())];
                 if !found.iter().flatten().chain(&lot).any(|place| place.xy == xy) {
                     lot.push(Place { xy, layers: on.to_vec() });
                 }
             }
-            if !lot.is_empty() {
-                found.push(lot);
-            }
+            // (a lot for each, even an empty one: the lots go in twos, by distance)
+            found.push(lot);
         }
     }
     found
@@ -219,10 +252,11 @@ mod tests {
         // distance and the pitch off
         assert_eq!(trunk.gather[0][0][0], Place { xy: [0.9, 0.5], layers: vec!["F".to_string()] });
         assert_eq!(trunk.gather[1][0][0].xy, [19.1, 0.5]);
-        // at each of three distances: the two places square to the pads, then as a lot of their own the two
-        // beside the one that faces the far end
-        assert_eq!(trunk.gather[0].iter().map(Vec::len).collect::<Vec<_>>(), [2, 2, 2, 2, 2, 2]);
-        assert!(trunk.gather[0].iter().flatten().all(|p| p.xy[0].abs() > 0.5 && p.xy[0].abs() < 3.0));
+        // at each of three distances: the place square to the pads, then as a lot of their own the two beside it
+        assert_eq!(trunk.gather[0].iter().map(Vec::len).collect::<Vec<_>>(), [1, 2, 1, 2, 1, 2]);
+        assert!(trunk.gather[0].iter().flatten().all(|p| p.xy[0] > 0.5 && p.xy[0] < 3.0));
+        // the other way round both ends: away from each other
+        assert_eq!((trunk.round[0][0][0].xy, trunk.round[1][0][0].xy), ([-0.9, 0.5], [20.9, 0.5]));
         assert!(
             trunk.gather[0][2][0].xy[0] > trunk.gather[0][0][0].xy[0]
                 && trunk.gather[0][4][0].xy[0] > trunk.gather[0][2][0].xy[0]
@@ -296,11 +330,11 @@ mod tests {
         let b = [land(0.0, 1.0, "F"), land(20.0, 15.0, "F")];
         let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
         let lots = &found.trunks[0].gather[0];
-        // square to the pads: straight to the right, where each leg comes to its own pad, or to the left
-        assert_eq!(lots[0].iter().map(|place| place.xy).collect::<Vec<_>>(), [[0.9, 0.5], [-0.9, 0.5]]);
-        // then along the diagonal, and last straight up, past the other's pad
+        // square to the pads: straight to the right, where each leg comes to its own pad
+        assert_eq!(lots[0].iter().map(|place| place.xy).collect::<Vec<_>>(), [[0.9, 0.5]]);
+        // then along the diagonal; not straight up, along the line of the pads and past the other's
+        assert_eq!(lots[1].len(), 1);
         assert!(lots[1][0].xy[0] > 0.5 && lots[1][0].xy[1] > 0.9, "{:?}", lots[1]);
-        assert!(lots[1][1].xy[0] < 0.1 && lots[1][1].xy[1] > 1.0, "{:?}", lots[1]);
     }
 
     #[test]
@@ -309,11 +343,26 @@ mod tests {
         let a = [land(20.0, 10.0, "F"), land(0.0, 10.0, "F")];
         let b = [land(20.35, 10.35, "F"), land(0.0, 11.0, "F")];
         let found = plan(&a, &b, 0.4, &layers(), 0.05).unwrap();
-        let first: Vec<Pt> = found.trunks[0].gather[0][0].iter().map(|place| place.xy).collect();
+        let (first, round) = (found.trunks[0].gather[0][0][0].xy, found.trunks[0].round[0][0][0].xy);
         let middle = [20.175, 10.175];
-        // square to the diagonal the pads stand on: down and to the left, or up and to the right
-        assert_eq!(first.len(), 2);
-        assert!(first.iter().any(|p| p[0] < middle[0] - 0.2 && p[1] > middle[1] + 0.2), "{first:?}");
-        assert!(first.iter().any(|p| p[0] > middle[0] + 0.2 && p[1] < middle[1] - 0.2), "{first:?}");
+        // square to the diagonal the pads stand on: down and to the left, towards the far end; the other
+        // way round, up and to the right
+        assert!(first[0] < middle[0] - 0.2 && first[1] > middle[1] + 0.2, "{first:?}");
+        assert!(round[0] > middle[0] + 0.2 && round[1] < middle[1] - 0.2, "{round:?}");
+    }
+
+    #[test]
+    fn a_pair_whose_pads_are_changed_over_at_the_far_end_goes_round_one_of_them() {
+        // the first net's pad is above at the near end and below at the far end: a trunk straight across
+        // would arrive with its legs changed over
+        let a = [land(0.0, 0.0, "F"), land(20.0, 1.0, "F")];
+        let b = [land(0.0, 1.0, "F"), land(20.0, 0.0, "F")];
+        let found = plan(&a, &b, 0.4, &layers(), 0.1).unwrap();
+        let trunk = &found.trunks[0];
+        let (near, far) = (trunk.gather[0][0][0].xy, trunk.gather[1][0][0].xy);
+        // it leaves both ends to the same side: one of them is gone round
+        assert!((near[0] > 0.0) == (far[0] > 20.0), "{near:?} {far:?}");
+        let (near, far) = (trunk.round[0][0][0].xy, trunk.round[1][0][0].xy);
+        assert!((near[0] > 0.0) == (far[0] > 20.0), "{near:?} {far:?}");
     }
 }

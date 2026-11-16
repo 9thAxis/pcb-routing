@@ -21,7 +21,7 @@ NET = ({"key", "net", "width", "via", "layers", "clearance", "terminals", "via_p
         "branch_anywhere", "regions", "last", "no_vias", "quiet", "bus", "bus_lane"},
         {"key", "net", "width", "via", "layers", "clearance", "terminals"})
 CLEARANCE = ({"default", "nets"}, {"default"})
-TERMINAL = ({"xy", "layers", "piece", "turn"}, {"xy", "layers"})
+TERMINAL = ({"xy", "layers", "piece", "turn", "hand", "heading"}, {"xy", "layers"})
 OPTIONS = ({"max_iterations", "present_start", "present_growth", "present_max", "history_step", "refine_passes",
             "variants", "negotiate",
             "own_hole_free", "bend_mm", "two_pass", "sweep_margin", "exact_after", "stall_after", "patience",

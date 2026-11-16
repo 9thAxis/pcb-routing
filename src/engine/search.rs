@@ -61,7 +61,10 @@ impl Engine<'_> {
     /// may branch off anywhere along its copper).
     pub(super) fn find(&self, q: Query, worker: &mut Worker) -> Option<Vec<u32>> {
         let n = q.net;
-        let two = if self.p.options.bend_mm > 0.0 && self.p.options.two_pass { q.from } else { None };
+        // (a net with terminals that are left one way only is searched in one pass: the first pass knows no
+        // directions, and the bound it gives would cut off the way round that such a terminal can ask for)
+        let headed = !self.plan.heads[n].is_empty();
+        let two = if self.p.options.bend_mm > 0.0 && self.p.options.two_pass && !headed { q.from } else { None };
         let found = self.search(Query { from: two, ..q }, worker);
         if self.shared.diagnostics.verify && two.is_some() {
             let plain = self.search(Query { from: None, ..q }, worker);
@@ -330,6 +333,9 @@ impl Engine<'_> {
                 }
             }
         }
+        // (the direction a terminal in this cell is left by, if it is left one way only)
+        let heads = &self.plan.heads[n];
+        let head_at = |cell: usize| heads.iter().find(|head| head.0 as usize == cell).map(|head| head.1 as usize);
         let mut found = NONE;
         while let Some((_, u)) = s.heap.pop() {
             let ui = u as usize;
@@ -342,10 +348,15 @@ impl Engine<'_> {
             let ahead_here = look(at);
             let (l, c) = (at / hw, at % hw);
             // the look-ahead is 0 at a goal (and at little else), so this test is rarely made in full
-            if ahead_here == 0.0 && goals.iter().any(|g| g.cell as usize == c && g.on(l)) {
+            let head = if heads.is_empty() { None } else { head_at(c) };
+            // (a terminal that is left one way is come to against that way)
+            let comes_right = head.map_or(true, |way| dir == OPPOSITE[way]);
+            if ahead_here == 0.0 && comes_right && goals.iter().any(|g| g.cell as usize == c && g.on(l)) {
                 found = u;
                 break;
             }
+            // (and a path that begins on it sets out that way, on the layer it is on)
+            let sets_out = head.filter(|_| s.node[ui].prev == START);
             let gu = s.node[ui].g as f64;
             let step_cost = lc[l];
             let relax = |v: usize, cost: f64, how: u8, s: &mut Search| {
@@ -368,6 +379,9 @@ impl Engine<'_> {
                 }
             };
             let mut bits = prices.at(at).open.get() & allowed[dir];
+            if let Some(way) = sets_out {
+                bits &= 1 << way;
+            }
             while bits != 0 {
                 let d2 = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
@@ -379,7 +393,7 @@ impl Engine<'_> {
                 relax(v * 9 + d2, corner[dir][d2] + len[d2] * step_cost * m2 as f64, dir as u8, s);
             }
             let cost = prices.via(c);
-            if cost == SHUT_COST {
+            if cost == SHUT_COST || sets_out.is_some() {
                 continue;
             }
             for ll in 0..nl {
