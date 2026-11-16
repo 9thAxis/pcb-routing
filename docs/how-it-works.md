@@ -129,7 +129,7 @@ For a front end (the KiCad bridge is one), and measured through it:
 * **Differential pairs found and laid.** Two nets named as a pair (`_P`/`_N`, `+`/`-`, `DP`/`DM`), or said
   to be one in the hints, are laid side by side between the places where a pad of each stand side by side
   (`pcb_routing::pairs`), begun as near their pads as there is room, and as two nets where that cannot be
-  done. On 20 pairs of 13 public boards: coupled for 50 % of their length (a pair that changes layer runs half as far, and its vias count against it), where the same router without
+  done. On 20 pairs of 13 public boards: coupled for 53 % of their length, where the same router without
   pairs has 18 % and the designers 39 %; all boards complete, with no new error in KiCad's check.
 * **What the nets are for.** Guessed from names and parts (clocks and crystals are slow to change layer),
   and said in an optional hints file beside the board

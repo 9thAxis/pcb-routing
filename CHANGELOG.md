@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A pair runs on past a part in its middle. Two nets that pass a part on their way (a protection device,
+  termination resistors) were laid as a pair up to it and as a pair again, or as two tracks, beyond it. Now
+  the trunk is one line from the first end to the last, led between the part's two pads, and either pad
+  gets a branch to its leg. New in a problem: `Terminal::pass` (a terminal the entry runs on through, along
+  its heading; such an entry is one line, joined piece by piece in the order of its terminals) and
+  `Pair::passes` (the stub entries of the pads passed). `pairs::plan` offers such trunks as `through`, the
+  bridge takes them where the pads leave the trunk room and no other pad stands between, and falls back to
+  a trunk for each stretch. A trunk that may change layer now ends on the layer of its pads where a place
+  there is open. On 20 pairs of 13 public boards: coupled for 53 % of their length (50 % before); a USB
+  pair 63 % to 96 % (its designer 89 %), another 77 % to 90 % (96 %), an Ethernet pair 72 % to 96 %, and
+  the other pair of that board, which is not laid past its part there, 87 % to 75 % (its designer 58 %). All
+  119 boards complete and clean with and without zones.
 - Faster where pairs or guesses are in play. A net with a heading, and the trunk of a pair, are searched
   in two passes like any other: the first pass, which knows neither headings nor a trunk's layer changes,
   is their look-ahead, only no path is cut off by what it found. And the bridge no longer runs a whole

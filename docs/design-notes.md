@@ -213,6 +213,20 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     middle of it, as long a run on the other layer. That pair: 32 mm, two vias a leg, as the designer's.
     Nothing else among the 20 pairs changed, at the price of two vias or of one: where the others fall
     short of their designers it is at ends with three parts in a row, not for want of a layer.
+  * Past a part in the middle (17 November). The pairs short of their designers all had three parts in a
+    row, and the designers run the pair on between the two pads of the middle one. The trunk is now one
+    line through a point half way between those pads (`Terminal::pass`), each pad with a stub to its leg.
+    What it took beyond that: the trunk came through the gap the wrong way and turned round on the spot to
+    pass it the right way, which no two legs can follow, so the line between the two pads is closed to it
+    but for the lane it passes in; in a crowded place it spiralled through five layer changes and over
+    itself, so what is laid of a line is shut to the rest of it, and a line is given up beyond twice the
+    way it would go unheld and 10 mm (half as far again and 5 mm lost a pair that was worth laying); and the
+    hand that goes the other way round cost a million states a search to find dearer, so a hand is cut
+    off at what the one before it cost. A trunk that may change layer also took a place on the layer its
+    pads are not on, where its stubs then found no room for their vias: such places now take their turn
+    after those on the pads' own layer. 20 pairs: 50 % to 53 %. One pair is worse for it: where one pair
+    of a board is laid past its part and the other cannot be, the second is left less room than before.
+    Not done: a part whose pads are too near each other to pass between, with each leg through its own pad.
   * Where the time goes (17 November). On the slowest board with pairs the pairs' own searches are a
     tenth of a run; the board is routed seven times: for each stretch whose stubs find no way, and once
     more without pairs because ground was left unjoined, which no run could join without its zone. That
