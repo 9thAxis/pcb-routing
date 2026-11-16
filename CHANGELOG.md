@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fewer slivers at pads. A track ends on the exact place of its pad; where its last corner could not slide
+  there, a stub from the cell centre was left, shorter than the track is wide and at any angle. Now the end
+  of the last stretch turns onto the point (by seven degrees at the most), and a last step of a cell or two
+  onto the pad's cell is left out. On the 119 public boards, segments under 0.1 mm at pads go from 374 to 87
+  (the designers have 278), with every board still complete and clean. What is left stands where a via or a
+  branch shares the cell.
 - Long pads are left through an end. Ground can be dear to one net alone (`Dear::only`), and the KiCad bridge
   makes the ground beside the long sides of every pad at least 1.5 times as long as wide dear to the pad's
   own net (`--exit-cost MM`, 0.5 by default, 0 for none): a track runs out to the end of its pad before it

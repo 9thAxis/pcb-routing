@@ -56,8 +56,9 @@ All lengths are in mm. A misspelt field is an error, not ignored.
    if they come out no nearer each other than the pitch and within the track they were split from.
 8. **Ends** (`src/engine/ends.rs`). A pad seldom stands on a cell centre. The last corner of a track slides
    along the stretch before it so that the track ends on the pad's own point and keeps its directions. What
-   moves is tested off the grid against the fixed copper and the other nets. Where it may not move a short
-   stub is laid, and where that would come too near another net the track ends on its cell, within the pad.
+   moves is tested off the grid against the fixed copper and the other nets. Where the corner cannot slide,
+   the end of the last stretch turns onto the point by a few degrees. Where nothing may move a short stub is
+   laid, and where that would come too near another net the track ends on its cell, within the pad.
 9. **Attempts** (`src/router.rs`). `variants` runs differently ordered attempts side by side and keeps the
    best: complete before incomplete, then least missing, then the lowest sum of weighted lengths plus vias.
 

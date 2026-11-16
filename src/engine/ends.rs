@@ -4,9 +4,11 @@
 //! point with a piece of track leaves a crooked stub, shorter than the track is wide. Here the track is ended
 //! on the point without one where it can be: its last corner slides along the stretch that leads to it, so
 //! that both stretches keep their directions, or a track of one stretch is turned onto the point. What moves
-//! is tested against everything the track must keep away from, as it lies and off the grid. Where it may not
-//! move, or something of the net joins it where it would, the stub is laid, and where the stub would come too
-//! near another net the track ends on its cell, which is on the pad too.
+//! is tested against everything the track must keep away from, as it lies and off the grid. Where the corner
+//! may not slide, the end of the last stretch is turned onto the point by a few degrees, and a last step of
+//! a cell or two onto the pad's cell is left out. Where nothing may move, or something of the net joins it
+//! where it would, the stub is laid, and where the stub would come too near another net the track ends on
+//! its cell, which is on the pad too.
 
 use super::*;
 use crate::geom::{dist, dist_segment, dist_segments, inside, push};
@@ -65,6 +67,33 @@ fn moved(points: &[Pt], to: Pt, least: f64) -> Option<Vec<Pt>> {
     Some(out)
 }
 
+/// The points with the end of the last stretch turned onto `to`: the stretch is left `back` before the place
+/// where it passes `to` (half way there, on a stretch shorter than twice that; and eight times as far back
+/// as it passes the point by, if that is more, so that the piece turns by seven degrees at the most), and a
+/// straight piece leads from there to the point. For an end whose corner cannot slide: in place of a stub
+/// from the cell, shorter than the track is wide and at any angle, which is what is left where the stretch
+/// has run past the point too. None if the stretch is too short for it (less than `least` of it would be
+/// left).
+fn bent(points: &[Pt], to: Pt, back: f64, least: f64) -> Option<Vec<Pt>> {
+    let n = points.len();
+    let (v, c) = (points[n - 2], points[n - 1]);
+    let length = dist(v, c);
+    if length < 1e-9 {
+        return None;
+    }
+    let along = [(c[0] - v[0]) / length, (c[1] - v[1]) / length];
+    let by = [to[0] - v[0], to[1] - v[1]];
+    let (passes_at, aside) = (by[0] * along[0] + by[1] * along[1], (by[0] * along[1] - by[1] * along[0]).abs());
+    let leaves_at = passes_at - back.min(passes_at / 2.0).max(8.0 * aside);
+    if leaves_at < least || leaves_at > length {
+        return None;
+    }
+    let mut out = points[..n - 1].to_vec();
+    out.push([round6(v[0] + leaves_at * along[0]), round6(v[1] + leaves_at * along[1])]);
+    out.push(to);
+    Some(out)
+}
+
 /// True if `q` lies on the line through `points`.
 fn on(q: Pt, points: &[Pt]) -> bool {
     points.windows(2).any(|s| dist_segment(q, s[0], s[1]) < 1e-6)
@@ -92,11 +121,29 @@ impl Engine<'_> {
                     }
                     let copper = Copper { runs, dead };
                     let cell = points[points.len() - 1];
-                    let was = &points[points.len().saturating_sub(3)..];
-                    let new = (points.len() > 1 && !dead[n])
-                        .then(|| moved(&points, to, least))
-                        .flatten()
-                        .filter(|new| self.may_move(n, layer, was, &new[points.len() - was.len()..], mine(), &copper));
+                    let k = points.len();
+                    let was = &points[k.saturating_sub(3)..];
+                    let (width, step) = (self.p.nets[n].width, self.plan.grid.step);
+                    let back = (2.0 * width).max(6.0 * step);
+                    // The end of a stretch turned onto the point, if it may lie so: of the last stretch, or
+                    // (`before`) of the one before it, with the last left out.
+                    let turned = |before: bool| {
+                        let from = if before { k.checked_sub(3)? } else { k.checked_sub(2)? };
+                        let turned = bent(&points[from..from + 2], to, back, least)?;
+                        let may = self.may_move(n, layer, &points[from..], &turned, mine(), &copper);
+                        may.then(|| [&points[..from], &turned[..]].concat())
+                    };
+                    // A last stretch of a cell or two is no stretch to keep: the search stepped aside onto
+                    // the pad's cell. The one before it is turned onto the point.
+                    let stepped = k > 2 && dist(points[k - 2], cell) < (width / 2.0).max(2.5 * step);
+                    let slid = || {
+                        moved(&points, to, least)
+                            .filter(|new| self.may_move(n, layer, was, &new[k - was.len()..], mine(), &copper))
+                    };
+                    // Else the last corner slides; and where it cannot, the end of the last stretch turns.
+                    let new = (k > 1 && !dead[n])
+                        .then(|| stepped.then(|| turned(true)).flatten().or_else(slid).or_else(|| turned(false)))
+                        .flatten();
                     // Where the cell's centre is on the pad too, the track is joined there as well, and the stub
                     // is left out if it would come too near another net. The end of a pair's leg is met in any case.
                     let in_pad = self.in_pad(n, layer, cell, to);
@@ -257,6 +304,33 @@ mod tests {
     fn a_corner_between_stretches_nearly_in_line_does_not_slide() {
         // (the stretch before is a stub laid at the other end, at any angle: the corner would slide far)
         assert!(moved(&[[0.0, 0.02], [0.05, 0.0], [2.0, 0.0]], [2.03, 0.02], 0.05).is_none());
+    }
+
+    #[test]
+    fn the_end_of_a_stretch_turns_onto_a_point_beside_it() {
+        // along x to 2.0; the pad is 0.02 above the line, a little short of the cell
+        let new = bent(&[[0.0, 0.0], [2.0, 0.0]], [1.97, 0.02], 0.5, 0.05).unwrap();
+        assert!(near(new[0], [0.0, 0.0]) && near(new[1], [1.47, 0.0]) && near(new[2], [1.97, 0.02]), "{new:?}");
+        // further aside, it is left earlier: eight times as far back as aside
+        let new = bent(&[[0.0, 0.0], [2.0, 0.0]], [2.0, 0.1], 0.5, 0.05).unwrap();
+        assert!(near(new[1], [1.2, 0.0]), "{new:?}");
+    }
+
+    #[test]
+    fn a_point_beyond_the_end_of_a_stretch_is_met_from_its_end_or_before() {
+        // (the stretch before a last step aside: the point lies past its end)
+        let new = bent(&[[0.0, 0.0], [2.0, 0.0]], [2.05, 0.05], 0.5, 0.05).unwrap();
+        assert!(near(new[1], [1.55, 0.0]) && near(new[2], [2.05, 0.05]), "{new:?}");
+        assert!(bent(&[[0.0, 0.0], [2.0, 0.0]], [3.0, 0.05], 0.5, 0.05).is_none());
+    }
+
+    #[test]
+    fn a_stretch_too_short_to_turn_is_left_as_it_is() {
+        // (a stretch of 0.4: left half way, at 0.2; one of 0.1 would have to be left before it begins)
+        let new = bent(&[[1.6, 0.0], [2.0, 0.0]], [2.0, 0.02], 0.5, 0.05).unwrap();
+        assert!(near(new[1], [1.8, 0.0]), "{new:?}");
+        assert!(bent(&[[1.9, 0.0], [2.0, 0.0]], [2.0, 0.02], 0.5, 0.05).is_none());
+        assert!(bent(&[[2.0, 0.0], [2.0, 0.0]], [2.0, 0.02], 0.5, 0.05).is_none());
     }
 
     #[test]
