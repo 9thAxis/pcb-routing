@@ -36,9 +36,8 @@ pub(crate) struct Plan {
     /// Per net: the exact place of what stands in a cell (a hole, a terminal), where a track ending in that
     /// cell is to end. As it is before any pair is split: each attempt works on a copy.
     pub(super) exact: Vec<HashMap<u32, Pt>>,
-    /// Per net: the cells of its terminals that are left one way only (see `Terminal::heading`), each with
-    /// that direction as an index into the eight.
-    pub(super) heads: Vec<Vec<(u32, u8)>>,
+    /// Per net: its terminals that are left one way only (see `Terminal::heading`).
+    pub(super) heads: Vec<Vec<Head>>,
     /// Per net that is the trunk of a pair: for each of the eight directions, how many steps it runs straight
     /// before a layer change and as many after it. Its two vias stand side by side across its way (see
     /// `Pair::via_pitch`), and each leg needs that much of a straight run to come to its own and back.
@@ -91,14 +90,15 @@ impl Plan {
         }
         let fixed_free: Vec<Vec<u32>> = (0..p.nets.len()).map(|n| fixed.free(n).to_vec()).collect();
         let mut terms = Vec::new();
-        let mut heads: Vec<Vec<(u32, u8)>> = Vec::new();
+        let mut heads: Vec<Vec<Head>> = Vec::new();
         for (n, net) in p.nets.iter().enumerate() {
             let mut list = Vec::new();
             heads.push(Vec::new());
             for t in &net.terminals {
                 let at = relocate(p, &grid, &|cell| fixed.mask(n, cell), net, t);
                 if let (Ok(term), Some(way)) = (&at, t.heading) {
-                    heads[n].push((term.cell, super::nearest_dir(way) as u8));
+                    let way = super::nearest_dir(way) as u8;
+                    heads[n].push(Head { cell: term.cell, way, hand: t.hand, pass: t.pass });
                 }
                 // a track that ends on another cell than the terminal's own does not end at the terminal's point
                 if let (Ok(term), Some(own)) = (&at, grid.cell(t.xy)) {
@@ -165,6 +165,18 @@ pub(super) fn piece_of(net: &Net, t: usize) -> u64 {
 /// neighbouring pad than the centre does (a track wider than its own pad, on pads at a fine pitch).
 fn reaches_clear(fixed: &Fixed, grid: &Grid, n: usize, cell: usize, xy: Pt) -> bool {
     fixed.open_along(n, grid.xy(cell), xy, !fixed.mask(n, cell) & !VIA_BIT)
+}
+
+/// A terminal that is left one way only.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Head {
+    pub(super) cell: u32,
+    /// The way it is left, as an index into the eight directions.
+    pub(super) way: u8,
+    /// The hand it is on (see `Terminal::hand`), 0 for none.
+    pub(super) hand: u8,
+    /// Whether the net runs on through it (see `Terminal::pass`): it is then come to that way too.
+    pub(super) pass: bool,
 }
 
 /// Where a terminal of `net` is reached, or why it cannot be. Its own cell if a track of the net may end there

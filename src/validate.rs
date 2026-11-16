@@ -157,8 +157,7 @@ impl Problem {
                 format!("at most {} entries in one run, {} given", MOST_NETS - 1, self.nets.len()),
             ));
         }
-        let stub_keys: HashSet<&str> =
-            self.pairs.iter().flat_map(|p| p.stubs.iter().flatten().map(|s| s.as_str())).collect();
+        let stub_keys: HashSet<&str> = self.pairs.iter().flat_map(|p| p.stub_keys().map(|(_, key)| key)).collect();
         let mut keys = HashSet::new();
         let widest = (self.window[2] - self.window[0]).max(self.window[3] - self.window[1]).max(self.step);
         for (field, v) in
@@ -216,8 +215,33 @@ impl Problem {
             if apart < fewest {
                 return Err(invalid(at("terminals"), format!("at least {fewest} not yet joined, {apart} given")));
             }
+            // (an entry that passes terminals is one line: its first and its last piece are its ends)
+            let mut line: Vec<(Option<u32>, bool)> = Vec::new();
+            for term in &n.terminals {
+                match line.iter_mut().find(|(piece, _)| term.piece.is_some() && *piece == term.piece) {
+                    Some((_, pass)) if *pass != term.pass => {
+                        return Err(invalid(at("terminals"), "the terminals of one piece are all passed or none is"));
+                    }
+                    Some(_) => {}
+                    None => line.push((term.piece, term.pass)),
+                }
+            }
+            if line.iter().any(|&(_, pass)| pass) {
+                if line[0].1 || line[line.len() - 1].1 {
+                    return Err(invalid(
+                        at("terminals"),
+                        "a terminal that is passed is of neither the first piece nor the last: those are the ends",
+                    ));
+                }
+            }
             for (t, term) in n.terminals.iter().enumerate() {
                 point(at(&format!("terminals[{t}].xy")), term.xy)?;
+                if term.pass && term.heading.is_none() {
+                    return Err(invalid(
+                        at(&format!("terminals[{t}].pass")),
+                        "a terminal that is passed has a heading",
+                    ));
+                }
                 if let Some(way) = term.heading {
                     if !(way[0].is_finite() && way[1].is_finite() && way[0].hypot(way[1]) > 1e-9) {
                         return Err(invalid(at(&format!("terminals[{t}].heading")), "is no direction"));
@@ -269,10 +293,18 @@ impl Problem {
                     ends.push(terminal.piece);
                 }
             }
-            if ends.len() != 2 {
+            if ends.len() != 2 + pair.passes.len() {
                 return Err(invalid(
                     at("trunk"),
-                    "the trunk entry has two terminals, or the terminals of two pieces: where the pair gathers and where it parts",
+                    "the trunk entry has two terminals, or the terminals of two pieces: where the pair gathers and \
+                     where it parts; and between them one piece for each of `passes`, of terminals with `pass` set",
+                ));
+            }
+            let passed = trunk.terminals.iter().filter(|t| t.pass).map(|t| t.piece).collect::<HashSet<_>>().len();
+            if passed != pair.passes.len() {
+                return Err(invalid(
+                    at("passes"),
+                    format!("{} given, and the trunk entry passes {passed} of its pieces", pair.passes.len()),
                 ));
             }
             if !(pair.via_pitch >= 0.0 && pair.via_pitch.is_finite()) {
@@ -300,11 +332,13 @@ impl Problem {
             if !used.insert(pair.trunk.as_str()) {
                 return Err(invalid(at("trunk"), "is part of another pair too"));
             }
-            for end in 0..2 {
+            let at_ends = (0..2).map(|end| (format!("stubs[{end}]"), &pair.stubs[end]));
+            let passed = (0..pair.passes.len()).map(|pass| (format!("passes[{pass}]"), &pair.passes[pass]));
+            for (list, two) in at_ends.chain(passed) {
                 for leg in 0..2 {
-                    let field = at(&format!("stubs[{end}][{leg}]"));
-                    let stub = entry(field.clone(), &pair.stubs[end][leg])?;
-                    if !used.insert(pair.stubs[end][leg].as_str()) {
+                    let field = at(&format!("{list}[{leg}]"));
+                    let stub = entry(field.clone(), &two[leg])?;
+                    if !used.insert(two[leg].as_str()) {
                         return Err(invalid(field, "is used twice in the pairs"));
                     }
                     if !stub.last {

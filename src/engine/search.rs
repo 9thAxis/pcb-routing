@@ -1,6 +1,7 @@
 //! The path search, in two passes.
 
 use super::lookahead::Look;
+use super::plan::Head;
 use super::price::{Mode, Prices};
 use super::worker::{Search, Sweep, Worker, SHUT_COST, START, TAKEN, VIA};
 use super::*;
@@ -53,6 +54,8 @@ pub(super) struct Query<'q> {
     pub(super) from: Option<From<'q>>,
     /// Cells where the net has a hole to change layer on for nothing, beyond those it has from the start.
     pub(super) holes: &'q [u32],
+    /// The hand the net is being laid on (see `Terminal::hand`), if it has more than one.
+    pub(super) hand: Option<u8>,
 }
 
 impl Engine<'_> {
@@ -255,7 +258,7 @@ impl Engine<'_> {
     /// The search proper: the cheapest path with its corners and what it costs, after a first pass if
     /// `q.from` is given.
     fn search(&self, q: Query, worker: &mut Worker) -> Option<(Vec<u32>, f64)> {
-        let Query { net: n, mode, sources, goals, from, holes } = q;
+        let Query { net: n, mode, sources, goals, from, holes, hand } = q;
         let Worker { search: s, sweep, ground } = worker;
         let prices = Prices::new(self, ground, n, mode);
         let floor = self.look(n, goals, holes, sources);
@@ -335,9 +338,11 @@ impl Engine<'_> {
                 }
             }
         }
-        // (the direction a terminal in this cell is left by, if it is left one way only)
+        // (the terminal in this cell, if it is left one way only: of the hand being laid, where two hands
+        // have one in the same cell)
         let heads = &self.plan.heads[n];
-        let head_at = |cell: usize| heads.iter().find(|head| head.0 as usize == cell).map(|head| head.1 as usize);
+        let ours = |head: &&Head| head.hand == 0 || hand.map_or(true, |hand| head.hand == hand);
+        let head_at = |cell: usize| heads.iter().filter(ours).find(|head| head.cell as usize == cell);
         let mut found = NONE;
         while let Some((_, u)) = s.heap.pop() {
             let ui = u as usize;
@@ -351,14 +356,15 @@ impl Engine<'_> {
             let (l, c) = (at / hw, at % hw);
             // the look-ahead is 0 at a goal (and at little else), so this test is rarely made in full
             let head = if heads.is_empty() { None } else { head_at(c) };
-            // (a terminal that is left one way is come to against that way)
-            let comes_right = head.map_or(true, |way| dir == OPPOSITE[way]);
+            // (a terminal that is left one way is come to against that way; one the net runs on through, that way)
+            let comes_right = head
+                .map_or(true, |head| dir == if head.pass { head.way as usize } else { OPPOSITE[head.way as usize] });
             if ahead_here == 0.0 && comes_right && goals.iter().any(|g| g.cell as usize == c && g.on(l)) {
                 found = u;
                 break;
             }
             // (and a path that begins on it sets out that way, on the layer it is on)
-            let sets_out = head.filter(|_| s.node[ui].prev == START);
+            let sets_out = head.filter(|_| s.node[ui].prev == START).map(|head| head.way as usize);
             let gu = s.node[ui].g as f64;
             let step_cost = lc[l];
             let relax = |v: usize, cost: f64, how: u8, s: &mut Search| {

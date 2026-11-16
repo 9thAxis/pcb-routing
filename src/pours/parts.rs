@@ -126,6 +126,7 @@ mod tests {
                 turn: 0,
                 hand: 0,
                 heading: None,
+                pass: false,
             })
             .collect();
         entry

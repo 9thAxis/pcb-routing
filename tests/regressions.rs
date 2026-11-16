@@ -146,6 +146,51 @@ fn a_pair_changes_layer_through_two_vias_side_by_side() {
     refused(v, "pairs[0] (in1).trunk");
 }
 
+/// A part in the middle of a pair, a pad of each net with room between them: the pair runs on between the
+/// two, side by side all the way, with a short branch from either leg to its pad.
+#[test]
+fn a_pair_runs_on_between_two_pads_it_passes() {
+    let p = pair_problem(0.05, [[1.0, 2.5], [1.0, 3.5], [9.0, 2.5], [9.0, 3.5]], [[2.0, 3.0], [8.0, 3.0]]);
+    let mut v = serde_json::to_value(&p).unwrap();
+    // the part stands off the straight way, its pads 1.4 mm apart
+    let (above, below) = ([5.0, 4.0], [5.0, 5.4]);
+    let stub = |key: &str, net: &str, at: [f64; 2]| {
+        let mut stub = v["nets"][1].clone();
+        (stub["key"], stub["net"], stub["terminals"][0]["xy"]) = (json!(key), json!(net), json!(at));
+        stub
+    };
+    let (p2, m2) = (stub("p2", "P", above), stub("m2", "M", below));
+    v["nets"].as_array_mut().unwrap().extend([p2, m2]);
+    v["nets"][0]["terminals"] = json!([
+        {"xy": [2.0, 3.0], "layers": ["F"], "piece": 0},
+        {"xy": [5.0, 4.7], "layers": ["F"], "piece": 2, "pass": true, "heading": [1.0, 0.0]},
+        {"xy": [8.0, 3.0], "layers": ["F"], "piece": 1},
+    ]);
+    v["pairs"][0]["passes"] = json!([["p2", "m2"]]);
+    let s = route(&problem(v.clone())).unwrap();
+    assert_eq!(s.status, Status::Routed, "{}", s.message);
+    let far = |p: [f64; 2], q: [f64; 2]| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt();
+    let length = |points: &[[f64; 2]]| points.windows(2).map(|w| far(w[0], w[1])).sum::<f64>();
+    for (key, pad, beside) in [("in1/P", above, 4.55), ("in1/M", below, 4.85)] {
+        let net = s.nets.iter().find(|n| n.key == key).unwrap();
+        // the leg itself goes from end to end, past the pad on its own side of the trunk's line
+        let leg = &net.tracks[0].points;
+        assert!(leg[0][0] < 2.6 && leg[leg.len() - 1][0] > 7.4, "{key}: the leg {leg:?}");
+        assert!(leg.iter().any(|q| far(*q, [5.0, beside]) < 1e-6), "{key}: no corner by its pad in {leg:?}");
+        // and a branch no longer than the way from the pad to it joins the two
+        let branch = net.tracks[1..].iter().find(|t| t.points.iter().any(|q| far(*q, pad) < 1e-6));
+        let branch = branch.unwrap_or_else(|| panic!("{key}: nothing at its pad {pad:?}"));
+        assert!(length(&branch.points) < 0.75, "{key}: a branch of {:?}", branch.points);
+        assert!(branch.points.iter().any(|q| far(*q, [5.0, beside]) < 1e-6), "{key}: {:?}", branch.points);
+    }
+    // a terminal is passed one way, and the pads it is passed between are named
+    v["nets"][0]["terminals"][1].as_object_mut().unwrap().remove("heading");
+    refused(v.clone(), "terminals[1].pass");
+    v["nets"][0]["terminals"][1]["heading"] = json!([1.0, 0.0]);
+    v["nets"][0]["terminals"][1]["pass"] = json!(false);
+    refused(v, "pairs[0] (in1).passes");
+}
+
 fn refused(v: Value, field: &str) {
     match route(&problem(v)) {
         Err(Error::Invalid { field: f, reason }) => {

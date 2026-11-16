@@ -162,11 +162,9 @@ impl Engine<'_> {
             if let Ok(t) = self.index(&pair.trunk) {
                 part[t] = Some((k, None));
             }
-            for stubs in &pair.stubs {
-                for (leg, key) in stubs.iter().enumerate() {
-                    if let Ok(n) = self.index(key) {
-                        part[n] = Some((k, Some(leg)));
-                    }
+            for (leg, key) in pair.stub_keys() {
+                if let Ok(n) = self.index(key) {
+                    part[n] = Some((k, Some(leg)));
                 }
             }
         }
@@ -262,7 +260,7 @@ impl Engine<'_> {
         }
     }
 
-    /// Add each net of each split pair: its leg and its two stubs (`pieces`, per pair and leg).
+    /// Add each net of each split pair: its leg and its stubs (`pieces`, per pair and leg).
     fn pair_nets(&self, mut pieces: Vec<[(Vec<Track>, Vec<Pt>); 2]>, nets: &mut Vec<NetResult>) {
         let p = self.p;
         for (k, pair) in p.pairs.iter().enumerate() {

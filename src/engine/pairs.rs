@@ -8,7 +8,8 @@ impl Engine<'_> {
     /// Split the settled trunk of pair `k` into its two legs. The trunk's claim (one wide track) is given up
     /// and each leg is claimed as the shape it is, held by the stub at its first end; every stub gets the end
     /// of its leg as second terminal. Where the trunk changes layer each leg is drawn aside to a via of its
-    /// own, the two side by side across the trunk's way. Returns the four stub entries, to be laid next.
+    /// own, the two side by side across the trunk's way; where it passes a pad of each net, the pad's stub
+    /// gets the nearest point of its leg. Returns the stub entries, to be laid next: the four of its ends first.
     pub(super) fn split(&mut self, k: usize) -> Result<Vec<usize>, String> {
         let pair = &self.p.pairs[k];
         let trunk = self.index(&pair.trunk)?;
@@ -16,7 +17,17 @@ impl Engine<'_> {
             [self.index(&pair.stubs[0][0])?, self.index(&pair.stubs[0][1])?],
             [self.index(&pair.stubs[1][0])?, self.index(&pair.stubs[1][1])?],
         ];
-        let conn = self.laid.nets[trunk].conns.first().ok_or_else(|| format!("{}: trunk not laid", pair.key))?.clone();
+        // (a trunk that passes pads on its way was laid stretch by stretch, each from where the last ended)
+        let stretches = &self.laid.nets[trunk].conns;
+        if stretches.len() != pair.passes.len() + 1 {
+            let why = if stretches.is_empty() { "trunk not laid" } else { "trunk not laid all the way" };
+            return Err(format!("{}: {why}", pair.key));
+        }
+        let mut conn: Vec<u32> = Vec::new();
+        for stretch in stretches {
+            let met = usize::from(!conn.is_empty() && conn.last() == stretch.first());
+            conn.extend_from_slice(&stretch[met..]);
+        }
         // the trunk's line on each layer it runs on, in turn
         let mut centres: Vec<(usize, Vec<Pt>)> = Vec::new();
         for &state in &conn {
@@ -64,6 +75,40 @@ impl Engine<'_> {
         through(&lines, &mut legs, [by(0) > 0.0, by(1) > 0.0], &sizes).map_err(|why| format!("{}: {why}", pair.key))?;
         // Nothing else tests the legs: they are laid only if they are what they are meant to be.
         fit(&lines, &legs, &sizes).map_err(|why| format!("{}: {why}", pair.key))?;
+        // Where the pair passes a pad of each net, the pad's stub joins its leg where the leg comes nearest
+        // the pad: the leg gets a corner there for the stub to end on.
+        let mut passed: Vec<usize> = Vec::new();
+        // each stub with its leg, and where on the leg it ends: the run and the point
+        let mut joints: Vec<(usize, usize, usize, Pt)> = Vec::new();
+        for pass in &pair.passes {
+            for (leg, key) in pass.iter().enumerate() {
+                let n = self.index(key)?;
+                let (run, at) = branch_at(&mut legs, leg, pad(n))
+                    .ok_or_else(|| format!("{}: no place on its leg for the stub {key}", pair.key))?;
+                joints.push((n, leg, run, at));
+                passed.push(n);
+            }
+        }
+        for leg in 0..2 {
+            for end in 0..2 {
+                let run = if end == 0 { 0 } else { legs.runs.len() - 1 };
+                let line = &legs.runs[run].1[leg];
+                joints.push((stubs[end][leg], leg, run, if end == 0 { line[0] } else { *line.last().unwrap() }));
+            }
+        }
+        let mut footholds: Vec<(usize, usize, u32, Pt)> = Vec::new();
+        for &(n, leg, run, at) in &joints {
+            let (layer, lines) = &legs.runs[run];
+            let cell =
+                self.foothold(n, stubs[0][1 - leg], at, *layer, &lines[1 - leg], pair.leg_width).ok_or_else(|| {
+                    format!(
+                        "{}: no free cell on a leg at {:?} for its stub {} (the legs are closer than the rules let \
+                     a stub come, or fixed copper is in the way)",
+                        pair.key, at, self.p.nets[n].key
+                    )
+                })?;
+            footholds.push((n, *layer, cell, at));
+        }
         self.unclaim(trunk);
         for leg in 0..2 {
             let holder = stubs[0][leg];
@@ -74,60 +119,53 @@ impl Engine<'_> {
                 .collect();
             held.posts = legs.vias.iter().map(|vias| vias[leg]).collect();
             self.claim(holder);
-            for end in 0..2 {
-                let (layer, lines) = if end == 0 { &legs.runs[0] } else { &legs.runs[legs.runs.len() - 1] };
-                let layer = *layer;
-                let at = if end == 0 { lines[leg][0] } else { *lines[leg].last().unwrap() };
-                let n = stubs[end][leg];
-                // The stub arrives on the cell nearest the leg's end from which a track of the stub still keeps
-                // its distance from the other leg, and joins the end itself from there.
-                let other = &lines[1 - leg];
-                let (me, them) = (&self.p.nets[n], &self.p.nets[stubs[0][1 - leg]]);
-                let rules = &self.p.rules;
-                let apart = if me.quiet != them.quiet && rules.quiet_clearance_mm > 0.0 {
-                    rules.quiet_clearance_mm
-                } else {
-                    rules.new_clearance_mm
-                };
-                let need = me.width / 2.0 + apart + pair.leg_width / 2.0;
-                let step = self.p.step;
-                let mut best: Option<(f64, u32)> = None;
-                for dj in -3i32..=3 {
-                    for di in -3i32..=3 {
-                        let q = [at[0] + di as f64 * step, at[1] + dj as f64 * step];
-                        let Some(cell) = self.plan.grid.cell(q) else { continue };
-                        if self.shared.fixed.mask(n, cell) & (1 << layer) != 0 {
-                            continue;
-                        }
-                        let c = self.plan.grid.xy(cell);
-                        let clear = other.windows(2).map(|w| dist_segment(c, w[0], w[1])).fold(f64::INFINITY, f64::min);
-                        if clear < need + 1e-6 {
-                            continue;
-                        }
-                        let far = dist(c, at);
-                        if best.map_or(true, |b| far < b.0 - 1e-9) {
-                            best = Some((far, cell as u32));
-                        }
-                    }
-                }
-                let (_, cell) = best.ok_or_else(|| {
-                    format!(
-                        "{}: no free cell at the end of a leg at {:?} for its stub {} (the legs are closer than \
-                         the rules let a stub come, or fixed copper is in the way)",
-                        pair.key, at, me.key
-                    )
-                })?;
-                self.pairs.extra_terms[n] = vec![Term { cell, layers: 1 << layer }];
-                self.exact[n].insert(cell, at);
-            }
+        }
+        for (n, layer, cell, at) in footholds {
+            self.pairs.extra_terms[n] = vec![Term { cell, layers: 1 << layer }];
+            self.exact[n].insert(cell, at);
         }
         self.pairs.legs[k] = Some(legs);
-        Ok(vec![stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]])
+        Ok([stubs[0][0], stubs[0][1], stubs[1][0], stubs[1][1]].into_iter().chain(passed).collect())
     }
 
-    /// The stub entries of pair `k`, those of the first end first.
+    /// Where the stub `n` comes to its leg at the point `at` of it on `layer`: the cell nearest that point
+    /// from which a track of the stub still keeps its distance from the other leg (`other`, its line there; a
+    /// stub of it is `of_other`). The stub joins the point itself from there. None if there is no such cell.
+    fn foothold(&self, n: usize, of_other: usize, at: Pt, layer: usize, other: &[Pt], leg_width: f64) -> Option<u32> {
+        let (me, them) = (&self.p.nets[n], &self.p.nets[of_other]);
+        let rules = &self.p.rules;
+        let apart = if me.quiet != them.quiet && rules.quiet_clearance_mm > 0.0 {
+            rules.quiet_clearance_mm
+        } else {
+            rules.new_clearance_mm
+        };
+        let need = me.width / 2.0 + apart + leg_width / 2.0;
+        let step = self.p.step;
+        let mut best: Option<(f64, u32)> = None;
+        for dj in -3i32..=3 {
+            for di in -3i32..=3 {
+                let q = [at[0] + di as f64 * step, at[1] + dj as f64 * step];
+                let Some(cell) = self.plan.grid.cell(q) else { continue };
+                if self.shared.fixed.mask(n, cell) & (1 << layer) != 0 {
+                    continue;
+                }
+                let c = self.plan.grid.xy(cell);
+                let clear = other.windows(2).map(|w| dist_segment(c, w[0], w[1])).fold(f64::INFINITY, f64::min);
+                if clear < need + 1e-6 {
+                    continue;
+                }
+                let far = dist(c, at);
+                if best.map_or(true, |b| far < b.0 - 1e-9) {
+                    best = Some((far, cell as u32));
+                }
+            }
+        }
+        best.map(|found| found.1)
+    }
+
+    /// The stub entries of pair `k`: those of the first end, those of the last, then those of the pads it passes.
     pub(super) fn stubs_of(&self, k: usize) -> Vec<usize> {
-        self.p.pairs[k].stubs.iter().flatten().filter_map(|key| self.index(key).ok()).collect()
+        self.p.pairs[k].stub_keys().filter_map(|(_, key)| self.index(key).ok()).collect()
     }
 
     /// Take pair `k` out after its trunk could not be split: the trunk and whatever the split had begun give
@@ -144,10 +182,17 @@ impl Engine<'_> {
         self.pairs.legs[k] = None;
     }
 
-    /// Lay the four stubs of a pair, one after the other, each fixed for the next. Which goes first can decide
-    /// whether all four fit, so the orders are tried in turn until one does. If none does, they are laid in
-    /// the order given as far as each goes, and what is missing is listed with each.
-    pub(super) fn lay_stubs(&mut self, four: &[usize]) {
+    /// Lay the stubs of a pair (the four of its ends, then those of the pads it passes), one after the other,
+    /// each fixed for the next. Those of the pads it passes go first: they are a step or two long and have
+    /// one way to go. Which of the four goes first can decide whether all fit, so the orders are tried in turn
+    /// until one does. If none does, they are laid in the order given as far as each goes, and what is missing
+    /// is listed with each.
+    pub(super) fn lay_stubs(&mut self, stubs: &[usize]) {
+        let (four, passed) = stubs.split_at(4);
+        for &n in passed {
+            let state = self.lay_fixed(n);
+            self.place(n, state);
+        }
         for code in 0..24 {
             let mut ok = true;
             for n in nth_order(four, code) {
@@ -270,6 +315,39 @@ fn through(centres: &[&[Pt]], legs: &mut Legs, on_left: [bool; 2], sizes: &Sizes
         legs.vias.push(vias);
     }
     Ok(())
+}
+
+/// Where a branch from `pad` comes to leg `leg`: the point of the leg nearest the pad, as (the run it is on,
+/// the point). The leg gets a corner there, if it has none. None if the leg has no length.
+fn branch_at(legs: &mut Legs, leg: usize, pad: Pt) -> Option<(usize, Pt)> {
+    let mut best: Option<(f64, usize, usize, Pt)> = None;
+    for (run, (_, lines)) in legs.runs.iter().enumerate() {
+        for (k, w) in lines[leg].windows(2).enumerate() {
+            let (dx, dy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
+            let length = dx * dx + dy * dy;
+            if length < 1e-18 {
+                continue;
+            }
+            let t = (((pad[0] - w[0][0]) * dx + (pad[1] - w[0][1]) * dy) / length).clamp(0.0, 1.0);
+            let q = [round6(w[0][0] + t * dx), round6(w[0][1] + t * dy)];
+            if best.map_or(true, |b| dist(q, pad) < b.0 - 1e-9) {
+                best = Some((dist(q, pad), run, k, q));
+            }
+        }
+    }
+    let (_, run, k, q) = best?;
+    let line = &mut legs.runs[run].1[leg];
+    if dist(line[k], q) > 1e-6 && dist(line[k + 1], q) > 1e-6 {
+        line.insert(k + 1, q);
+    }
+    let q = if dist(line[k], q) <= 1e-6 {
+        line[k]
+    } else if dist(line[k + 1], q) <= 1e-6 {
+        line[k + 1]
+    } else {
+        q
+    };
+    Some((run, q))
 }
 
 /// The line that runs `by` to the left of a line (to its right if negative), its corners where the stretches

@@ -157,6 +157,9 @@ impl Engine<'_> {
             }
             return state;
         }
+        let line = net.terminals.iter().any(|t| t.pass);
+        // (a line has no branches)
+        let branches = net.branch_anywhere && !line;
         let mut tree: Vec<u32> = Vec::new();
         let add_term = |tree: &mut Vec<u32>, t: Term| tree.extend(t.states(space));
         joined.iter().for_each(|&t| add_term(&mut tree, t));
@@ -171,14 +174,32 @@ impl Engine<'_> {
                 begun = islands;
                 first_of_tree = state.conns.len();
             }
-            let from = if net.branch_anywhere && state.conns.len() > first_of_tree {
-                From::Copper
+            let from =
+                if branches && state.conns.len() > first_of_tree { From::Copper } else { From::Terminals(&joined[..]) };
+            // (a line is joined piece by piece in the order of its terminals: see `Terminal::pass`)
+            let next: Vec<Term> = if line {
+                let of_next = left.iter().zip(&left_piece).filter(|&(_, &piece)| piece == left_piece[0]);
+                of_next.map(|(&term, _)| term).collect()
             } else {
-                From::Terminals(&joined[..])
+                Vec::new()
             };
-            let query = Query { net: n, mode, sources: &tree, goals: &left, from: Some(from), holes: &holes };
+            let goals = if line { &next[..] } else { &left[..] };
+            let query = Query { net: n, mode, sources: &tree, goals, from: Some(from), holes: &holes, hand };
             let path = match self.find(query, w) {
                 Some(path) => path,
+                None if line => {
+                    let places = |terms: &[Term]| -> Vec<Pt> {
+                        terms.iter().map(|t| self.plan.grid.xy(t.cell as usize)).collect()
+                    };
+                    state.failed.push(format!(
+                        "{}: no path on from {:?} to any of {:?} past the fixed copper{}",
+                        net.key,
+                        places(&joined),
+                        places(goals),
+                        if hard { " and the other nets" } else { "" }
+                    ));
+                    break;
+                }
                 None => {
                     // What is left cannot be joined to what has been laid. It is said so, with both sides (either
                     // may be the one shut in), and the rest is joined among itself as far as it goes, starting
@@ -219,7 +240,7 @@ impl Engine<'_> {
             for v in new_vias {
                 w.ground.flag_hole(&self.plan.grid, v, shut);
                 state.vias.push(v);
-                if net.branch_anywhere {
+                if branches {
                     // a via is copper of the net on every layer: a later connection may start from it on any
                     for l in 0..nl {
                         let at = space.state(l, v as usize) as u32;
@@ -233,11 +254,17 @@ impl Engine<'_> {
                 }
             }
             w.ground.price_holes(own_hole, net.no_vias);
-            if net.branch_anywhere {
+            if branches {
                 tree.extend_from_slice(&path);
             }
-            reached.iter().for_each(|&t| add_term(&mut tree, t));
-            joined.extend(reached);
+            if line {
+                // (what is joined next begins where this ended, and nowhere else)
+                tree = vec![end];
+                joined = vec![Term { cell: ec as u32, layers: 1 << el }];
+            } else {
+                reached.iter().for_each(|&t| add_term(&mut tree, t));
+                joined.extend(reached);
+            }
             state.conns.push(path);
         }
         state

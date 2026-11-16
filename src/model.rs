@@ -51,7 +51,8 @@ pub struct Problem {
 ///
 /// The pair is laid as one wide track, the `trunk`: an entry of [`Problem::nets`] with two terminals (the
 /// points where the pair gathers and where it parts, both on the grid; or several for each, as two pieces,
-/// see [`Terminal::piece`]: the trunk then runs between whichever two come cheapest), an electrical net name
+/// see [`Terminal::piece`]: the trunk then runs between whichever two come cheapest; and between them any
+/// it is to pass on its way, see [`Terminal::pass`]), an electrical net name
 /// of its own (so that copper of either real net is an obstacle to it), a `width` of at least
 /// `pitch + leg_width`, and `no_vias` set unless the pair may change layer (see `via_pitch`).
 ///
@@ -87,6 +88,22 @@ pub struct Pair {
     /// keeps [`Rules::hole_centre_mm`] from either of the two; the pair's own two keep it too.
     #[serde(default)]
     pub via_pitch: f64,
+    /// Keys of the stub entries of pads the pair passes between its two ends, `passes[k][leg]`: a pad of
+    /// each net with the trunk led between them (a terminal of the trunk entry with [`Terminal::pass`] set,
+    /// half way between the two). Each is an entry as the stubs are, with its pad as only terminal, and is
+    /// joined to its leg where the leg comes nearest the pad: the pair runs on side by side, with a branch
+    /// to either pad.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passes: Vec<[String; 2]>,
+}
+
+impl Pair {
+    /// The keys of all its stub entries, each with the leg it is of: those at its two ends, then those of
+    /// the pads it passes.
+    pub(crate) fn stub_keys(&self) -> impl Iterator<Item = (usize, &str)> {
+        let all = self.stubs.iter().chain(&self.passes);
+        all.flat_map(|two| two.iter().enumerate().map(|(leg, key)| (leg, key.as_str())))
+    }
 }
 
 /// A piece of copper already on the board.
@@ -268,10 +285,21 @@ pub struct Terminal {
     /// away from its two pads, a leg before each, and not sideways with one leg behind the other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading: Option<Pt>,
+    /// The entry runs on through it: it is come to along its `heading`, which it must have, and left the
+    /// same way. An entry with such terminals is laid as one line with no branches: its pieces are joined in
+    /// the order they come in its terminals, each from where the one before was reached, so the first and the
+    /// last piece are its two ends and those between are passed. For the trunk of a [`Pair`] that passes
+    /// between two pads of its nets on its way (see [`Pair::passes`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pass: bool,
 }
 
 fn is_zero(hand: &u8) -> bool {
     *hand == 0
+}
+
+fn is_false(set: &bool) -> bool {
+    !*set
 }
 
 /// One piece of work: terminals to be joined, and the rules for the copper that joins them.
