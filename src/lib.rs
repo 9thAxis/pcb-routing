@@ -55,8 +55,8 @@
 //!
 //! # How it works
 //!
-//! See the [README of the repository](https://github.com/9thAxis/pcb-routing#how-it-works) for the method, the
-//! evidence it was accepted on, and measurements.
+//! See [how it works](https://github.com/9thAxis/pcb-routing/blob/main/docs/how-it-works.md) for the method,
+//! and [the benchmarks](https://github.com/9thAxis/pcb-routing/blob/main/docs/benchmarks.md) for measurements.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

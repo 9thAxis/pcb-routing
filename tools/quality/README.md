@@ -3,7 +3,7 @@
 Passing the design rule check says nothing of how a route reads to a designer. These tools measure routed
 KiCad boards against a reference routing of the same board, usually the designer's own: how much track, how
 many vias and corners, how close to other copper, whether buses stay together, how capacitors reach their
-pins, how tracks leave pads. The "What the routes look like" table in the main README is computed with them.
+pins, how tracks leave pads. The tables of [docs/benchmarks.md](../../docs/benchmarks.md) are computed with them.
 
 The measures are counts and ratios of geometry. They do not replace the design rule check and they do not
 know what the circuit needs; read them as a comparison between routings of the same boards, not as marks.
