@@ -2,16 +2,17 @@
 
 ## Unreleased
 
-- Where the parts of a board belong together (`tools/kicad_floorplan.py`, read only). Parts are tied by the
-  signal nets they share (supplies and grounds tie nothing: they reach everything). Within each sheet of the
-  schematic the parts tied to each other are a group; groups are gathered into zones and zones into larger
-  ones, level by level (Louvain), whatever sheet they are drawn on. For each zone: its parts, the ground they
-  need, the nets within it, where its parts stand; then what flows between zones, the sheets whose parts are
-  tied apart, and the parts that stand far from their zone. It moves nothing.
-  The first level is the power (`bridge/power.py`): each ground is a domain of the parts that stand on it; a
-  supply is a net that two or more capacitors bypass to a ground, whatever it is called; a part on two
-  grounds stands between two domains; two supplies with a part on both are one fed from the other. The
-  zones are found within each domain, and supplies and grounds tie nothing.
+- Where the parts of a board belong (`pcb_routing::floorplan`, the `floorplan` question, and
+  `tools/kicad_floorplan.py`; read only). First the power: each ground is a domain of the parts that stand
+  on it; a supply is a net that two or more capacitors bypass to a ground, whatever it is called; a part on
+  two grounds stands between two domains; two supplies with a part on both are one fed from the other.
+  Within a domain, parts are tied by the signal nets they share: the parts of a sheet tied to each other are
+  a group, and groups are gathered into zones level by level (Louvain), whatever sheet they are drawn on.
+  Then each zone is given ground: the board is cut across its longer side, the zones in the order they are
+  pulled along it (by their ties, and by what already has its ground), each lot with the share its parts
+  need, down to the smallest zones. Nothing is fixed where it stands; a connector or a switch moves with its
+  zone and pulls it to an edge. For each zone: the ground it is given and how its parts stand to that today.
+  The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;
   and the nets in a designer's order: within one block, the pairs between blocks, clocks and what is

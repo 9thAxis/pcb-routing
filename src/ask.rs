@@ -1,7 +1,7 @@
 //! The questions a front end puts to the crate, as JSON: what the `pcb-routing ask` command takes and answers.
 //!
 //! They are the functions of [`pours`](crate::pours) (zones) and [`pairs`](crate::pairs) (differential pairs), each
-//! for several nets, pads or tracks at once.
+//! for several nets, pads or tracks at once, and [`floorplan`](crate::floorplan) (where the parts belong).
 
 use crate::error::{invalid, Error};
 use crate::model::{Net, NetResult, Pt};
@@ -62,6 +62,8 @@ pub enum Ask {
         /// The pads.
         pads: Vec<TiePad>,
     },
+    /// [`floorplan`](crate::floorplan::floorplan): answered with the floorplan.
+    Floorplan(crate::floorplan::Board),
     /// [`ties`], for several tracks at once: answered with true or false for each.
     Ties {
         /// The pieces of zone the tracks name.
@@ -145,6 +147,8 @@ pub enum Answer {
     TieTargets(Vec<Vec<Pt>>),
     /// To [`Ask::Ties`]: per track, whether it ties its pad.
     Ties(Vec<bool>),
+    /// To [`Ask::Floorplan`].
+    Floorplan(Box<crate::floorplan::Floorplan>),
 }
 
 /// The pieces of zone that indices name, as polygons; an error names `field` if one of them names none.
@@ -186,6 +190,7 @@ pub fn answer(ask: &Ask) -> Result<Answer, Error> {
             };
             Answer::Pairs(pairs.iter().enumerate().map(planned).collect::<Result<_, _>>()?)
         }
+        Ask::Floorplan(board) => Answer::Floorplan(Box::new(crate::floorplan::floorplan(board)?)),
         Ask::TieTargets { fills, pads } => {
             let targets = |(k, pad): (usize, &TiePad)| {
                 let fill = pieces(fills, &pad.fill, format!("pads[{k}].fill"))?;

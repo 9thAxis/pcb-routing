@@ -10,6 +10,9 @@ What it says:
 - the power of the board: its grounds, each a domain of the parts that stand on it, with its supplies (a net
   that two or more capacitors bypass to the ground, whatever it is called); the parts that stand on two
   grounds, which belong on the gap between two domains; and the supplies that a part joins;
+- for each zone the ground it is given on the board (the board is cut in two again and again, the zones parted
+  so that as little as may be is tied across each cut and each has the room its parts need; a connector or a
+  switch stays where it stands and pulls its zone to itself), and how far its parts stand from that today;
 - within each domain, the zones: sheets of the schematic that are tied to each other by signal nets more than to the
   rest, and zones of such zones, each with its parts, the ground they need, the nets that stay within it and
   where its parts stand now;
@@ -21,12 +24,11 @@ What it says:
 
 Supplies and grounds tie no parts together here: they reach everything.
 """
-import argparse, dataclasses, json, os, sys
+import argparse, json, os, sys
 from pathlib import Path
 
 from bridge.engine import Engine, EngineFailed
-from bridge.floorplan import floorplan, floorplan_told
-from bridge.power import power_told
+from bridge.floorplan import floorplan, floorplan_told, power_told
 from bridge.intent import read_hints
 from bridge.kicad import KicadBoard, ignored_checks, kicad_is_here, load_board
 from bridge.rules import Rules, Settings
@@ -52,16 +54,16 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     settings = Settings(hints=hints, guesses=not args.no_guesses)
+    engine = Engine(args.engine, 0, None, None)
     try:
-        picture = KicadBoard(load_board(args.board), ignored_checks(args.board), Engine(args.engine, 0, None, None).ask,
-                             settings.pours).read()
+        picture = KicadBoard(load_board(args.board), ignored_checks(args.board), engine.ask, settings.pours).read()
+        found = floorplan(picture, Rules.of(picture, settings), engine.ask)
     except EngineFailed as failure:
         print(failure, file=sys.stderr)
         return 2
-    plan = floorplan(picture, Rules.of(picture, settings))
-    print("\n".join(power_told(plan.power, picture, every=args.all) + ["", ""] + floorplan_told(plan, args.depth, every=args.all)))
+    print("\n".join(power_told(found, every=args.all) + ["", ""] + floorplan_told(found, args.depth, every=args.all)))
     if args.json:
-        Path(args.json).write_text(json.dumps(dataclasses.asdict(plan), indent=1))
+        Path(args.json).write_text(json.dumps(found, indent=1))
     return 0
 
 

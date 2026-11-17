@@ -65,6 +65,7 @@ pub mod ask;
 pub mod board;
 mod engine;
 mod error;
+pub mod floorplan;
 mod geom;
 mod grid;
 pub mod mask;
