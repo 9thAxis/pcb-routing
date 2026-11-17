@@ -361,6 +361,8 @@ const VIA_MM: f64 = 10.0;
 const LOCAL_MM: f64 = 5.0;
 /// What a mm between a part and the point it is to stand near counts for, as so many mm of track.
 const NEAR: f64 = 5.0;
+/// How far down each zone of a cut is tried in the other lot.
+const MOVE_LEVELS: usize = 1;
 /// A ground is cut across its shorter side only if that side is this much of the longer.
 const SQUARISH: f64 = 0.4;
 /// How far down the cuts are tried across the shorter side of their ground.
@@ -666,6 +668,8 @@ struct Ground<'a> {
     turned: &'a BTreeSet<String>,
     /// The cuts made across the shorter side of their ground, not the longer.
     crossed: &'a BTreeSet<String>,
+    /// Zones put in the first lot of a cut (true) or the second, whatever they are pulled to: by (cut, zone).
+    sided: &'a BTreeMap<(String, String), bool>,
     /// And the tracks a cut's road is asked to hold at the least.
     asked: &'a BTreeMap<String, usize>,
 }
@@ -807,6 +811,17 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
     }
     let mut first = vec![false; count];
     order[..best.0].iter().for_each(|&z| first[z] = true);
+    // (a zone is in the other lot where that was found the better, as long as neither lot is left empty)
+    let this_cut = cut_of(zones);
+    let as_pulled = first.clone();
+    for z in 0..count {
+        if let Some(&side) = on.sided.get(&(this_cut.clone(), zones[z].name.clone())) {
+            first[z] = side;
+        }
+    }
+    if first.iter().all(|&f| f) || !first.iter().any(|&f| f) {
+        first = as_pulled;
+    }
     let share = (0..count).filter(|&z| first[z]).map(|z| area[z]).sum::<f64>() / total;
     // Between the two lots a road is kept free of parts: what crosses the cut runs along it to where it is
     // going. It is as wide as the tracks that cross take side by side on the layers there are (a supply as
@@ -818,7 +833,6 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
     let (signals, supplies) =
         (nets.iter().filter(|n| crosses(n)).count(), on.rails.iter().filter(|n| crosses(n)).count());
     let length = if wide { rect[2] - rect[0] } else { rect[3] - rect[1] };
-    let this_cut = cut_of(zones);
     let lanes =
         (signals as f64 + RAIL_LANES * supplies as f64).max(on.asked.get(&this_cut).copied().unwrap_or(0) as f64);
     // (a road along a cut across the board's width runs up and down, and so on: it has the layers that run so;
@@ -1423,7 +1437,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .collect();
     // One laying out: ground for every zone, the roads, and a way along them for every net between zones.
     type Laid = (Vec<Work>, Vec<Road>, Travel, Vec<(String, f64, Vec<String>, f64)>);
-    let lay = |turned: &BTreeSet<String>, crossed: &BTreeSet<String>, asked: &BTreeMap<String, usize>| -> Laid {
+    type Sided = BTreeMap<(String, String), bool>;
+    let lay = |turned: &BTreeSet<String>,
+               crossed: &BTreeSet<String>,
+               sided: &Sided,
+               asked: &BTreeMap<String, usize>|
+     -> Laid {
         let mut on = Ground {
             board,
             nets: &nets,
@@ -1434,6 +1453,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             shift: shifts[0],
             turned,
             crossed,
+            sided,
             asked,
         };
         let mut lots: Vec<Vec<Work>> = (0..boards.len()).map(|_| Vec::new()).collect();
@@ -1537,7 +1557,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             + TALL_MM * too_tall
     };
     let (mut turned, mut crossed, mut asked) = (BTreeSet::new(), BTreeSet::new(), BTreeMap::new());
-    let mut best = lay(&turned, &crossed, &asked);
+    let mut sided: Sided = BTreeMap::new();
+    let mut best = lay(&turned, &crossed, &sided, &asked);
     let first = best.2.clone();
     // A road asked for more than it holds is made to hold it, and the board laid out again: a few times, for
     // a wider road moves what is beside it.
@@ -1555,7 +1576,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let held = asked.entry(cut).or_insert(0);
             *held = (*held).max(lanes);
         }
-        best = lay(&turned, &crossed, &asked);
+        best = lay(&turned, &crossed, &sided, &asked);
     }
     // Then each cut in turn, the widest roads first, tried three other ways: its two lots changed over, made
     // across the shorter side of its ground, and both; what leaves the whole the better stays. The cuts that
@@ -1578,15 +1599,59 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 if way & 2 == 2 && !across.remove(&cut) {
                     across.insert(cut.clone());
                 }
-                let now = lay(&other, &across, &asked);
+                let now = lay(&other, &across, &sided, &asked);
                 if weight(&now) < weight(&best) - 1e-6 {
                     (turned, crossed, best, better) = (other, across, now, true);
+                }
+            }
+        }
+        // And at the cuts that part the most of the board, each zone in turn is put in the other lot.
+        let wide_cuts: Vec<(String, [Vec<String>; 2])> = best
+            .1
+            .iter()
+            .filter(|road| road.level <= MOVE_LEVELS)
+            .map(|road| (road.cut.clone(), road.between.clone()))
+            .collect();
+        for (cut, lots) in wide_cuts {
+            for (side, names) in lots.iter().enumerate() {
+                for name in names {
+                    let mut other = sided.clone();
+                    other.insert((cut.clone(), name.clone()), side == 1);
+                    let now = lay(&turned, &crossed, &other, &asked);
+                    if weight(&now) < weight(&best) - 1e-6 {
+                        (sided, best, better) = (other, now, true);
+                    }
                 }
             }
         }
         if !better {
             break;
         }
+    }
+    // (what the changes asked of the roads is seen to once more)
+    for _ in 0..WIDENINGS {
+        let over: Vec<(String, usize)> = best
+            .1
+            .iter()
+            .filter(|road| !road.gap && road.used > road.lanes)
+            .map(|road| (road.cut.clone(), road.used + road.used / 4 + 1))
+            .collect();
+        if over.is_empty() {
+            break;
+        }
+        for (cut, lanes) in over {
+            let held = asked.entry(cut).or_insert(0);
+            *held = (*held).max(lanes);
+        }
+        let now = lay(&turned, &crossed, &sided, &asked);
+        // (kept if less is left over than before: that is what it was done for)
+        let left_over = |laid: &Laid| -> usize {
+            laid.1.iter().filter(|road| !road.gap).map(|road| road.used.saturating_sub(road.lanes)).sum()
+        };
+        if left_over(&now) >= left_over(&best) {
+            break;
+        }
+        best = now;
     }
     let (laid, mut roads, travel, tall) = best;
     let top = laid;
