@@ -39,6 +39,8 @@ them. The bridge is in this repository, not in the crate.
   their middle.
 * **Buses** kept together, **decoupling capacitors** joined to their pin, **long pads** left through an end.
 * **Hints**: an optional file with roles, a width for a current, a clearance for a voltage, layers, pairs.
+* **Advice on placement**: where a part stands the wrong way round for a pair, the bridge says which to turn
+  (never a connector or a switch); it moves nothing.
 * Partial results: what cannot be joined is named, and everything else is laid.
 * Deterministic: the same problem gives the same answer, whatever the thread count.
 
@@ -55,7 +57,7 @@ KiCad 10's design rule check as the judge:
 
 | | Boards clean and complete | Time per board (small / medium / large) |
 |---|---|---|
-| pcb-routing | 119 of 119 | 0.6 s / 2.3 s / 19 s |
+| pcb-routing | 119 of 119 | 0.6 s / 2.5 s / 16 s |
 | KiCadRoutingTools | 108 | 0.7 s / 2.0 s / 8.2 s |
 | FreeRouting 2.5 | 50 (107 with its narrowed tracks forgiven) | 2.8 s / 3.7 s / 12 s |
 
@@ -64,7 +66,7 @@ Against the boards' own designers, on the 111 boards all three routers completed
 | | Track length | Vias per 100 connections | Corners per connection |
 |---|---|---|---|
 | The designer | 1.00 | 18.7 | 2.5 |
-| pcb-routing | 0.90 | 10.0 | 1.8 |
+| pcb-routing | 0.90 | 9.9 | 1.8 |
 | KiCadRoutingTools | 0.90 | 36.9 | 1.8 |
 | FreeRouting | 0.95 | 15.8 | 2.7 |
 

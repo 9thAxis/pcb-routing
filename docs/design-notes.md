@@ -189,7 +189,7 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     more without any: one board of the 13 was left incomplete by its pairs before that.
   * Two faults of the engine's split came out, both at corners (see the changelog): a leg that ran
     backwards beside a stretch too short for it, and the outside of a sharp corner beyond the trunk.
-  * Which way round (17 November). Three things found by drawing the pairs that failed, not by reading
+  * Which way round (16 November). Three things found by drawing the pairs that failed, not by reading
     their messages: a trunk offered places only towards the far end had to pass one pad to reach the other
     where the two stand in line with it; a trunk that came to its place from the side ended with one leg
     behind the other; and a pair cannot be turned over on one layer, so the ways out of its two ends go
@@ -203,7 +203,7 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
   halves differ by 15 % (designers 19 %, without pairs 16 %). The price is time on the boards where a pair
   is not laid at once: each new beginning is a run of the whole lot. Still open: untwisting
   at an end; coupling up to the pads; impedance.
-  * Changing layer (17 November). A USB pair that the designer took under the board through two vias at
+  * Changing layer (16 November). A USB pair that the designer took under the board through two vias at
     either end (34 mm) went 71 mm round it on the top. The trunk may now change layer: through one via as
     wide as two of the legs' side by side (`Pair::via_pitch`), at the price of two, which the split makes
     into the two with each leg drawn aside to its own at 45 degrees. First the trunk was only held to its
@@ -213,7 +213,7 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     middle of it, as long a run on the other layer. That pair: 32 mm, two vias a leg, as the designer's.
     Nothing else among the 20 pairs changed, at the price of two vias or of one: where the others fall
     short of their designers it is at ends with three parts in a row, not for want of a layer.
-  * Past a part in the middle (17 November). The pairs short of their designers all had three parts in a
+  * Past a part in the middle (16 November). The pairs short of their designers all had three parts in a
     row, and the designers run the pair on between the two pads of the middle one. The trunk is now one
     line through a point half way between those pads (`Terminal::pass`), each pad with a stub to its leg.
     What it took beyond that: the trunk came through the gap the wrong way and turned round on the spot to
@@ -234,7 +234,7 @@ connected completely; 1,105 nets the designer routed with tracks; 2,723 connecti
     A part mounted the other way round (its pads changed over against the ends) is still offered to be
     passed: the trunk must loop round it, which the limit on how far round mostly refuses, at the cost of
     a run.
-  * Where the time goes (17 November). On the slowest board with pairs the pairs' own searches are a
+  * Where the time goes (16 November). On the slowest board with pairs the pairs' own searches are a
     tenth of a run; the board is routed seven times: for each stretch whose stubs find no way, and once
     more without pairs because ground was left unjoined, which no run could join without its zone. That
     last run is now spared where the unjoined net is not joined by itself either, and the searches of
