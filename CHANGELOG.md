@@ -8,6 +8,10 @@
   ones, level by level (Louvain), whatever sheet they are drawn on. For each zone: its parts, the ground they
   need, the nets within it, where its parts stand; then what flows between zones, the sheets whose parts are
   tied apart, and the parts that stand far from their zone. It moves nothing.
+  The first level is the power (`bridge/power.py`): each ground is a domain of the parts that stand on it; a
+  supply is a net that two or more capacitors bypass to a ground, whatever it is called; a part on two
+  grounds stands between two domains; two supplies with a part on both are one fed from the other. The
+  zones are found within each domain, and supplies and grounds tie nothing.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;
   and the nets in a designer's order: within one block, the pairs between blocks, clocks and what is

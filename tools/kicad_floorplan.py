@@ -7,7 +7,10 @@ Run it with the Python that ships with KiCad, as kicad_route.py.
 
 What it says:
 
-- the zones of the board: sheets of the schematic that are tied to each other by signal nets more than to the
+- the power of the board: its grounds, each a domain of the parts that stand on it, with its supplies (a net
+  that two or more capacitors bypass to the ground, whatever it is called); the parts that stand on two
+  grounds, which belong on the gap between two domains; and the supplies that a part joins;
+- within each domain, the zones: sheets of the schematic that are tied to each other by signal nets more than to the
   rest, and zones of such zones, each with its parts, the ground they need, the nets that stay within it and
   where its parts stand now;
 - what flows between zones: the nets from one to another. The heaviest flows say which zones are to be
@@ -23,6 +26,7 @@ from pathlib import Path
 
 from bridge.engine import Engine, EngineFailed
 from bridge.floorplan import floorplan, floorplan_told
+from bridge.power import power_told
 from bridge.intent import read_hints
 from bridge.kicad import KicadBoard, ignored_checks, kicad_is_here, load_board
 from bridge.rules import Rules, Settings
@@ -32,7 +36,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("board")
     parser.add_argument("--all", action="store_true", help="every flow, misfit and stray, and the parts of each zone")
-    parser.add_argument("--depth", type=int, default=2, help="how many levels of zones to tell (default 2)")
+    parser.add_argument("--depth", type=int, default=3, help="how many levels of zones to tell (default 3: domains, the zones within them, and theirs)")
     parser.add_argument("--json", help="write the floorplan here as JSON")
     parser.add_argument("--hints", help="the hints file (default: BOARD.routing.json beside the board, if there)")
     parser.add_argument("--no-guesses", action="store_true", help="take nothing from the names of nets and parts")
@@ -55,7 +59,7 @@ def main(argv=None):
         print(failure, file=sys.stderr)
         return 2
     plan = floorplan(picture, Rules.of(picture, settings))
-    print("\n".join(floorplan_told(plan, args.depth, every=args.all)))
+    print("\n".join(power_told(plan.power, picture, every=args.all) + ["", ""] + floorplan_told(plan, args.depth, every=args.all)))
     if args.json:
         Path(args.json).write_text(json.dumps(dataclasses.asdict(plan), indent=1))
     return 0

@@ -11,6 +11,8 @@ everything), and groups that are tied more within than without are found by the 
 import math
 from dataclasses import dataclass, field
 
+from .power import power
+
 
 def gathered(groups, ties):
     """Groups of nodes after one round of local moves: each group, as one, goes to the neighbouring group that
@@ -92,23 +94,25 @@ class Zone:
 
 @dataclass
 class Floorplan:
-    zones: list  # [Zone], the top level, the largest first
+    zones: list  # [Zone]: the domains (the parts on one ground), each with the zones within it
     flows: list  # [(zone, zone, nets between them, of which pairs)], the heaviest first
     apart: list  # [(sheet, [(the parts of one group of it, the top zone they are in)])]: sheets drawn as one, tied apart
     strays: list  # [(part, its zone, mm from the middle of the zone's placed parts, how far the zone reaches)]
+    power: object = None  # the domains and supplies these zones stand on (see power.py)
 
 
-def signal_nets(picture, rules):
-    """The nets that say which parts work together: not supplies, grounds or what a zone joins; each as the
-    parts it has pads on."""
-    found = {}
+def signal_nets(picture, rules, found):
+    """The nets that say which parts work together: not the grounds and supplies of `found` (see power.py),
+    nor what the names or a zone make one; each as the parts it has pads on."""
+    rails = {domain.ground for domain in found.domains} | {rail.net for domain in found.domains for rail in domain.rails}
+    nets = {}
     for net, groups in picture.groups.items():
-        if rules.intent(net).role in ("supply", "ground") or net in picture.pours:
+        if net in rails or rules.intent(net).role in ("supply", "ground") or net in picture.pours:
             continue
         parts = sorted({picture.pads[i].part for group in groups for i in group if picture.pads[i].part})
         if len(parts) > 1:
-            found[net] = parts
-    return found
+            nets[net] = parts
+    return nets
 
 
 def _tied(nets, of):
@@ -138,70 +142,92 @@ def floorplan(picture, rules):
     """The zones of a board, what flows between them, the sheets whose parts are tied apart, and the parts that
     stand far from their zone (see the module).
 
-    The smallest zones are the groups within each sheet (its parts that are tied to each other more than to
-    its other parts; a part that no signal net ties to anything goes with the largest). Those are gathered
-    into zones, and zones into larger ones, level by level, whatever sheet they are drawn on: the filter of
-    an input, drawn with the input, comes out with the converter it feeds."""
+    First the domains: the parts on one ground (see power.py). A part on two grounds is counted with the one
+    most of its pads are on, and named among what stands between domains. Within a domain, the smallest zones
+    are the groups within each sheet (its parts that are tied to each other more than to its other parts; a
+    part that no signal net ties to anything goes with the largest). Those are gathered into zones, and zones
+    into larger ones, level by level, whatever sheet they are drawn on: the filter of an input, drawn with the
+    input, comes out with the converter it feeds."""
     x0, y0, x1, y1 = picture.box
     on_board = lambda part: x0 <= picture.parts[part].at[0] <= x1 and y0 <= picture.parts[part].at[1] <= y1
     sheet_of = {part: picture.parts[part].sheet or "(on no sheet)" for part in picture.parts}
-    nets = signal_nets(picture, rules)
+    found = power(picture)
+    nets = signal_nets(picture, rules, found)
     between_parts = _tied(nets, {part: part for part in picture.parts})
 
-    atoms, atom_of = [], {}  # the groups within the sheets: (sheet, its parts)
-    for sheet in sorted(set(sheet_of.values())):
-        parts = sorted(part for part in picture.parts if sheet_of[part] == sheet)
-        own = {pair: weight for pair, weight in between_parts.items() if sheet_of[pair[0]] == sheet == sheet_of[pair[1]]}
-        tied = {part for pair in own for part in pair}
-        groups = communities([part for part in parts if part in tied], own) or [[]]
-        groups[0] = sorted(groups[0] + [part for part in parts if part not in tied])
-        for group in groups:
-            atom_of.update({part: len(atoms) for part in group})
-            atoms.append((sheet, sorted(group)))
-
-    def zone(name, members, inside=()):
-        parts = sorted(part for atom in members for part in atoms[atom][1])
+    def zone(name, parts, inside=()):
         among = set(parts)
         at = [picture.parts[part].at for part in parts if on_board(part)]
         box = [min(p[0] for p in at), min(p[1] for p in at), max(p[0] for p in at), max(p[1] for p in at)] if at else None
-        return Zone(name=name, sheets=sorted({atoms[atom][0] for atom in members}), parts=parts, placed=len(at), box=box,
-                    area=round(_ground(picture, among)), inside=list(inside),
+        return Zone(name=name, sheets=sorted({sheet_of[part] for part in parts}), parts=sorted(parts), placed=len(at),
+                    box=box, area=round(_ground(picture, among)), inside=list(inside),
                     within=sum(1 for of_net in nets.values() if set(of_net) <= among))
 
-    def named(members):
-        """A zone by the sheet most of its parts are drawn on; and by its first parts, if it is not all of it."""
-        count = {}
-        for atom in members:
-            count[atoms[atom][0]] = count.get(atoms[atom][0], 0) + len(atoms[atom][1])
-        sheet = max(sorted(count), key=lambda name: count[name])
-        whole = count[sheet] == sum(1 for part in sheet_of if sheet_of[part] == sheet)
-        mine = sorted(part for atom in members for part in atoms[atom][1] if atoms[atom][0] == sheet)
-        some = "" if whole else f" ({', '.join(mine[:3])}{' ...' if len(mine) > 3 else ''})"
-        more = len(count) - 1
-        return f"{sheet}{some}" + (f" and {more} more" if more else "")
+    apart, named_first = [], {}
 
-    ties = _tied(nets, atom_of)
-    levels = [[[atom] for atom in range(len(atoms)) if atoms[atom][1]]]
-    while True:
-        found = gathered(levels[-1], ties)
-        if len(found) == len(levels[-1]) or len(found) < 2:
-            break
-        levels.append(found)
-    lower = [zone(named(members), members) for members in levels[0]]
-    kept = {tuple(members): z for members, z in zip(levels[0], lower)}
-    for level in levels[1:]:
-        made = {}
-        for members in level:
-            inside = [z for under, z in kept.items() if set(under) <= set(members)]
-            made[tuple(members)] = inside[0] if len(inside) == 1 else zone(named(members), members, inside)
-        kept = made
-    top = sorted(kept.items(), key=lambda item: -len(item[1].parts))
-    zones = [z for _, z in top]
+    def within(domain_parts):
+        """The zones of the parts of one domain: the top level, each with those it is made of."""
+        mine = set(domain_parts)
+        atoms, atom_of = [], {}  # the groups within the sheets: (sheet, its parts)
+        for sheet in sorted({sheet_of[part] for part in mine}):
+            parts = sorted(part for part in mine if sheet_of[part] == sheet)
+            own = {pair: weight for pair, weight in between_parts.items()
+                   if pair[0] in mine and pair[1] in mine and sheet_of[pair[0]] == sheet == sheet_of[pair[1]]}
+            tied = {part for pair in own for part in pair}
+            groups = communities([part for part in parts if part in tied], own) or [[]]
+            groups[0] = sorted(groups[0] + [part for part in parts if part not in tied])
+            for group in groups:
+                atom_of.update({part: len(atoms) for part in group})
+                atoms.append((sheet, sorted(group)))
 
-    home = {atom: z.name for members, z in top for atom in members}
+        def named(members):
+            """A zone by the sheet most of its parts are drawn on; and by its first parts, if it is not all of it."""
+            count = {}
+            for atom in members:
+                count[atoms[atom][0]] = count.get(atoms[atom][0], 0) + len(atoms[atom][1])
+            sheet = max(sorted(count), key=lambda name: count[name])
+            whole = count[sheet] == sum(1 for part in sheet_of if sheet_of[part] == sheet)
+            of_sheet = sorted(part for atom in members for part in atoms[atom][1] if atoms[atom][0] == sheet)
+            some = "" if whole else f" ({', '.join(of_sheet[:3])}{' ...' if len(of_sheet) > 3 else ''})"
+            more = len(count) - 1
+            return f"{sheet}{some}" + (f" and {more} more" if more else "")
+
+        ties = _tied({net: [part for part in parts if part in mine] for net, parts in nets.items()}, atom_of)
+        levels = [[[atom] for atom in range(len(atoms)) if atoms[atom][1]]]
+        while True:
+            gathered_now = gathered(levels[-1], ties)
+            if len(gathered_now) == len(levels[-1]) or len(gathered_now) < 2:
+                break
+            levels.append(gathered_now)
+        parts_of = lambda members: [part for atom in members for part in atoms[atom][1]]
+        kept = {tuple(members): zone(named(members), parts_of(members)) for members in levels[0]}
+        for level in levels[1:]:
+            made = {}
+            for members in level:
+                inside = [z for under, z in kept.items() if set(under) <= set(members)]
+                made[tuple(members)] = inside[0] if len(inside) == 1 else zone(named(members), parts_of(members), inside)
+            kept = made
+        # A sheet whose groups are not gathered together at the first level: drawn as one, tied apart.
+        first = levels[1] if len(levels) > 1 else levels[0]
+        first_of = {atom: g for g, members in enumerate(first) for atom in members}
+        for sheet in sorted({sheet_of[part] for part in mine}):
+            of_sheet = [atom for atom in range(len(atoms)) if atoms[atom][0] == sheet and atoms[atom][1]]
+            if len({first_of[atom] for atom in of_sheet}) > 1:
+                apart.append((sheet, [(atoms[atom][1], named(first[first_of[atom]])) for atom in of_sheet]))
+        return sorted(kept.values(), key=lambda z: -len(z.parts))
+
+    zones = [zone(domain.ground, domain.parts, within(domain.parts)) for domain in found.domains]
+    if found.adrift:
+        zones.append(zone("(on no ground)", found.adrift, within(found.adrift)))
+
+    # What flows: between the zones just under the domains, and between the domains themselves.
+    home = {}
+    for top in zones:
+        for inner in top.inside or [top]:
+            home.update({part: f"{top.name}: {inner.name}" if top.inside else top.name for part in inner.parts})
     flows = {}
     for net, parts in nets.items():
-        reached = sorted({home[atom_of[part]] for part in parts})
+        reached = sorted({home[part] for part in parts if part in home})
         paired = isinstance(rules.intent(net).pair, str)
         for i, a in enumerate(reached):
             for b in reached[i + 1:]:
@@ -209,28 +235,19 @@ def floorplan(picture, rules):
                 flows[(a, b)] = (count + 1, pairs + (1 if paired else 0))
     flows = sorted(((a, b, count, pairs // 2) for (a, b), (count, pairs) in flows.items()), key=lambda f: (-f[2], f[0], f[1]))
 
-    # A sheet whose groups are not gathered together at the first level: drawn as one, tied apart.
-    first = levels[1] if len(levels) > 1 else levels[0]
-    first_of = {atom: g for g, members in enumerate(first) for atom in members}
-    name_of = {g: named(members) for g, members in enumerate(first)}
-    apart = []
-    for sheet in sorted(set(sheet_of.values())):
-        mine = [atom for atom in range(len(atoms)) if atoms[atom][0] == sheet and atoms[atom][1]]
-        if len({first_of[atom] for atom in mine}) > 1:
-            apart.append((sheet, [(atoms[atom][1], name_of[first_of[atom]]) for atom in mine]))
-
     # A part that stands far from the rest of its zone: further from their middle than the zone reaches.
     strays = []
-    for z in zones:
-        at = {part: picture.parts[part].at for part in z.parts if on_board(part)}
-        if len(at) < 4:
-            continue
-        middle = [sorted(p[k] for p in at.values())[len(at) // 2] for k in (0, 1)]
-        far = sorted(math.dist(p, middle) for p in at.values())
-        reach = far[(3 * len(far)) // 4] * 2  # (twice what three quarters of its parts are within)
-        strays += [(part, z.name, round(math.dist(p, middle), 1), round(reach, 1)) for part, p in sorted(at.items())
-                   if math.dist(p, middle) > reach]
-    return Floorplan(zones=zones, flows=flows, apart=apart, strays=strays)
+    for top in zones:
+        for z in top.inside or [top]:
+            at = {part: picture.parts[part].at for part in z.parts if on_board(part)}
+            if len(at) < 4:
+                continue
+            middle = [sorted(p[k] for p in at.values())[len(at) // 2] for k in (0, 1)]
+            far = sorted(math.dist(p, middle) for p in at.values())
+            reach = far[(3 * len(far)) // 4] * 2  # (twice what three quarters of its parts are within)
+            strays += [(part, z.name, round(math.dist(p, middle), 1), round(reach, 1)) for part, p in sorted(at.items())
+                       if math.dist(p, middle) > reach]
+    return Floorplan(zones=zones, flows=flows, apart=apart, strays=strays, power=found)
 
 
 def floorplan_told(plan, depth=2, every=False):
