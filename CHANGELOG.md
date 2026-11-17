@@ -31,7 +31,11 @@
   stack, and how much a board clears above what lies under it), how high parts stand (`heights`, by the
   beginning of a footprint's name) and what a part is to stand near (`parts`, `near`): what is tied across
   two boards is pulled to the same place of the stack, a zone with a part too tall for the ground under
-  another board is laid out elsewhere where that can be done (and named where it cannot). For each zone: the ground it is given and
+  another board is laid out elsewhere where that can be done (and named where it cannot). The bridge does
+  not hold the plan to the height between boards (the standoffs are chosen for it): it says what the ground
+  under a board needs, beside what the stack has. What is weighed now counts how far the nets between
+  domains reach as the boards stack and how far a part is from the point it is to be near; and each of the
+  larger cuts is also tried across the shorter side of its ground. For each zone: the ground it is given and
   how its parts stand to that today.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they

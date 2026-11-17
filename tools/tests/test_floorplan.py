@@ -86,11 +86,17 @@ class Floorplan(unittest.TestCase):
         k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), lambda question: asked.append(question) or {})
         (q,) = asked
         self.assertEqual((q["regions"], q["shifts"]), ([[0, 0, 14, 10], [15, 0, 20, 10]], [[0.0, 0.0], [-6.0, 0.0]]))
-        # the right board lies over x 9 to 14 of the left one: no part taller than 6 mm there
-        self.assertEqual(q["limits"], [dict(rect=[9.0, 0, 14.0, 10], height=6.0)])
+        # the height under the right board is not held to (the standoffs are chosen for it): nothing is asked
+        self.assertNotIn("limits", q)
         parts = {part["name"]: part for part in q["parts"]}
         self.assertEqual((parts["U9"]["height"], parts["R10"]["height"], parts["J1"]["near"], "near" in parts["U1"]),
                          (10.5, 0.5, [3.0, 4.0], False))
+        # but the plan says what the ground under it needs: the right board lies over x 9 to 14 of the left one
+        found = k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), support.ask)
+        (under,) = found["clear"]
+        self.assertEqual((under["rect"], under["has"]), ([9.0, 0, 14.0, 10], 6.0))
+        self.assertIn(under["needs"], (0.5, 10.5))
+        self.assertTrue(any(line.startswith("  under another board (x 9 to 14") for line in k.floorplan_told(found)))
         for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)})):
             with tempfile.TemporaryDirectory() as tmp:
                 Path(tmp, "b.routing.json").write_text(json.dumps(wrong))

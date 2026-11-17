@@ -99,10 +99,28 @@ def floorplan(picture, rules, ask):
         near = [what["near"] for pattern, what in (hints.parts if hints else [])
                 if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
         part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}))
-    return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked, stack=stack_of(picture, rules),
+    # The height between two boards of a stack is not held to: it is what the standoffs are chosen for. The
+    # plan is made as if there were room, and says how much each such ground then needs (`clear` in the hints
+    # is what the stack has now, to compare).
+    found = ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked, stack=stack_of(picture, rules),
                     regions=boards if len(boards) > 1 else [], keepouts=shut,
-                    shifts=shifts if len(boards) > 1 else [], limits=limits,
+                    shifts=shifts if len(boards) > 1 else [],
                     pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1)))
+    if not isinstance(found, dict) or "zones" not in found:
+        return found
+    stands = {part["name"]: part.get("height") for part in parts}
+    def smallest(zone):
+        return [zone] if not zone["inside"] else [leaf for inner in zone["inside"] for leaf in smallest(inner)]
+    leaves = [leaf for zone in found["zones"] for leaf in smallest(zone)]
+    meet = lambda a, b: min(a[2], b[2]) - max(a[0], b[0]) > 1e-6 and min(a[3], b[3]) - max(a[1], b[1]) > 1e-6
+    found["clear"] = []
+    for limit in limits:
+        under = [(stands[name], name, leaf["name"]) for leaf in leaves if meet(leaf["rect"], limit["rect"])
+                 for name in leaf["parts"] if stands.get(name) is not None]
+        tallest = max(under, default=None)
+        found["clear"].append(dict(rect=limit["rect"], has=limit["height"], needs=tallest[0] if tallest else 0.0,
+                                   part=tallest[1] if tallest else None, zone=tallest[2] if tallest else None))
+    return found
 
 
 def power_told(found, every=False):
@@ -189,7 +207,9 @@ def floorplan_told(found, depth=2, every=False):
                       "more than they hold; then those roads were widened, and each cut tried with its two sides changed over"]
     if travel:
         each = travel["vias"] / travel["nets"] if travel["nets"] else 0.0
-        lines += ["", f"every net between zones of one domain given a way along the roads: {travel['nets']} nets, "
+        lines += ["", f"between domains (through the parts on the gaps, and from board to board): {travel['through_mm']:.0f} mm "
+                      f"of reach; the parts that are to stand near a point are {travel['near_mm']:.0f} mm from it in all"]
+        lines += [f"every net between zones of one domain given a way along the roads: {travel['nets']} nets, "
                       f"{travel['mm']:.0f} mm, {travel['vias']} layer changes ({each:.1f} a net); {travel['over']} roads asked "
                       f"for more than they hold; {travel['through']} nets go from domain to domain through the parts on "
                       f"the gaps; {travel['stranded']} could be given no way"]
@@ -198,6 +218,11 @@ def floorplan_told(found, depth=2, every=False):
                      f"{', '.join(parts[:8])}{' ...' if len(parts) > 8 else ''} ({highest:g} mm)")
     if found.get("tall"):
         lines.append(f"  (with {max(t[3] for t in found['tall']):g} mm clear above that ground, none of them would be too tall)")
+    for under in found.get("clear", []):
+        x0, y0, x1, y1 = under["rect"]
+        lines.append(f"  under another board (x {x0:.0f} to {x1:.0f}, y {y0:.0f} to {y1:.0f}): the tallest part given ground "
+                     f"there is {under['part']} at {under['needs']:g} mm ({under['zone']}); the stack has {under['has']:g} mm "
+                     f"clear there now" + ("" if under["needs"] <= under["has"] else ": it needs more"))
     if found.get("stranded"):
         lines.append(f"  given no way: {', '.join(found['stranded'])}")
     lines += ["", "what flows between zones (the nets from one to the other; the heaviest are to be neighbours):"]
