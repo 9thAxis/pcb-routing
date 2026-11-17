@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Where the parts of a board belong together (`tools/kicad_floorplan.py`, read only). Parts are tied by the
+  signal nets they share (supplies and grounds tie nothing: they reach everything). Within each sheet of the
+  schematic the parts tied to each other are a group; groups are gathered into zones and zones into larger
+  ones, level by level (Louvain), whatever sheet they are drawn on. For each zone: its parts, the ground they
+  need, the nets within it, where its parts stand; then what flows between zones, the sheets whose parts are
+  tied apart, and the parts that stand far from their zone. It moves nothing.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;
   and the nets in a designer's order: within one block, the pairs between blocks, clocks and what is

@@ -76,9 +76,9 @@ def command():
 def bridge():
     """Everything the bridge defines, under one name: the modules of tools/bridge and the command line."""
     line = command()
-    from bridge import advice, beside, decompose, steps, engine, exits, intent, kicad, lengths, names, outcome, pairs, picture, problem, questions, route, rules, ties
+    from bridge import advice, beside, decompose, floorplan, steps, engine, exits, intent, kicad, lengths, names, outcome, pairs, picture, problem, questions, route, rules, ties
     merged = types.SimpleNamespace()
-    for module in (names, lengths, picture, intent, rules, questions, beside, exits, advice, pairs, decompose, steps, problem, engine, outcome, ties,
+    for module in (names, lengths, picture, intent, rules, questions, beside, exits, advice, pairs, decompose, floorplan, steps, problem, engine, outcome, ties,
                    route, kicad, line):
         for name, value in vars(module).items():
             if not name.startswith("__") and not isinstance(value, types.ModuleType):
