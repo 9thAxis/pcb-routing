@@ -7,7 +7,12 @@
   and the nets in a designer's order: within one block, the pairs between blocks, clocks and what is
   sensitive, buses, the other nets between blocks, the supplies that tracks must join. Each step with its
   nets, its open connections, their least length and the ground its pads span; and the nets that wait for a
-  part to be placed. A first piece: it lays nothing and plans no layers or ways yet.
+  part to be placed. It lays nothing.
+- One step at a time (`tools/kicad_step.py`). A step of that plan is tried on its pads' own layers, on those
+  with each other signal layer and on every signal layer (an inner layer that zones cover is a plane and
+  carries no routes), each try measured (nets left, track against the least it could be, vias, how much of a
+  pair runs side by side), the best kept, saved as a new board and checked with KiCad's design rule check
+  against the board it began from. Then it stops.
 - A few nets of a large board (bridge). A run looks at the ground round the pads it is to join (half of
   what they span on every side, 10 mm at the least), not at the whole board: twelve nets of a board of
   235 mm by 109 mm on six layers, which was refused as too large a grid, take 6 s a run.

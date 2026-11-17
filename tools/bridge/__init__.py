@@ -15,6 +15,7 @@ them is mended. Only `kicad` knows KiCad's files and its `pcbnew` module.
     pairs      differential pairs: which nets are laid as one, and their entries
     advice     what turning a part would make easier to lay: said, never done
     decompose  a board's work as steps, in the order a designer would take them: read only
+    steps      one step of that work: the layers it is tried on, what a try came to
     problem    a picture and the rules as the router's problem
     engine     the pcb-routing program: runs and questions
     outcome    what a run did to a board
