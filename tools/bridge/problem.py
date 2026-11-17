@@ -51,7 +51,11 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     """
     every = picture.layers
     layers = rules.routing_layers(every)
-    window = rules.window(picture.box)
+    # (the ground round what is to be joined, not the whole of a large board)
+    wanted = picture.unjoined(only) if stubs is None else []
+    about = ([picture.pads[i].at for name in wanted for group in picture.groups[name] for i in group]
+             + [at for _, thermal, targets in stubs or [] for at in [picture.pads[thermal.pad].at] + list(targets)])
+    window = rules.window(rules.about(about, picture.box))
     copper, holes, regions = [], [], []
 
     for pad in picture.pads:
@@ -100,7 +104,7 @@ def build_problem(picture, rules, reached, only=None, narrow=False, options=None
     for pad in picture.pads:
         if pad.net and pad.smallest is not None:
             smallest[pad.net] = min(pad.smallest, smallest.get(pad.net, pad.smallest))
-    unjoined = picture.unjoined(only) if stubs is None else []
+    unjoined = wanted
     bus = buses(picture.pads, set(unjoined)) if rules.settings.bus_pull > 0 else {}
     nets = []
     note = lambda text: notes.append(text) if notes is not None else None

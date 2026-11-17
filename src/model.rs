@@ -61,7 +61,9 @@ pub struct Problem {
 /// a pitch up to 0.48 mm) and is cut straight across where that is not enough; a stretch of the trunk too short for
 /// a leg to run beside it on the inside of its corners is left out of that leg. Each leg is joined to its own pads
 /// by a stub at either end: four more entries of `nets`, each marked `last`, with the pad as its only terminal (the
-/// end of the leg is added to it by the router).
+/// end of the leg is added to it by the router); or with the terminals of one piece, for pads that copper already
+/// joins: the leg is then joined to whichever comes cheapest, and the first of them is the pad the pair comes to
+/// (it decides which leg is on which side).
 ///
 /// In the solution each net of the pair appears as `KEY/NET`: its leg and its two stubs.
 #[derive(Serialize, Deserialize, Clone, Debug)]

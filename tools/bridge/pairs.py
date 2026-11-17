@@ -5,7 +5,7 @@ import math
 
 from .advice import changed_over, pair_advice
 from .lengths import disc, r6
-from .questions import pair_plans
+from .questions import facing, pair_plans
 
 PAIR_PADS = 4  # the most pads a net of a pair has: more is a rail or a bus by another name
 
@@ -15,8 +15,8 @@ def pairs_of(picture, rules, names, ask, notes=None):
     leg width, pitch, plan)], the plan as the engine gives it (src/pairs.rs: the ends of the pair, the trunks
     between them and where each may begin and end, the pads at no end).
 
-    Two nets are a pair if their names or the hints say so (see intents_of), neither has more than four pads,
-    a zone, or a pad joined to another yet, both or neither are held apart as sensitive, and the engine finds
+    Two nets are a pair if their names or the hints say so (see intents_of), neither has more than four pads
+    or groups of pads joined already, or a zone, both or neither are held apart as sensitive, and the engine finds
     them pads side by side at two ends or more, far enough apart to run together between. Why a pair by
     name is laid as two nets is added to `notes`, if given.
     """
@@ -28,8 +28,6 @@ def pairs_of(picture, rules, names, ask, notes=None):
             return f"one of them has more than {PAIR_PADS} pads"
         if a in picture.pours or b in picture.pours:
             return "one of them has a zone"
-        if not all(len(group) == 1 for net in (a, b) for group in picture.groups[net]):
-            return "some of their pads are joined already"
         if quiet(a) != quiet(b):
             return "one of them is sensitive by the hints and the other is not"
     named = []
@@ -100,7 +98,8 @@ def stretches_of(picture, rules, pair, unpaired, name):
     numbered = lambda trunk: f" {passing.index(trunk) + 1}" if len(passing) > 1 else ""
     key_of = lambda trunk: (f"{name} (through{numbered(trunk)})" if trunk.get("passes")
                             else next(key for key, other in plain if other["ends"] == trunk["ends"]))
-    pads = lambda end: [picture.pads[picture.groups[net][i][0]] for net, i in zip((a, b), plan["ends"][end])]
+    faced = facing(picture, a, b)
+    pads = lambda end: [faced[net][i] for net, i in zip((a, b), plan["ends"][end])]
     # (the trunk with its clearance on either side, and a step for the grid it is laid on)
     wide = (rules.trunk_width(width, pitch) + 2 * max(rules.clearance(a), rules.clearance(b))
             + 2 * rules.settings.step)
@@ -137,8 +136,15 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken, names):
     """
     a, b, width, pitch, plan = pair
     layers = rules.routing_layers(picture.layers)
-    terminal = lambda pad: dict(xy=pad.at, layers=[l for l in layers if l in pad.layers])
-    pads = {net: [picture.pads[group[0]] for group in picture.groups[net]] for net in (a, b)}
+    # (a group of pads joined already is come to at the pad of it that faces the other net, and joined at
+    # whichever of its pads comes cheapest: that pad first, as the one the engine takes its place from)
+    pads = facing(picture, a, b)
+    def joined(net, i):
+        group = [pads[net][i]] + [picture.pads[k] for k in picture.groups[net][i] if picture.pads[k] is not pads[net][i]]
+        at = [dict(xy=pad.at, layers=[l for l in layers if l in pad.layers]) for pad in group]
+        at = [t for t in at if t["layers"]]
+        return [dict(t, piece=0) for t in at] if len(at) > 1 else at
+    on_layers = lambda net, i: {layer for k in picture.groups[net][i] for layer in picture.pads[k].layers}
     name = f"{a} = {b}"
     while any(key == name or key.startswith(name + " ") for key in taken):
         name += "'"  # (a net may be named just so)
@@ -165,7 +171,7 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken, names):
         # On a layer that the pads of an end are not on, its stubs change layer: the trunk ends further off
         # there, where two vias have room beside each other, and nearer only where that far off is shut (a place
         # for each layer takes its turn among those of that layer).
-        of_pads = [{layer for layer in layers if all(layer in pads[net][i].layers
+        of_pads = [{layer for layer in layers if all(layer in on_layers(net, i)
                                                       for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]))}
                    for end in (0, 1)]
         # (the hints may keep either net of it on its layer)
@@ -213,22 +219,21 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken, names):
         # Where the two ends share no layer, the stubs of one change layer. The trunk is dearer on the layers
         # that the end with the closer pads is not on: beside those there is the least room for a via.
         ends = [[pads[net][i] for net, i in zip((a, b), plan["ends"][trunk["ends"][end]])] for end in (0, 1)]
-        of_end = lambda end: {layer for layer in layers if all(layer in pad.layers for pad in end)}
-        tighter = min(ends, key=lambda end: math.dist(end[0].at, end[1].at))
-        dearer = {} if of_end(ends[0]) & of_end(ends[1]) else {l: OFF_LAYER for l in layers if l not in of_end(tighter)}
+        tighter = min((0, 1), key=lambda end: math.dist(ends[end][0].at, ends[end][1].at))
+        dearer = {} if of_pads[0] & of_pads[1] else {l: OFF_LAYER for l in layers if l not in of_pads[tighter]}
         wide = dict(wide, layer_cost=dict(wide.get("layer_cost", {}), **dearer)) if dearer else wide
         entries.append(dict(wide, net=f"~{key}", width=rules.trunk_width(width, pitch), clearance=clearance))
         stubs = [[], []]
         for end in (0, 1):
             for net, i in zip((a, b), plan["ends"][trunk["ends"][end]]):
-                entries.append(dict(entry(f"{key} {net} {end + 1}", net, [terminal(pads[net][i])], last=True),
+                entries.append(dict(entry(f"{key} {net} {end + 1}", net, joined(net, i), last=True),
                                     width=width))
                 stubs[end].append(entries[-1]["key"])
         passes = []
         for number, passed in enumerate(trunk.get("passes", [])):
             passes.append([])
             for net, i in zip((a, b), plan["ends"][passed["end"]]):
-                entries.append(dict(entry(f"{key} {net} {number + 3}", net, [terminal(pads[net][i])], last=True),
+                entries.append(dict(entry(f"{key} {net} {number + 3}", net, joined(net, i), last=True),
                                     width=width))
                 passes[-1].append(entries[-1]["key"])
         said.append(dict(key=key, trunk=f"{key} trunk", legs=[a, b], leg_width=width, pitch=pitch, stubs=stubs,
@@ -236,7 +241,10 @@ def pair_entries(picture, rules, pair, entry, unpaired, taken, names):
         together = {held[end] for end in list(trunk["ends"]) + [passed["end"] for passed in trunk.get("passes", [])]}
         held = [min(together) if h in together else h for h in held]
     for side, net in enumerate((a, b)):
-        at_ends = [dict(terminal(pads[net][end[side]]), piece=held[k]) for k, end in enumerate(plan["ends"])]
+        at_ends = [dict(t, piece=held[k]) for k, end in enumerate(plan["ends"]) for t in joined(net, end[side])]
         if trunks and len(set(held)) + len(plan["loose"][side]) > 1:
-            entries.append(entry(net, net, [terminal(pads[net][i]) for i in plan["loose"][side]] + at_ends))
+            # (a group at no end stands as its own piece, numbered beyond those of the ends)
+            loose = [dict(t, piece=len(plan["ends"]) + n) if "piece" in t else t
+                     for n, i in enumerate(plan["loose"][side]) for t in joined(net, i)]
+            entries.append(entry(net, net, loose + at_ends))
     return entries, said

@@ -5,6 +5,7 @@ import fnmatch
 import math
 
 from .names import FACING_PART
+from .questions import facing
 
 IN_LINE = 0.5  # the pads of an end stand across the pair's way if the sine of the angle between is more
 
@@ -24,7 +25,8 @@ def changed_over(picture, pair):
     first net's pad is on the left at some and on the right at others: the fewer are the ones changed over,
     and with as many of each, all are. An end whose pads stand in line with the pair's way is on neither side."""
     a, b, _, _, plan = pair
-    pads = lambda end: [picture.pads[picture.groups[net][i][0]] for net, i in zip((a, b), plan["ends"][end])]
+    faced = facing(picture, a, b)
+    pads = lambda end: [faced[net][i] for net, i in zip((a, b), plan["ends"][end])]
     middle = lambda end: [(p + q) / 2 for p, q in zip(*(pad.at for pad in pads(end)))]
     found = {}
     for trunk in plan.get("through") or plan["trunks"]:
@@ -70,7 +72,8 @@ def pair_advice(picture, hints, pair, guesses=True):
     (the pair then goes round an end, or crosses over on another layer), the part that would have to be turned.
     Of several that would do, those that may be turned (see stays); nothing where none may."""
     a, b, _, _, plan = pair
-    pads = lambda end: [picture.pads[picture.groups[net][i][0]] for net, i in zip((a, b), plan["ends"][end])]
+    faced = facing(picture, a, b)
+    pads = lambda end: [faced[net][i] for net, i in zip((a, b), plan["ends"][end])]
     over = changed_over(picture, pair)
     lines, said = [], set()
     for end in sorted(over):

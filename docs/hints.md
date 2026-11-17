@@ -89,8 +89,8 @@ the board's own rules. A distance that must hold belongs in the net's class.
 
 ## Pairs
 
-Two nets are laid as a pair where neither has more than four pads, a zone, or a pad joined to another yet,
-and a pad of each stand side by side (no more than 5 mm apart, each the other's nearest) at two places or
+Two nets are laid as a pair where neither has more than four pads (pads that copper already joins count
+as one, the one of them nearest the other net) or a zone, and a pad of each stand side by side (no more than 5 mm apart, each the other's nearest) at two places or
 more. Between two such ends far enough apart, the pair is laid as one wide track and split into two
 legs at the pitch asked for; each leg is joined to its pads by a short track at either end. Where that is
 the shorter way by far, the pair changes layer: through two vias side by side, as near each other as the

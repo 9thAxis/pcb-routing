@@ -118,7 +118,8 @@ class Structure(Shape):
     def test_everything_the_engine_requires_and_nothing_it_refuses(self):
         problem = self.build(self.board(), options=dict(variants=2, max_states=1000))
         self.assertEqual(problem["layers"], ["F.Cu", "B.Cu"])
-        self.assertEqual(problem["window"], [-1.0, -1.0, 21.0, 11.0])
+        # (the pads to join reach to x = 8: the ground 10 mm round them, and a little beyond the board's edge)
+        self.assertEqual(problem["window"], [-1.0, -1.0, 19.0, 11.0])
         self.assertEqual(problem["step"], 0.05)
         self.assertEqual(problem["options"], dict(variants=2, max_states=1000, bus_pull=0.2))
         self.assertNotIn("pairs", problem)
@@ -155,7 +156,7 @@ class Structure(Shape):
 
     def test_outline_and_rule_areas_become_regions(self):
         regions = self.build(self.board())["regions"]
-        frame = [[-2.0, -2.0], [22.0, -2.0], [22.0, 12.0], [-2.0, 12.0]]
+        frame = [[-2.0, -2.0], [20.0, -2.0], [20.0, 12.0], [-2.0, 12.0]]  # (round the window: see above)
         self.assertEqual(regions[0],
                          dict(rings=[frame, [[0, 0], [20, 0], [20, 10], [0, 10]], [[9, 4], [11, 4], [11, 5], [9, 5]]]))
         # a rule area names only the layers that carry routes

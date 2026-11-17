@@ -16,6 +16,16 @@ def rules(ignored=(), slack=0.02, step=0.05, layers=None, **minima):
     return k.Rules(k.Minima(**base), classes, frozenset(ignored), k.Settings(step=step, slack=slack, layers=layers))
 
 
+class Where(unittest.TestCase):
+    def test_a_few_nets_of_a_large_board_are_routed_in_the_ground_round_their_pads(self):
+        board = [0.0, 0.0, 200.0, 100.0]
+        # half of what they span on every side, 10 mm at the least, and never beyond the board
+        self.assertEqual(rules().about([[50.0, 40.0], [90.0, 44.0]], board), [30.0, 20.0, 110.0, 64.0])
+        self.assertEqual(rules().about([[5.0, 40.0], [8.0, 44.0]], board), [0.0, 30.0, 18.0, 54.0])
+        self.assertEqual(rules().about([[5.0, 5.0], [195.0, 95.0]], board), board)
+        self.assertEqual(rules().about([], board), board)
+
+
 class Clearances(unittest.TestCase):
     def test_class_clearance_with_slack(self):
         self.assertAlmostEqual(rules().clearance("A"), 0.22)

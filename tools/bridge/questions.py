@@ -1,6 +1,8 @@
 """Zones: the geometry is the engine's (src/pours); these are the questions put to it. `ask` takes a question and
 returns the answer (see `Engine.ask` in engine.py). Nothing here touches KiCad."""
 
+import math
+
 
 def spots(pads):
     """Pads as a question names them: net, place and layers."""
@@ -75,11 +77,27 @@ def which_tie(picture, tracks, ask):
     return ask(dict(ask="ties", fills=named.fills, tracks=tracks)) if tracks else []
 
 
+def facing(picture, a, b):
+    """For two nets that may be a pair, the pad that stands for each group of pads already joined: per net, a
+    pad for each of its groups. Of a group, the pad nearest any pad of the other net: where the two nets are
+    partly laid (a cell of parts each joined among themselves), the pair comes to the two pads that stand by
+    each other."""
+    def near(net, other):
+        others = [picture.pads[i].at for group in picture.groups[other] for i in group]
+        far = lambda i: min((math.dist(picture.pads[i].at, at) for at in others), default=0.0)
+        return [picture.pads[min(group, key=far)] for group in picture.groups[net]]
+    return {a: near(a, b), b: near(b, a)}
+
+
 def pair_plans(picture, rules, pairs, ask):
     """For each of some pairs (net, net, pitch): where its pads face each other and where it may be laid as one
-    (src/pairs.rs: `plan`). A group of pads that are joined already counts as its first pad."""
-    pads_of = lambda net: spots(picture.pads[group[0]] for group in picture.groups[net])
-    asked = [dict(a=pads_of(a), b=pads_of(b), pitch=pitch) for a, b, pitch in pairs]
+    (src/pairs.rs: `plan`). A group of pads that are joined already counts as the one of them that stands
+    nearest the other net (see facing), on every layer the group has a pad on."""
+    def pads_of(net, faced):
+        on = lambda group: sorted({layer for i in group for layer in picture.pads[i].layers}, key=picture.layers.index)
+        return [dict(net=pad.net, at=pad.at, layers=on(group)) for pad, group in zip(faced[net], picture.groups[net])]
+    asked = [dict(a=pads_of(a, facing(picture, a, b)), b=pads_of(b, facing(picture, a, b)), pitch=pitch)
+             for a, b, pitch in pairs]
     return ask(dict(ask="pairs", layers=rules.routing_layers(picture.layers), step=rules.settings.step, pairs=asked))
 
 

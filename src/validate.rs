@@ -366,8 +366,15 @@ impl Problem {
                             format!("its net is {}, the leg's is {}", stub.net, pair.legs[leg]),
                         ));
                     }
-                    if stub.terminals.len() != 1 {
-                        return Err(invalid(field, "a stub entry has one terminal, its pad"));
+                    let one = stub.terminals.first().and_then(|t| t.piece);
+                    let alike =
+                        stub.terminals.len() > 1 && one.is_some() && stub.terminals.iter().all(|t| t.piece == one);
+                    if stub.terminals.len() != 1 && !alike {
+                        return Err(invalid(
+                            field,
+                            "a stub entry has one terminal, its pad, or the terminals of one piece: pads that are \
+                             joined already, the first of them the one the pair comes to",
+                        ));
                     }
                     if pair.via_pitch > 0.0 && pair.via_pitch < stub.via[0] + pair.pitch - pair.leg_width - 1e-9 {
                         return Err(invalid(

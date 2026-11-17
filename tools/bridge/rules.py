@@ -256,6 +256,20 @@ class Rules:
         wanted = self.settings.layers
         return [l for l in layers if wanted is None or l in wanted]
 
+    AROUND = 0.5  # the ground looked at round the pads to be joined: this much of what they span, on every side,
+    AROUND_LEAST = 10.0  # and so many mm at the least
+
+    def about(self, points, box):
+        """The part of the board (its `box`) that nets with pads at these points are routed in: what they
+        span, and room round it to go round what stands between. On a large board a few nets then cost what
+        they would on a small one."""
+        if not points:
+            return box
+        low, high = ([f(p[k] for p in points) for k in (0, 1)] for f in (min, max))
+        grow = max(self.AROUND * max(high[0] - low[0], high[1] - low[1]), self.AROUND_LEAST)
+        return [max(box[0], low[0] - grow), max(box[1], low[1] - grow),
+                min(box[2], high[0] + grow), min(box[3], high[1] + grow)]
+
     def window(self, box):
         """The area routed in: a little beyond the board, with the cells on multiples of the step so that
         parts placed on a grid are met."""

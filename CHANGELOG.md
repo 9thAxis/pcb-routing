@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A few nets of a large board (bridge). A run looks at the ground round the pads it is to join (half of
+  what they span on every side, 10 mm at the least), not at the whole board: twelve nets of a board of
+  235 mm by 109 mm on six layers, which was refused as too large a grid, take 6 s a run.
+- A pair whose nets are partly laid. Two nets with pads that copper already joins (the parts of a cell
+  joined among themselves) are laid as a pair all the same: the pair comes to the pad of each group that
+  stands nearest the other net, and its stub joins whichever pad of the group comes cheapest (a stub entry
+  may have the terminals of one piece).
 - Advice on where the parts stand (bridge). Where the two nets of a pair are in one order at one part and
   in the other at the next, so that the pair goes round an end or crosses over, the bridge says which part
   would have to be turned by 180 degrees, have two pins swapped, or change places with its neighbour. No
