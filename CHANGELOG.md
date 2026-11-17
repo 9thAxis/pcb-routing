@@ -25,7 +25,13 @@
   says what the plan comes to: track, layer changes, and the roads asked for more than they hold. The plan is
   then bettered by that measure: a road asked for too much is widened and the board laid out again, and each
   cut is tried with its two sides changed over and kept so if the whole is the better for it. A gap names
-  the parts that stand on both its domains: they are placed on it. For each zone: the ground it is given and
+  the parts that stand on both its domains: they are placed on it. Roads are whole tracks wide, one at the
+  least along every cut, and a way may run under a zone that is not its end, at twice its length. The hints
+  say how the boards of a file stack (`boards`: what is added to a place on each to say where it is in the
+  stack, and how much a board clears above what lies under it), how high parts stand (`heights`, by the
+  beginning of a footprint's name) and what a part is to stand near (`parts`, `near`): what is tied across
+  two boards is pulled to the same place of the stack, a zone with a part too tall for the ground under
+  another board is laid out elsewhere where that can be done (and named where it cannot). For each zone: the ground it is given and
   how its parts stand to that today.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they

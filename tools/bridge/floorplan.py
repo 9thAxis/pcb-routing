@@ -1,6 +1,8 @@
 """Where the parts of a board belong: the question put to the engine (src/floorplan.rs works it out) and its
 answer as lines to read. Read only: nothing here moves a part."""
 
+import fnmatch
+
 from .names import CAPACITOR_PART, FACING_PART, is_supply
 from .steps import habits, planes
 
@@ -69,8 +71,37 @@ def floorplan(picture, rules, ask):
     boards = [box_of(polygon[0]) for polygon in picture.outline or []]
     shut = [box_of(area.rings[0]) for area in picture.areas
             if area.tracks and area.vias and set(picture.layers) <= set(area.layers) and area.rings]
+    boards.sort()
+    # How the boards stack, from the hints (`boards`, left to right): what is added to a place on each to say
+    # where it is in the stack; and under a board that says how much it clears, the ground of every other
+    # board that lies beneath it has that much height.
+    hints = rules.settings.hints
+    said = (hints.boards if hints else [])[:len(boards)]
+    shifts = [b.get("shift", [0.0, 0.0]) for b in said] + [[0.0, 0.0]] * (len(boards) - len(said))
+    limits = []
+    for upper, how in enumerate(said):
+        for lower, under in enumerate(boards):
+            if "clear" not in how or lower == upper:
+                continue
+            dx, dy = (shifts[upper][k] - shifts[lower][k] for k in (0, 1))
+            x0, y0, x1, y1 = boards[upper]
+            over = [max(x0 + dx, under[0]), max(y0 + dy, under[1]), min(x1 + dx, under[2]), min(y1 + dy, under[3])]
+            if over[0] < over[2] and over[1] < over[3]:
+                limits.append(dict(rect=[round(v, 4) for v in over], height=how["clear"]))
+    # (how high a part stands: by the longest beginning of its footprint's name that the hints give a height)
+    def height(part):
+        name = part.footprint.split(":")[-1]
+        known = [prefix for prefix in (hints.heights if hints else {}) if name.startswith(prefix)]
+        return hints.heights[max(known, key=len)] if known else None
+    for part in parts:
+        of = picture.parts[part["name"]]
+        tall = height(of)
+        near = [what["near"] for pattern, what in (hints.parts if hints else [])
+                if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
+        part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}))
     return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked, stack=stack_of(picture, rules),
                     regions=boards if len(boards) > 1 else [], keepouts=shut,
+                    shifts=shifts if len(boards) > 1 else [], limits=limits,
                     pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1)))
 
 
@@ -162,6 +193,9 @@ def floorplan_told(found, depth=2, every=False):
                       f"{travel['mm']:.0f} mm, {travel['vias']} layer changes ({each:.1f} a net); {travel['over']} roads asked "
                       f"for more than they hold; {travel['through']} nets go from domain to domain through the parts on "
                       f"the gaps; {travel['stranded']} could be given no way"]
+    for zone, under, parts in found.get("tall", []):
+        lines.append(f"  TOO TALL: {zone} has {100 * under:.0f} % of its ground where there is little height, with "
+                     f"{', '.join(parts[:8])}{' ...' if len(parts) > 8 else ''}")
     if found.get("stranded"):
         lines.append(f"  given no way: {', '.join(found['stranded'])}")
     lines += ["", "what flows between zones (the nets from one to the other; the heaviest are to be neighbours):"]

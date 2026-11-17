@@ -68,6 +68,35 @@ class Floorplan(unittest.TestCase):
         self.assertTrue(any(line.startswith("ground kept free of parts: 0 gaps") for line in told))
         self.assertTrue(any(line.startswith("every net between zones of one domain given a way") for line in told))
 
+    def test_the_hints_say_how_boards_stack_how_high_parts_stand_and_what_a_part_is_to_be_near(self):
+        import json, tempfile
+        from pathlib import Path
+        picture = board()
+        # two boards side by side, the right one mounted over the left one's right end, 6 mm above it
+        picture.outline = [[[[0, 0], [14, 0], [14, 10], [0, 10]]], [[[15, 0], [20, 0], [20, 10], [15, 10]]]]
+        for part in picture.parts.values():
+            part.footprint = "lib:R_0603_1608Metric"
+        picture.parts["U9"].footprint = "lib:CP_Elec_8x10.5"
+        said = dict(boards=[{}, dict(shift=[-6.0, 0.0], clear=6.0)], heights={"R_0603": 0.5, "CP_Elec": 10.5},
+                    parts={"J1": dict(near=[3.0, 4.0])})
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "b.routing.json").write_text(json.dumps(said))
+            hints = k.read_hints(Path(tmp, "b.routing.json"))
+        asked = []
+        k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), lambda question: asked.append(question) or {})
+        (q,) = asked
+        self.assertEqual((q["regions"], q["shifts"]), ([[0, 0, 14, 10], [15, 0, 20, 10]], [[0.0, 0.0], [-6.0, 0.0]]))
+        # the right board lies over x 9 to 14 of the left one: no part taller than 6 mm there
+        self.assertEqual(q["limits"], [dict(rect=[9.0, 0, 14.0, 10], height=6.0)])
+        parts = {part["name"]: part for part in q["parts"]}
+        self.assertEqual((parts["U9"]["height"], parts["R10"]["height"], parts["J1"]["near"], "near" in parts["U1"]),
+                         (10.5, 0.5, [3.0, 4.0], False))
+        for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)})):
+            with tempfile.TemporaryDirectory() as tmp:
+                Path(tmp, "b.routing.json").write_text(json.dumps(wrong))
+                with self.assertRaises(ValueError):
+                    k.read_hints(Path(tmp, "b.routing.json"))
+
     def test_it_is_told_with_the_power_first(self):
         lines = k.power_told(self.found) + k.floorplan_told(self.found, 3)
         self.assertEqual(lines[0], "1 domains (grounds); 0 parts stand on two or more; 0 parts that nothing places in one")
