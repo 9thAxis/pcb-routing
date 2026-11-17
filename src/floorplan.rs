@@ -333,8 +333,8 @@ pub struct Floorplan {
     /// The nets that could be given no way, by name.
     pub stranded: Vec<String>,
     /// The smallest zones given ground where there is little height with parts too tall for it: (the zone,
-    /// the share of its ground that is so, those parts).
-    pub tall: Vec<(String, f64, Vec<String>)>,
+    /// the share of its ground that is so, those parts, how high the tallest of them stands in mm).
+    pub tall: Vec<(String, f64, Vec<String>, f64)>,
     /// The ground kept free between zones, the roads that serve the most of the board first: a road along
     /// every cut that something crosses, as wide as its tracks take side by side on the layers there are.
     pub roads: Vec<Road>,
@@ -1405,7 +1405,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .map(|b| (0..top.len()).filter(|&z| to[z] == b).map(|z| top[z].name.clone()).collect())
         .collect();
     // One laying out: ground for every zone, the roads, and a way along them for every net between zones.
-    type Laid = (Vec<Work>, Vec<Road>, Travel, Vec<(String, f64, Vec<String>)>);
+    type Laid = (Vec<Work>, Vec<Road>, Travel, Vec<(String, f64, Vec<String>, f64)>);
     let lay = |turned: &BTreeSet<String>, asked: &BTreeMap<String, usize>| -> Laid {
         let mut on = Ground {
             board,
@@ -1453,7 +1453,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
         let travel = travelled(&mut roads, &leaves, &nets);
         // (a zone given ground where there is little height, with parts too tall for it)
-        let mut tall: Vec<(String, f64, Vec<String>)> = Vec::new();
+        let mut tall: Vec<(String, f64, Vec<String>, f64)> = Vec::new();
         fn named<'w>(work: &'w Work, out: &mut Vec<&'w Work>) {
             if work.inside.is_empty() {
                 out.push(work);
@@ -1474,7 +1474,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     .collect();
                 if under > 1e-6 && !too.is_empty() {
                     too.sort();
-                    tall.push((zone.name.clone(), (under * 100.0).round() / 100.0, too));
+                    let highest = zone.parts.iter().filter_map(|&p| parts[p].height).fold(0.0, f64::max);
+                    tall.push((zone.name.clone(), (under * 100.0).round() / 100.0, too, highest));
                 }
             }
         }
@@ -1484,7 +1485,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let weight = |laid: &Laid| -> f64 {
         let (roads, travel) = (&laid.1, &laid.2);
         let over: usize = roads.iter().filter(|road| !road.gap).map(|road| road.used.saturating_sub(road.lanes)).sum();
-        let too_tall: f64 = laid.3.iter().map(|(_, under, too)| under * too.len() as f64).sum();
+        let too_tall: f64 = laid.3.iter().map(|(_, under, too, _)| under * too.len() as f64).sum();
         travel.mm
             + VIA_MM * travel.vias as f64
             + OVER_MM * over as f64

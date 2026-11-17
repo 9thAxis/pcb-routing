@@ -193,9 +193,11 @@ def floorplan_told(found, depth=2, every=False):
                       f"{travel['mm']:.0f} mm, {travel['vias']} layer changes ({each:.1f} a net); {travel['over']} roads asked "
                       f"for more than they hold; {travel['through']} nets go from domain to domain through the parts on "
                       f"the gaps; {travel['stranded']} could be given no way"]
-    for zone, under, parts in found.get("tall", []):
+    for zone, under, parts, highest in found.get("tall", []):
         lines.append(f"  TOO TALL: {zone} has {100 * under:.0f} % of its ground where there is little height, with "
-                     f"{', '.join(parts[:8])}{' ...' if len(parts) > 8 else ''}")
+                     f"{', '.join(parts[:8])}{' ...' if len(parts) > 8 else ''} ({highest:g} mm)")
+    if found.get("tall"):
+        lines.append(f"  (with {max(t[3] for t in found['tall']):g} mm clear above that ground, none of them would be too tall)")
     if found.get("stranded"):
         lines.append(f"  given no way: {', '.join(found['stranded'])}")
     lines += ["", "what flows between zones (the nets from one to the other; the heaviest are to be neighbours):"]
