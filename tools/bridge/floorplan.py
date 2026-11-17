@@ -45,7 +45,13 @@ def floorplan(picture, rules, ask):
     signal = [net for net in nets if rules.intent(net).role not in ("supply", "ground")] or nets
     takes = sorted(rules.track_width(net) + rules.clearance(net) for net in signal)
     layers = [layer for layer in rules.routing_layers(picture.layers) if layer not in planes(picture)]
+    # (each closed outline is a board of its own; a rule area shut to tracks and vias on every layer is no room)
+    box_of = lambda ring: [min(p[0] for p in ring), min(p[1] for p in ring), max(p[0] for p in ring), max(p[1] for p in ring)]
+    boards = [box_of(polygon[0]) for polygon in picture.outline or []]
+    shut = [box_of(area.rings[0]) for area in picture.areas
+            if area.tracks and area.vias and set(picture.layers) <= set(area.layers) and area.rings]
     return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked,
+                    regions=boards if len(boards) > 1 else [], keepouts=shut,
                     pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1)))
 
 
@@ -104,6 +110,12 @@ def floorplan_told(found, depth=2, every=False):
     lines += ["", f"the signal nets between the smallest zones: {found['now_mm']:.0f} mm with each zone where its parts stand "
                   f"today, {found['then_mm']:.0f} mm with each on the ground it is given "
                   f"({abs(shorter):.0f} % {'shorter' if shorter >= 0 else 'longer'})"]
+    if len(found.get("regions", [])) > 1:
+        lines += ["", "the boards, and what each is given to hold:"]
+        for region in found["regions"]:
+            x0, y0, x1, y1 = region["rect"]
+            lines.append(f"  x {x0:.0f} to {x1:.0f}, y {y0:.0f} to {y1:.0f}: {', '.join(region['zones'])}; its parts take "
+                         f"{region['needed']:.0f} mm2 and its roads {region['roads']:.0f} of {region['room']:.0f} mm2 of room")
     roads = found.get("roads", [])
     if roads:
         taken = sum((r["rect"][2] - r["rect"][0]) * (r["rect"][3] - r["rect"][1]) for r in roads)

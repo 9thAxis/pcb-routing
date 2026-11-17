@@ -74,6 +74,14 @@ pub struct Board {
     pub parts: Vec<Part>,
     /// Its nets.
     pub nets: Vec<Net>,
+    /// The boards within that box, where it holds several (two boards of a stack, drawn side by side), each
+    /// [x0, y0, x1, y1]; none given: one board, the box. A domain is given ground on one of them.
+    #[serde(default)]
+    pub regions: Vec<[f64; 4]>,
+    /// Ground where no part may stand (round a mounting hole, under what passes through the board), each
+    /// [x0, y0, x1, y1]: it is not counted as room.
+    #[serde(default)]
+    pub keepouts: Vec<[f64; 4]>,
     /// What a signal track takes across its way, in mm: its width and the clearance beside it.
     #[serde(default = "usual_pitch")]
     pub pitch: f64,
@@ -106,6 +114,21 @@ pub struct Road {
     pub level: usize,
     /// The zones on one side of it, by name, and those on the other.
     pub between: [Vec<String>; 2],
+}
+
+/// One board of the box, with what it is given to hold.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Region {
+    /// The board: [x0, y0, x1, y1].
+    pub rect: [f64; 4],
+    /// The room on it, in mm2: its ground but for the keep-outs.
+    pub room: f64,
+    /// What the parts of its domains take at the least, in mm2.
+    pub needed: f64,
+    /// And the roads kept free on it.
+    pub roads: f64,
+    /// The domains it holds.
+    pub zones: Vec<String>,
 }
 
 /// A supply: a net that feeds parts.
@@ -194,6 +217,8 @@ pub struct Floorplan {
     pub now_mm: f64,
     /// And the same with each of those zones at the middle of the ground it is given.
     pub then_mm: f64,
+    /// The boards, each with the domains it holds and whether they have room there.
+    pub regions: Vec<Region>,
     /// The ground kept free between zones, the roads that serve the most of the board first: a road along
     /// every cut that something crosses, as wide as its tracks take side by side on the layers there are.
     pub roads: Vec<Road>,
@@ -205,6 +230,8 @@ const BYPASSED: usize = 2;
 const ANCHOR: f64 = 4.0;
 /// How many signal tracks a supply counts for in a road: it is laid wide.
 const RAIL_LANES: f64 = 4.0;
+/// The most of a board's room that the parts of its domains may take: the rest is for roads and for routing.
+const BOARD_FULL: f64 = 0.6;
 /// The most of a piece of the board that the road across it takes.
 const ROAD_MOST: f64 = 0.2;
 
@@ -457,6 +484,29 @@ fn median(points: &[Pt]) -> Option<Pt> {
     Some([of(0), of(1)])
 }
 
+/// Things in the order their ties alone give: each goes half way to the middle of those it is tied to, over
+/// and over, with the middle of all taken out, which leaves those tied to each other side by side.
+fn in_line(count: usize, ties: &BTreeMap<(usize, usize), f64>) -> Vec<f64> {
+    let mut line: Vec<f64> = (0..count).map(|z| z as f64).collect();
+    for _ in 0..500 {
+        let before = line.clone();
+        for z in 0..count {
+            let (mut sum, mut weights) = (0.0, 0.0);
+            for (&(a, b), &weight) in ties.iter().filter(|(&(a, b), _)| a == z || b == z) {
+                sum += weight * before[if a == z { b } else { a }];
+                weights += weight;
+            }
+            if weights > 0.0 {
+                line[z] = (before[z] + sum / weights) / 2.0;
+            }
+        }
+        let mean = line.iter().sum::<f64>() / count.max(1) as f64;
+        let size = line.iter().map(|v| (v - mean).abs()).fold(0.0, f64::max).max(1e-12);
+        line.iter_mut().for_each(|v| *v = (*v - mean) / size);
+    }
+    line
+}
+
 /// What the giving of ground works on, and what it leaves.
 struct Ground<'a> {
     board: &'a Board,
@@ -565,29 +615,12 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, on: &mut Ground) {
     let wide = rect[2] - rect[0] >= rect[3] - rect[1];
     let along = usize::from(!wide);
     // Where nothing pulls the zones apart along that side (nothing fixed, nothing outside), they are put in the
-    // order their ties alone give: each goes half way to the middle of those it is tied to, over and over, with
-    // the middle of all taken out, which leaves those tied to each other side by side.
+    // order their ties alone give.
     let low = spot.iter().map(|p| p[along]).fold(f64::INFINITY, f64::min);
     let high = spot.iter().map(|p| p[along]).fold(f64::NEG_INFINITY, f64::max);
     let mut line: Vec<f64> = spot.iter().map(|p| p[along]).collect();
     if high - low < 1e-6 * (rect[2] - rect[0] + rect[3] - rect[1]) {
-        line = (0..count).map(|z| z as f64).collect();
-        for _ in 0..500 {
-            let before = line.clone();
-            for z in 0..count {
-                let (mut sum, mut weights) = (0.0, 0.0);
-                for (&(a, b), &weight) in ties.iter().filter(|(&(a, b), _)| a == z || b == z) {
-                    sum += weight * before[if a == z { b } else { a }];
-                    weights += weight;
-                }
-                if weights > 0.0 {
-                    line[z] = (before[z] + sum / weights) / 2.0;
-                }
-            }
-            let mean = line.iter().sum::<f64>() / count as f64;
-            let size = line.iter().map(|v| (v - mean).abs()).fold(0.0, f64::max).max(1e-12);
-            line.iter_mut().for_each(|v| *v = (*v - mean) / size);
-        }
+        line = in_line(count, &ties);
     }
     let mut order: Vec<usize> = (0..count).collect();
     order.sort_by(|&a, &b| line[a].total_cmp(&line[b]).then(a.cmp(&b)));
@@ -895,8 +928,110 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let at: Vec<Option<Pt>> = parts.iter().map(|part| (part.fixed && part.placed).then_some(part.at)).collect();
     let rail_parts: Vec<Vec<usize>> = found.rails.keys().map(|&net| reach[net].iter().copied().collect()).collect();
     let mut on = Ground { board, nets: &nets, rails: &rail_parts, at, roads: Vec::new() };
-    arrange(&mut top, board.outline, 0, &mut on);
+    // Where the box holds several boards, the domains are parted between them first: in the order their ties
+    // give, each board with as many as its room is of all the room (a domain is on one board).
+    let overlap = |a: [f64; 4], b: [f64; 4]| {
+        (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0)
+    };
+    let ground = |r: [f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+    let room = |r: [f64; 4]| (ground(r) - board.keepouts.iter().map(|&k| overlap(r, k)).sum::<f64>()).max(1.0);
+    let mut boards: Vec<[f64; 4]> = if board.regions.is_empty() { vec![board.outline] } else { board.regions.clone() };
+    boards.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    let need = |work: &Work| work.parts.iter().map(|&p| parts[p].area).sum::<f64>();
+    let mut held: Vec<Vec<String>> = vec![Vec::new(); boards.len()];
+    if boards.len() < 2 || top.len() < 2 {
+        held[0] = top.iter().map(|work| work.name.clone()).collect();
+        arrange(&mut top, boards[0], 0, &mut on);
+    } else {
+        let mut of_top: BTreeMap<usize, usize> = BTreeMap::new();
+        for (z, work) in top.iter().enumerate() {
+            of_top.extend(work.parts.iter().map(|&p| (p, z)));
+        }
+        let line = in_line(top.len(), &tied(&nets, &|p| of_top.get(&p).copied()));
+        let mut order: Vec<usize> = (0..top.len()).collect();
+        order.sort_by(|&a, &b| line[a].total_cmp(&line[b]).then(a.cmp(&b)));
+        let all_room: f64 = boards.iter().map(|&r| room(r)).sum();
+        let all_need: f64 = top.iter().map(need).sum::<f64>().max(1.0);
+        // (the order, or the order turned round: whichever leaves each board nearer what its room is of all)
+        let parted = |order: &[usize]| -> (f64, Vec<usize>) {
+            let (mut to, mut at_board, mut taken, mut off) = (vec![0usize; top.len()], 0usize, 0.0f64, 0.0f64);
+            for (k, &z) in order.iter().enumerate() {
+                let share = room(boards[at_board]) / all_room * all_need;
+                let left = order.len() - k;
+                let must_move = left <= boards.len() - 1 - at_board;
+                let over = taken + need(&top[z]) - share;
+                if at_board + 1 < boards.len() && taken > 0.0 && (must_move || over > share - taken) {
+                    off += (taken - share).abs();
+                    at_board += 1;
+                    taken = 0.0;
+                }
+                to[z] = at_board;
+                taken += need(&top[z]);
+            }
+            off += (taken - room(boards[at_board]) / all_room * all_need).abs();
+            (off, to)
+        };
+        let turned: Vec<usize> = order.iter().rev().copied().collect();
+        let (straight, back) = (parted(&order), parted(&turned));
+        let mut to = if straight.0 <= back.0 { straight.1 } else { back.1 };
+        // What goes from one board to another goes through a connector between them: where the domains are
+        // few enough to try every way, they are parted so that as little as may be is tied across boards,
+        // each board holding no more than BOARD_FULL of its room; of ways as good, the most even.
+        let ways = (boards.len() as f64).powi(top.len() as i32);
+        if ways <= 20_000.0 {
+            let between = tied(&nets, &|p| of_top.get(&p).copied());
+            let mut best: Option<(f64, f64, Vec<usize>)> = None;
+            for code in 0..ways as usize {
+                let (mut way, mut rest) = (Vec::with_capacity(top.len()), code);
+                for _ in 0..top.len() {
+                    way.push(rest % boards.len());
+                    rest /= boards.len();
+                }
+                let fill: Vec<f64> = (0..boards.len())
+                    .map(|b| {
+                        (0..top.len()).filter(|&z| way[z] == b).map(|z| need(&top[z])).sum::<f64>() / room(boards[b])
+                    })
+                    .collect();
+                if fill.iter().any(|&f| f > BOARD_FULL || f == 0.0) {
+                    continue;
+                }
+                let across: f64 = between.iter().filter(|(&(a, b), _)| way[a] != way[b]).map(|(_, w)| *w).sum();
+                let uneven =
+                    fill.iter().fold(0.0f64, |m, &f| m.max(f)) - fill.iter().fold(f64::INFINITY, |m, &f| m.min(f));
+                if best.as_ref().map_or(true, |b| (across, uneven) < (b.0, b.1)) {
+                    best = Some((across, uneven, way));
+                }
+            }
+            if let Some((_, _, way)) = best {
+                to = way;
+            }
+        }
+        let mut lots: Vec<Vec<Work>> = (0..boards.len()).map(|_| Vec::new()).collect();
+        let mut places: Vec<(usize, usize)> = Vec::new();
+        for (z, work) in top.drain(..).enumerate() {
+            places.push((to[z], lots[to[z]].len()));
+            held[to[z]].push(work.name.clone());
+            lots[to[z]].push(work);
+        }
+        for (lot, &rect) in lots.iter_mut().zip(&boards) {
+            arrange(lot, rect, 0, &mut on);
+        }
+        let mut back: Vec<Vec<Option<Work>>> =
+            lots.into_iter().map(|lot| lot.into_iter().map(Some).collect()).collect();
+        top = places.into_iter().filter_map(|(b, k)| back[b][k].take()).collect();
+    }
     let mut roads = std::mem::take(&mut on.roads);
+    let regions: Vec<Region> = boards
+        .iter()
+        .zip(&held)
+        .map(|(&rect, names)| Region {
+            rect,
+            room: room(rect).round(),
+            needed: top.iter().filter(|work| names.contains(&work.name)).map(need).sum::<f64>().round(),
+            roads: roads.iter().map(|road| overlap(road.rect, rect)).sum::<f64>().round(),
+            zones: names.clone(),
+        })
+        .collect();
     roads.sort_by(|a, b| a.level.cmp(&b.level).then(b.width.total_cmp(&a.width)));
 
     // What flows between the zones just under the domains.
@@ -990,7 +1125,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         now_mm += span(reached.iter().filter_map(|&l| leaves[l].0).collect());
         then_mm += span(reached.iter().map(|&l| leaves[l].1).collect());
     }
-    Ok(Floorplan { power, zones, flows, apart, now_mm: now_mm.round(), then_mm: then_mm.round(), roads })
+    Ok(Floorplan { power, zones, flows, apart, now_mm: now_mm.round(), then_mm: then_mm.round(), regions, roads })
 }
 
 #[cfg(test)]
@@ -1040,6 +1175,8 @@ mod tests {
         };
         Board {
             outline: [0.0, 0.0, 40.0, 10.0],
+            regions: Vec::new(),
+            keepouts: Vec::new(),
             pitch: 0.4,
             layers: 2,
             nets: nets.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false }).collect(),
@@ -1117,6 +1254,21 @@ mod tests {
         turned.parts.iter_mut().for_each(|part| part.at[0] = 40.0 - part.at[0]);
         let again = floorplan(&turned).unwrap();
         assert_eq!((again.zones[0].rect, again.zones[1].rect), (a.rect, field.rect));
+    }
+
+    #[test]
+    fn two_boards_in_one_box_each_hold_whole_domains_and_a_keep_out_is_no_room() {
+        let mut board = two_grounds();
+        // a large board and a small one, a gap between them; a keep-out on the large one
+        board.regions = vec![[0.0, 0.0, 26.0, 10.0], [28.0, 0.0, 40.0, 10.0]];
+        board.keepouts = vec![[10.0, 0.0, 12.0, 10.0]];
+        let found = floorplan(&board).unwrap();
+        let [large, small] = &found.regions[..] else { panic!("{:?}", found.regions) };
+        assert_eq!((large.rect, large.room, &large.zones), ([0.0, 0.0, 26.0, 10.0], 240.0, &vec!["A_GND".to_string()]));
+        assert_eq!((small.room, small.needed, &small.zones), (120.0, 50.0, &vec!["FIELD_0V".to_string()]));
+        // each domain has the whole of its board, and there is no road across the gap between boards
+        assert_eq!((found.zones[0].rect, found.zones[1].rect), ([0.0, 0.0, 26.0, 10.0], [28.0, 0.0, 40.0, 10.0]));
+        assert!(found.roads.iter().all(|road| road.level > 0), "{:?}", found.roads);
     }
 
     #[test]
