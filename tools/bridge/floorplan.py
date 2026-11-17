@@ -2,7 +2,7 @@
 answer as lines to read. Read only: nothing here moves a part."""
 
 from .names import CAPACITOR_PART, FACING_PART, is_supply
-from .steps import planes
+from .steps import habits, planes
 
 
 def _ground(picture):
@@ -14,6 +14,25 @@ def _ground(picture):
             box = boxes.setdefault(pad.part, [x, y, x, y])
             box[:] = [min(box[0], x), min(box[1], y), max(box[2], x), max(box[3], y)]
     return {part: (box[2] - box[0] + 2.0) * (box[3] - box[1] + 2.0) for part, box in boxes.items()}
+
+
+RUNS = 0.7  # a layer runs one way if this much of the track on it does
+ENOUGH = 100.0  # and there is this much track on it to tell by, in mm
+
+
+def stack_of(picture, rules):
+    """What each copper layer is for, top to bottom, as the engine's `stack`: a plane (an inner layer that zones
+    cover) carries nothing; an inner layer whose tracks run one way carries the long runs that way; the others
+    run any way (the outer layers, and an inner layer that has little on it yet)."""
+    flat, runs, found = planes(picture), habits(picture), []
+    for layer in rules.routing_layers(picture.layers):
+        mm, across, up = runs.get(layer, (0.0, 0.0, 0.0))
+        inner = layer not in (picture.layers[0], picture.layers[-1])
+        way = ("plane" if layer in flat else
+               "across" if inner and mm >= ENOUGH and across >= RUNS else
+               "up" if inner and mm >= ENOUGH and up >= RUNS else "any")
+        found.append(dict(name=layer, way=way))
+    return found
 
 
 def floorplan(picture, rules, ask):
@@ -50,7 +69,7 @@ def floorplan(picture, rules, ask):
     boards = [box_of(polygon[0]) for polygon in picture.outline or []]
     shut = [box_of(area.rings[0]) for area in picture.areas
             if area.tracks and area.vias and set(picture.layers) <= set(area.layers) and area.rings]
-    return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked,
+    return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked, stack=stack_of(picture, rules),
                     regions=boards if len(boards) > 1 else [], keepouts=shut,
                     pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1)))
 
@@ -117,16 +136,25 @@ def floorplan_told(found, depth=2, every=False):
             lines.append(f"  x {x0:.0f} to {x1:.0f}, y {y0:.0f} to {y1:.0f}: {', '.join(region['zones'])}; its parts take "
                          f"{region['needed']:.0f} mm2 and its roads {region['roads']:.0f} of {region['room']:.0f} mm2 of room")
     roads = found.get("roads", [])
+    gaps, real = [r for r in roads if r["gap"]], [r for r in roads if not r["gap"]]
+    size = lambda r: (r["rect"][2] - r["rect"][0]) * (r["rect"][3] - r["rect"][1])
     if roads:
-        taken = sum((r["rect"][2] - r["rect"][0]) * (r["rect"][3] - r["rect"][1]) for r in roads)
-        lines += ["", f"ground kept free between zones for what runs between them: {len(roads)} roads, {taken:.0f} mm2 "
-                      "(a road along every cut, as wide as what crosses it takes side by side):"]
-        for road in roads[:None if every else 12]:
+        lines += ["", f"ground kept free of parts: {len(gaps)} gaps between domains ({sum(map(size, gaps)):.0f} mm2: nothing "
+                      f"crosses but through the parts that stand on them) and {len(real)} roads within them "
+                      f"({sum(map(size, real)):.0f} mm2), each as wide as what crosses it takes on the layers that run its way:"]
+        for road in real[:None if every else 12]:
             x0, y0, x1, y1 = road["rect"]
-            long = max(x1 - x0, y1 - y0)
             one, other = (", ".join(side[:2]) + (f" and {len(side) - 2} more" if len(side) > 2 else "") for side in road["between"])
-            lines.append(f"  level {road['level']}: {road['width']:.1f} mm wide, {long:.0f} mm long, for {road['nets']} nets and "
-                         f"{road['rails']} supplies, between [{one}] and [{other}]")
+            lines.append(f"  level {road['level']}, {'up and down' if road['up'] else 'across'}: {road['width']:.1f} mm wide, "
+                         f"{max(x1 - x0, y1 - y0):.0f} mm long, holds {road['lanes']} tracks, {road['used']} planned along it"
+                         f"{' (TOO MANY)' if road['used'] > road['lanes'] else ''}; between [{one}] and [{other}]")
+    travel = found.get("travel")
+    if travel:
+        each = travel["vias"] / travel["nets"] if travel["nets"] else 0.0
+        lines += ["", f"every net between zones of one domain given a way along the roads: {travel['nets']} nets, "
+                      f"{travel['mm']:.0f} mm, {travel['vias']} layer changes ({each:.1f} a net); {travel['over']} roads asked "
+                      f"for more than they hold; {travel['through']} nets go from domain to domain through the parts on "
+                      f"the gaps; {travel['stranded']} could be given no way"]
     lines += ["", "what flows between zones (the nets from one to the other; the heaviest are to be neighbours):"]
     for a, b, count, pairs in found["flows"][:None if every else 15]:
         lines.append(f"  {count:3} nets{f', {pairs} pairs' if pairs else ''}: {a}  <->  {b}")

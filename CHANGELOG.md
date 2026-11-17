@@ -16,7 +16,13 @@
   board has the widest, the cuts within the zones the narrowest. A file that holds several boards (two of a
   stack, drawn side by side: each closed outline is one) has its domains parted between them so that as
   little as may be is tied from board to board and none is more than six tenths full; a rule area shut to
-  tracks and vias on every layer is no room. For each zone: the ground it is given and
+  tracks and vias on every layer is no room. The layers have their parts in it: a plane carries nothing, an
+  inner layer whose tracks run one way carries the long runs that way, the others run any way; a road
+  holds what fits on the layers that run its way. The ground between two domains is a gap, not a road:
+  nothing runs along it, and what goes from domain to domain goes through the parts that stand on it. Every
+  net between zones of one domain is given a way along the roads (the shortest, a turn from a road into
+  one that runs the other way counted as a layer change, a full road as four times its length), which
+  says what the plan comes to: track, layer changes, and the roads asked for more than they hold. For each zone: the ground it is given and
   how its parts stand to that today.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
