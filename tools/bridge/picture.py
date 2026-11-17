@@ -42,6 +42,16 @@ class Pad:
 
 
 @dataclass
+class Part:
+    """A part of the board, as far as a plan of the work needs it."""
+    at: list  # where it stands
+    sheet: str = ""  # the name of the schematic sheet it is drawn on
+    file: str = ""  # that sheet's file
+    value: str = ""
+    footprint: str = ""
+
+
+@dataclass
 class Track:
     a: list
     b: list
@@ -124,6 +134,7 @@ class Picture:
     classes: dict = field(default_factory=dict)  # net -> NetClass
     minima: Minima = field(default_factory=Minima)
     ignored: frozenset = frozenset()  # the design rule checks the project sets to 'ignore'
+    parts: dict = field(default_factory=dict)  # reference -> Part
     groups: dict = field(default_factory=dict)  # net -> its groups of pads already joined, as indices into pads
     # net -> {index of a group: the pours that join it, as indices into fills}
     pours: dict = field(default_factory=dict)

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
+  are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;
+  and the nets in a designer's order: within one block, the pairs between blocks, clocks and what is
+  sensitive, buses, the other nets between blocks, the supplies that tracks must join. Each step with its
+  nets, its open connections, their least length and the ground its pads span; and the nets that wait for a
+  part to be placed. A first piece: it lays nothing and plans no layers or ways yet.
 - A few nets of a large board (bridge). A run looks at the ground round the pads it is to join (half of
   what they span on every side, 10 mm at the least), not at the whole board: twelve nets of a board of
   235 mm by 109 mm on six layers, which was refused as too large a grid, take 6 s a run.

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .lengths import r6
-from .picture import Area, Minima, NetClass, Pad, Picture, Polygon, Pour, Thermal, Track, Via
+from .picture import Area, Minima, NetClass, Pad, Part, Picture, Polygon, Pour, Thermal, Track, Via
 from .questions import survey
 
 try:
@@ -338,6 +338,11 @@ def read_board(board, ignored, ask, pours=True):
                                 drill=MM(max(drill.x, drill.y)) if drilled else None,
                                 clearance=local_clearance(pad), smallest=pad_smallest(pad, on),
                                 part=pad.GetParentFootprint().GetReference() if pad.GetParentFootprint() else None))
+
+    for footprint in board.GetFootprints():
+        picture.parts[footprint.GetReference()] = Part(
+            at=xy(footprint.GetPosition()), sheet=footprint.GetSheetname(), file=footprint.GetSheetfile(),
+            value=footprint.GetValue(), footprint=footprint.GetFPIDAsString())
 
     for track in board.GetTracks():
         net = track.GetNetname() or None
