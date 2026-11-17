@@ -190,6 +190,9 @@ pub struct Travel {
     pub through: usize,
     /// The nets with a zone that no road comes to, given no way.
     pub stranded: usize,
+    /// Which those are, as indices into the nets given.
+    #[serde(skip)]
+    left: Vec<usize>,
     /// The roads with more planned along them than they hold.
     pub over: usize,
 }
@@ -301,6 +304,8 @@ pub struct Floorplan {
     pub travel: Travel,
     /// And what they came to as the board was first laid out, before roads were widened and lots changed sides.
     pub first: Travel,
+    /// The nets that could be given no way, by name.
+    pub stranded: Vec<String>,
     /// The ground kept free between zones, the roads that serve the most of the board first: a road along
     /// every cut that something crosses, as wide as its tracks take side by side on the layers there are.
     pub roads: Vec<Road>,
@@ -314,6 +319,8 @@ const ANCHOR: f64 = 4.0;
 const RAIL_LANES: f64 = 4.0;
 /// The most of a board's room that the parts of its domains may take: the rest is for roads and for routing.
 const BOARD_FULL: f64 = 0.6;
+/// What a way under the parts of a zone that is not its end counts for, as so many times its length.
+const THROUGH: f64 = 2.0;
 /// What a layer change counts for when a way is chosen, in mm of track.
 const VIA_MM: f64 = 10.0;
 /// How far along a road a connection may run on the layer of its parts, without a layer change, in mm.
@@ -322,7 +329,7 @@ const LOCAL_MM: f64 = 5.0;
 const OVER_MM: f64 = 50.0;
 const STRANDED_MM: f64 = 200.0;
 /// How often the roads asked for too much are widened, and how many cuts are tried the other way round.
-const WIDENINGS: usize = 3;
+const WIDENINGS: usize = 8;
 const TURNINGS: usize = 400;
 /// The most of a piece of the board that the road across it takes.
 const ROAD_MOST: f64 = 0.2;
@@ -756,7 +763,10 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
     // (a road along a cut across the board's width runs up and down, and so on: it has the layers that run so;
     // between two domains it is no road but the gap they keep)
     let run_layers = board.layers_that_run(wide);
-    let road = if domains { board.gap } else { board.pitch * lanes / run_layers as f64 }.min(ROAD_MOST * length);
+    // (whole tracks: a road for three nets on four layers is one track wide, not three quarters of one; and
+    // one track at the least along every cut, or a zone with nothing to its neighbour has no way out past it)
+    let abreast = (lanes / run_layers as f64).ceil().max(1.0);
+    let road = if domains { board.gap } else { board.pitch * abreast }.min(ROAD_MOST * length);
     let low = if wide { rect[0] } else { rect[1] };
     let piece = |from: f64, to: f64| if wide { [from, rect[1], to, rect[3]] } else { [rect[0], from, rect[2], to] };
     // (the lots change sides where that was found the better)
@@ -775,7 +785,7 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
             between: [names(true), names(false)],
             up: wide,
             gap: domains,
-            lanes: if domains { 0 } else { (road / board.pitch).floor() as usize * run_layers },
+            lanes: if domains { 0 } else { (road / board.pitch + 1e-6).floor() as usize * run_layers },
             used: 0,
             parts: Vec::new(),
             cut: this_cut,
@@ -815,7 +825,8 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
 /// The roads are lines down their middles, joined where one ends on another; a zone comes onto every road
 /// that runs along one of its sides, at the point nearest its middle. A way is the shortest from zone to
 /// zone along those lines, a turn from one road into another counted as VIA_MM more (it is a change of
-/// layer), and a road that is full as four times its length. A net of several zones is joined zone by
+/// layer), a road that is full as four times its length, and a way under a zone that is not its end as
+/// twice its length. A net of several zones is joined zone by
 /// zone, each to the nearest of what is joined already. The gaps between domains are no roads.
 fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets: &[Vec<usize>]) -> Travel {
     const NEAR: f64 = 0.03;
@@ -941,17 +952,25 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
                 return Some(path);
             }
             for &(next, far, road) in &edges[here] {
-                // (a zone is the end of a way, not a way through)
-                if zone_node.contains(&next) && !to.contains(&next) {
-                    continue;
-                }
+                // (a zone is the end of a way; a way through one runs under its parts on the inner layers,
+                // which is dearer than a road: THROUGH times as far)
+                let under =
+                    (zone_node.contains(&next) && !to.contains(&next)) || (zone_node.contains(&here) && cost > 0.0);
                 let turn = match (came < count, road) {
                     (true, Some(r)) if about[came].0 != about[r].0 => VIA_MM,
                     _ => 0.0,
                 };
                 let full = road
                     .is_some_and(|r| used.get(&(here.min(next), here.max(next))).copied().unwrap_or(0) >= about[r].1);
-                let then = cost + turn + if full { 4.0 * far } else { far };
+                let then = cost
+                    + turn
+                    + if full {
+                        4.0 * far
+                    } else if under {
+                        THROUGH * far
+                    } else {
+                        far
+                    };
                 let to_state = slot(next, road);
                 if best.get(&to_state).map_or(true, |b| then < b.0 - 1e-9) {
                     best.insert(to_state, (then, Some(state)));
@@ -961,7 +980,7 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
         }
         None
     };
-    for parts in nets {
+    for (number, parts) in nets.iter().enumerate() {
         let reached: BTreeSet<usize> = parts.iter().filter_map(|p| leaf_of.get(p).copied()).collect();
         if reached.len() < 2 {
             continue;
@@ -973,6 +992,7 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
         }
         if reached.iter().any(|&z| access[z].is_empty()) {
             travel.stranded += 1;
+            travel.left.push(number);
             continue;
         }
         travel.nets += 1;
@@ -981,6 +1001,7 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
         while !left.is_empty() {
             let Some(path) = way(&joined, &left, &used) else {
                 travel.stranded += 1;
+                travel.left.push(number);
                 break;
             };
             let (mut along, mut turns, mut last) = (0.0, 0usize, None::<usize>);
@@ -1527,6 +1548,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         now_mm: now_mm.round(),
         then_mm: then_mm.round(),
         regions,
+        stranded: travel.left.iter().map(|&k| net_name(signal[k])).collect(),
         travel,
         first,
         roads,
@@ -1732,8 +1754,8 @@ mod tests {
         assert_eq!(found.roads.len(), 3);
         assert!(found.roads[1..].iter().all(|road| road.up != first.up && road.level == 1));
         // sixteen nets cross the first cut: on three layers that run its way (the two outer and one inner
-        // of the two between the planes), five and a third tracks' width
-        assert_eq!((first.nets, first.width, first.lanes), (16, 2.13, 15));
+        // of the two between the planes), six tracks abreast
+        assert_eq!((first.nets, first.width, first.lanes), (16, 2.4, 18));
         // every net goes to the zone beside its own: across a road, or a little along one
         let travel = &found.travel;
         assert_eq!((travel.nets, travel.through, travel.stranded), (32, 0, 0), "{travel:?}");
