@@ -22,7 +22,10 @@
   nothing runs along it, and what goes from domain to domain goes through the parts that stand on it. Every
   net between zones of one domain is given a way along the roads (the shortest, a turn from a road into
   one that runs the other way counted as a layer change, a full road as four times its length), which
-  says what the plan comes to: track, layer changes, and the roads asked for more than they hold. For each zone: the ground it is given and
+  says what the plan comes to: track, layer changes, and the roads asked for more than they hold. The plan is
+  then bettered by that measure: a road asked for too much is widened and the board laid out again, and each
+  cut is tried with its two sides changed over and kept so if the whole is the better for it. A gap names
+  the parts that stand on both its domains: they are placed on it. For each zone: the ground it is given and
   how its parts stand to that today.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they

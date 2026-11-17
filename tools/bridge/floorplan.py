@@ -148,7 +148,14 @@ def floorplan_told(found, depth=2, every=False):
             lines.append(f"  level {road['level']}, {'up and down' if road['up'] else 'across'}: {road['width']:.1f} mm wide, "
                          f"{max(x1 - x0, y1 - y0):.0f} mm long, holds {road['lanes']} tracks, {road['used']} planned along it"
                          f"{' (TOO MANY)' if road['used'] > road['lanes'] else ''}; between [{one}] and [{other}]")
-    travel = found.get("travel")
+    for gap in gaps:
+        one, other = (", ".join(side) for side in gap["between"])
+        on_it = ", ".join(gap["parts"]) if gap["parts"] else "no part"
+        lines.append(f"  gap {gap['width']:.0f} mm between [{one}] and [{other}]: {on_it} on it")
+    travel, first = found.get("travel"), found.get("first")
+    if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
+        lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "
+                      "more than they hold; then those roads were widened, and each cut tried with its two sides changed over"]
     if travel:
         each = travel["vias"] / travel["nets"] if travel["nets"] else 0.0
         lines += ["", f"every net between zones of one domain given a way along the roads: {travel['nets']} nets, "
