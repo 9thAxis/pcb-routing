@@ -47,6 +47,22 @@ class Floorplan(unittest.TestCase):
         k.floorplan(self.picture, k.Rules.of(self.picture, k.Settings(guesses=False)), lambda question: asked.append(question) or {})
         self.assertFalse(any(part["edge"] for part in asked[1]["parts"]))
 
+    def test_a_road_is_kept_along_each_cut_that_something_crosses_and_no_zone_stands_on_it(self):
+        roads = self.found["roads"]
+        self.assertTrue(roads and all(road["width"] > 0 and road["nets"] + road["rails"] > 0 for road in roads))
+        self.assertEqual([road["level"] for road in roads], sorted(road["level"] for road in roads))
+        asked = []
+        k.floorplan(self.picture, k.Rules.of(self.picture, k.Settings()), lambda question: asked.append(question) or {})
+        # (a 0.25 mm track and the 0.202 mm it keeps; both layers of this board carry routes)
+        self.assertEqual((asked[0]["pitch"], asked[0]["layers"]), (0.452, 2))
+        def leaves(zone):
+            return [zone] if not zone["inside"] else [leaf for inner in zone["inside"] for leaf in leaves(inner)]
+        meet = lambda a, b: min(a[2], b[2]) - max(a[0], b[0]) > 1e-6 and min(a[3], b[3]) - max(a[1], b[1]) > 1e-6
+        for zone in self.found["zones"]:
+            for leaf in leaves(zone):
+                self.assertFalse(any(meet(leaf["rect"], road["rect"]) for road in roads), leaf["name"])
+        self.assertTrue(any(line.startswith("ground kept free between zones") for line in k.floorplan_told(self.found)))
+
     def test_it_is_told_with_the_power_first(self):
         lines = k.power_told(self.found) + k.floorplan_told(self.found, 3)
         self.assertEqual(lines[0], "1 domains (grounds); 0 parts stand on two or more; 0 parts that nothing places in one")

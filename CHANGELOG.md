@@ -11,7 +11,10 @@
   Then each zone is given ground: the board is cut across its longer side, the zones in the order they are
   pulled along it (by their ties, and by what already has its ground), each lot with the share its parts
   need, down to the smallest zones. Nothing is fixed where it stands; a connector or a switch moves with its
-  zone and pulls it to an edge. For each zone: the ground it is given and how its parts stand to that today.
+  zone and pulls it to an edge. Along every cut a road is kept free of parts for what crosses it, as wide as
+  its tracks take side by side on the layers that carry routes (a supply as four): the cut of the whole
+  board has the widest, the cuts within the zones the narrowest. For each zone: the ground it is given and
+  how its parts stand to that today.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

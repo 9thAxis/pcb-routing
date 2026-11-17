@@ -2,6 +2,7 @@
 answer as lines to read. Read only: nothing here moves a part."""
 
 from .names import CAPACITOR_PART, FACING_PART, is_supply
+from .steps import planes
 
 
 def _ground(picture):
@@ -40,7 +41,12 @@ def floorplan(picture, rules, ask):
              for reference, part in sorted(picture.parts.items())]
     asked = [dict(name=net, supply=rules.intent(net).role == "supply" or is_supply(net) and rules.intent(net).role != "ground",
                   pair=isinstance(rules.intent(net).pair, str)) for net in nets]
-    return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked))
+    # (what a track takes across its way: the usual net's width and clearance; and the layers that carry routes)
+    signal = [net for net in nets if rules.intent(net).role not in ("supply", "ground")] or nets
+    takes = sorted(rules.track_width(net) + rules.clearance(net) for net in signal)
+    layers = [layer for layer in rules.routing_layers(picture.layers) if layer not in planes(picture)]
+    return ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked,
+                    pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1)))
 
 
 def power_told(found, every=False):
@@ -98,6 +104,17 @@ def floorplan_told(found, depth=2, every=False):
     lines += ["", f"the signal nets between the smallest zones: {found['now_mm']:.0f} mm with each zone where its parts stand "
                   f"today, {found['then_mm']:.0f} mm with each on the ground it is given "
                   f"({abs(shorter):.0f} % {'shorter' if shorter >= 0 else 'longer'})"]
+    roads = found.get("roads", [])
+    if roads:
+        taken = sum((r["rect"][2] - r["rect"][0]) * (r["rect"][3] - r["rect"][1]) for r in roads)
+        lines += ["", f"ground kept free between zones for what runs between them: {len(roads)} roads, {taken:.0f} mm2 "
+                      "(a road along every cut, as wide as what crosses it takes side by side):"]
+        for road in roads[:None if every else 12]:
+            x0, y0, x1, y1 = road["rect"]
+            long = max(x1 - x0, y1 - y0)
+            one, other = (", ".join(side[:2]) + (f" and {len(side) - 2} more" if len(side) > 2 else "") for side in road["between"])
+            lines.append(f"  level {road['level']}: {road['width']:.1f} mm wide, {long:.0f} mm long, for {road['nets']} nets and "
+                         f"{road['rails']} supplies, between [{one}] and [{other}]")
     lines += ["", "what flows between zones (the nets from one to the other; the heaviest are to be neighbours):"]
     for a, b, count, pairs in found["flows"][:None if every else 15]:
         lines.append(f"  {count:3} nets{f', {pairs} pairs' if pairs else ''}: {a}  <->  {b}")

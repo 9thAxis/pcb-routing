@@ -74,6 +74,38 @@ pub struct Board {
     pub parts: Vec<Part>,
     /// Its nets.
     pub nets: Vec<Net>,
+    /// What a signal track takes across its way, in mm: its width and the clearance beside it.
+    #[serde(default = "usual_pitch")]
+    pub pitch: f64,
+    /// How many layers carry routes (the planes are none of them).
+    #[serde(default = "two")]
+    pub layers: usize,
+}
+
+fn usual_pitch() -> f64 {
+    0.4
+}
+
+fn two() -> usize {
+    2
+}
+
+/// Ground kept free of parts for what runs between zones: the strip along one cut of the board.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Road {
+    /// The strip: [x0, y0, x1, y1].
+    pub rect: [f64; 4],
+    /// How wide it is, in mm.
+    pub width: f64,
+    /// The signal nets that cross the cut it runs along.
+    pub nets: usize,
+    /// And the supplies that do.
+    pub rails: usize,
+    /// How far down it is: 0 for the cut of the whole board, 1 for the cuts of its halves, and so on. The
+    /// lower the number, the more of the board it serves.
+    pub level: usize,
+    /// The zones on one side of it, by name, and those on the other.
+    pub between: [Vec<String>; 2],
 }
 
 /// A supply: a net that feeds parts.
@@ -162,12 +194,19 @@ pub struct Floorplan {
     pub now_mm: f64,
     /// And the same with each of those zones at the middle of the ground it is given.
     pub then_mm: f64,
+    /// The ground kept free between zones, the roads that serve the most of the board first: a road along
+    /// every cut that something crosses, as wide as its tracks take side by side on the layers there are.
+    pub roads: Vec<Road>,
 }
 
 /// Capacitors from a net straight to a ground that make it a supply.
 const BYPASSED: usize = 2;
 /// What a fixed part pulls its zone with, as so many nets.
 const ANCHOR: f64 = 4.0;
+/// How many signal tracks a supply counts for in a road: it is laid wide.
+const RAIL_LANES: f64 = 4.0;
+/// The most of a piece of the board that the road across it takes.
+const ROAD_MOST: f64 = 0.2;
 
 /// Whether a net is a ground by its name: GND, VSS, 0V or GROUND as a word of it (VIB_GND, FIELD_0V, AGND1).
 pub fn is_ground(name: &str) -> bool {
@@ -418,10 +457,24 @@ fn median(points: &[Pt]) -> Option<Pt> {
     Some([of(0), of(1)])
 }
 
+/// What the giving of ground works on, and what it leaves.
+struct Ground<'a> {
+    board: &'a Board,
+    /// The signal nets, each as its parts.
+    nets: &'a [Vec<usize>],
+    /// The supplies, likewise.
+    rails: &'a [Vec<usize>],
+    /// Where each part is taken to stand so far.
+    at: Vec<Option<Pt>>,
+    roads: Vec<Road>,
+}
+
 /// Give the zones of `zones` ground within `rect`, and theirs within that (see the module). `at`: where each
 /// part is taken to stand so far (a fixed part where it stands; another at the middle of the ground its zone
 /// has been given, once it has).
-fn arrange(zones: &mut [Work], rect: [f64; 4], board: &Board, nets: &[Vec<usize>], at: &mut Vec<Option<Pt>>) {
+fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, on: &mut Ground) {
+    let (board, nets) = (on.board, on.nets);
+    let at = &mut on.at;
     let settle = |zone: &Work, rect: [f64; 4], at: &mut Vec<Option<Pt>>| {
         for &part in &zone.parts {
             if !(board.parts[part].fixed && board.parts[part].placed) {
@@ -436,7 +489,7 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], board: &Board, nets: &[Vec<usize>
             settle(&zones[0], rect, at);
             let (inner, _) = (&mut zones[0].inside, ());
             let mut taken = std::mem::take(inner);
-            arrange(&mut taken, rect, board, nets, at);
+            arrange(&mut taken, rect, level, on);
             zones[0].inside = taken;
             return;
         }
@@ -550,13 +603,33 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], board: &Board, nets: &[Vec<usize>
     let mut first = vec![false; count];
     order[..best.0].iter().for_each(|&z| first[z] = true);
     let share = (0..count).filter(|&z| first[z]).map(|z| area[z]).sum::<f64>() / total;
-    let (of_first, of_second) = if wide {
-        let x = rect[0] + share * (rect[2] - rect[0]);
-        ([rect[0], rect[1], x, rect[3]], [x, rect[1], rect[2], rect[3]])
-    } else {
-        let y = rect[1] + share * (rect[3] - rect[1]);
-        ([rect[0], rect[1], rect[2], y], [rect[0], y, rect[2], rect[3]])
+    // Between the two lots a road is kept free of parts: what crosses the cut runs along it to where it is
+    // going. It is as wide as the tracks that cross take side by side on the layers there are (a supply as
+    // several), and no more than a share of the piece that is cut.
+    let crosses = |parts: &Vec<usize>| {
+        let sides: BTreeSet<bool> = parts.iter().filter_map(|p| zone_of.get(p)).map(|&z| first[z]).collect();
+        sides.len() == 2
     };
+    let (signals, supplies) =
+        (nets.iter().filter(|n| crosses(n)).count(), on.rails.iter().filter(|n| crosses(n)).count());
+    let length = if wide { rect[2] - rect[0] } else { rect[3] - rect[1] };
+    let lanes = signals as f64 + RAIL_LANES * supplies as f64;
+    let road = (board.pitch * lanes / board.layers.max(1) as f64).min(ROAD_MOST * length);
+    let low = if wide { rect[0] } else { rect[1] };
+    let cut = low + share * (length - road);
+    let piece = |from: f64, to: f64| if wide { [from, rect[1], to, rect[3]] } else { [rect[0], from, rect[2], to] };
+    let (of_first, of_second) = (piece(low, cut), piece(cut + road, low + length));
+    if road > 0.0 {
+        let names = |side: bool| (0..count).filter(|&z| first[z] == side).map(|z| zones[z].name.clone()).collect();
+        on.roads.push(Road {
+            rect: piece(cut, cut + road).map(|v| (v * 100.0).round() / 100.0),
+            width: (road * 100.0).round() / 100.0,
+            nets: signals,
+            rails: supplies,
+            level,
+            between: [names(true), names(false)],
+        });
+    }
     // (each lot stands at the middle of its half until its zones have their own)
     for (z, zone) in zones.iter().enumerate() {
         settle(zone, if first[z] { of_first } else { of_second }, at);
@@ -574,8 +647,8 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], board: &Board, nets: &[Vec<usize>
         });
     }
     let [mut one, mut other] = lots;
-    arrange(&mut one, of_first, board, nets, at);
-    arrange(&mut other, of_second, board, nets, at);
+    arrange(&mut one, of_first, level + 1, on);
+    arrange(&mut other, of_second, level + 1, on);
     let mut back: [Vec<Option<Work>>; 2] = [one.into_iter().map(Some).collect(), other.into_iter().map(Some).collect()];
     for (zone, (side, k)) in zones.iter_mut().zip(order) {
         if let Some(done) = back[side][k].take() {
@@ -819,8 +892,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
 
     // Ground for each zone, from the whole board down.
-    let mut at: Vec<Option<Pt>> = parts.iter().map(|part| (part.fixed && part.placed).then_some(part.at)).collect();
-    arrange(&mut top, board.outline, board, &nets, &mut at);
+    let at: Vec<Option<Pt>> = parts.iter().map(|part| (part.fixed && part.placed).then_some(part.at)).collect();
+    let rail_parts: Vec<Vec<usize>> = found.rails.keys().map(|&net| reach[net].iter().copied().collect()).collect();
+    let mut on = Ground { board, nets: &nets, rails: &rail_parts, at, roads: Vec::new() };
+    arrange(&mut top, board.outline, 0, &mut on);
+    let mut roads = std::mem::take(&mut on.roads);
+    roads.sort_by(|a, b| a.level.cmp(&b.level).then(b.width.total_cmp(&a.width)));
 
     // What flows between the zones just under the domains.
     let mut home: BTreeMap<usize, String> = BTreeMap::new();
@@ -913,7 +990,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         now_mm += span(reached.iter().filter_map(|&l| leaves[l].0).collect());
         then_mm += span(reached.iter().map(|&l| leaves[l].1).collect());
     }
-    Ok(Floorplan { power, zones, flows, apart, now_mm: now_mm.round(), then_mm: then_mm.round() })
+    Ok(Floorplan { power, zones, flows, apart, now_mm: now_mm.round(), then_mm: then_mm.round(), roads })
 }
 
 #[cfg(test)]
@@ -963,6 +1040,8 @@ mod tests {
         };
         Board {
             outline: [0.0, 0.0, 40.0, 10.0],
+            pitch: 0.4,
+            layers: 2,
             nets: nets.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false }).collect(),
             parts: vec![
                 part("U1", 2.0, &["A_3V3", "A_GND", "SIG", "FILT"]),
@@ -1013,8 +1092,15 @@ mod tests {
         let [a, field] = &found.zones[..] else { panic!("{:?}", found.zones.len()) };
         assert_eq!((a.name.as_str(), field.name.as_str()), ("A_GND", "FIELD_0V"));
         // nine parts to five of the same size: nine fourteenths of the board
-        assert_eq!(a.rect, [0.0, 0.0, 25.71, 10.0]);
-        assert_eq!(field.rect, [25.71, 0.0, 40.0, 10.0]);
+        // of what the road between them leaves: one signal and one supply cross (the isolator's output and
+        // the supply of its far side), five tracks' worth on two layers, 1 mm
+        assert_eq!(a.rect, [0.0, 0.0, 25.07, 10.0]);
+        assert_eq!(field.rect, [26.07, 0.0, 40.0, 10.0]);
+        let top = &found.roads[0];
+        assert_eq!((top.rect, top.width, top.nets, top.rails, top.level), ([25.07, 0.0, 26.07, 10.0], 1.0, 1, 1, 0));
+        assert_eq!(top.between, [vec!["A_GND".to_string()], vec!["FIELD_0V".to_string()]]);
+        // the roads within a domain serve less of the board, and come after
+        assert!(found.roads[1..].iter().all(|road| road.level > 0 && road.width <= 2.0), "{:?}", found.roads);
         // (as it happens the parts stand where their zones are given ground)
         assert_eq!((a.at_home, field.at_home, a.placed, field.placed), (1.0, 1.0, 9, 5));
         assert!(a.off.unwrap() < 8.0 && field.off.unwrap() < 2.0, "{:?} {:?}", a.off, field.off);
