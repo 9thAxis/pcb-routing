@@ -93,6 +93,11 @@ class Floorplan(unittest.TestCase):
         self.assertEqual((parts["U9"]["height"], parts["R10"]["height"], parts["J1"]["near"], "near" in parts["U1"]),
                          (10.5, 0.5, [3.0, 4.0], False))
         self.assertEqual((parts["U1"]["mate"], "mate" in parts["U9"]), ("U9", False))
+        # a part is fixed where it stands if a pattern given says so; the hints may say otherwise of it
+        asked.clear()
+        k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), lambda question: asked.append(question) or {}, fixed=["J*", "U9"])
+        parts = {part["name"]: part for part in asked[0]["parts"]}
+        self.assertEqual((parts["J1"].get("fixed"), parts["U1"].get("fixed")), (True, None))
         # each part is said by the middle of its body, with where its pads and its own origin are from there
         for part in q["parts"]:
             self.assertEqual((len(part["offsets"]), len(part["pins"])), (len(part["pads"]), len(part["pads"])), part["name"])
@@ -104,7 +109,7 @@ class Floorplan(unittest.TestCase):
         self.assertEqual((under["rect"], under["has"]), ([9.0, 0, 14.0, 10], 6.0))
         self.assertIn(under["needs"], (0.5, 10.5))
         self.assertTrue(any(line.startswith("  under another board (x 9 to 14") for line in k.floorplan_told(found)))
-        for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)}), dict(parts={"J1": dict(mate=3)}), dict(parts={"J1": dict(noisy="very")}),
+        for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)}), dict(parts={"J1": dict(mate=3)}), dict(parts={"J1": dict(noisy="very")}), dict(parts={"J1": dict(fixed=1)}),
                       dict(keepouts=[[3, 0, 1, 2]]), dict(rows="sometimes")):
             with tempfile.TemporaryDirectory() as tmp:
                 Path(tmp, "b.routing.json").write_text(json.dumps(wrong))

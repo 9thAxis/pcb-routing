@@ -23,6 +23,8 @@ def main(argv=None):
     parser.add_argument("boards", nargs="+")
     parser.add_argument("--json", help="write each board's floorplan to this directory")
     parser.add_argument("--no-guesses", action="store_true", help="take nothing from the names of nets and parts")
+    parser.add_argument("--fixed", action="append", default=[], metavar="PATTERN",
+                        help="parts that stay where they stand, by reference (J*, SW?, H*); may be given several times")
     parser.add_argument("--engine", default=os.environ.get("PCB_ROUTING", "pcb-routing"))
     args = parser.parse_args(argv)
     if not kicad_is_here():
@@ -39,7 +41,7 @@ def main(argv=None):
             settings = Settings(hints=read_hints(beside) if beside.is_file() else None, guesses=not args.no_guesses)
             engine = Engine(args.engine, 0, None, None)
             picture = KicadBoard(load_board(path), ignored_checks(path), engine.ask, settings.pours).read()
-            found = floorplan(picture, Rules.of(picture, settings), engine.ask)
+            found = floorplan(picture, Rules.of(picture, settings), engine.ask, fixed=args.fixed)
         except (EngineFailed, ValueError) as failure:
             print(f"{name}: {failure}", file=sys.stderr)
             continue

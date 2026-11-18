@@ -94,7 +94,7 @@ def stack_of(picture, rules):
     return found
 
 
-def floorplan(picture, rules, ask):
+def floorplan(picture, rules, ask, fixed=()):
     """The floorplan of a board, as the engine answers (see `Floorplan` in src/floorplan.rs): its power (the
     grounds as domains, their supplies, the parts between two domains), the zones within each domain with the
     ground each is given, what flows between them, and how far the parts stand from that today.
@@ -175,6 +175,12 @@ def floorplan(picture, rules, ask):
         tall = height(of)
         near = [what["near"] for pattern, what in (hints.parts if hints else [])
                 if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
+        # (a part is fixed where it stands if the hints say so, or its reference is one of `fixed`: patterns given
+        # on the command line. What the enclosure holds, connectors, mounting holes, switches, is not the plan's to move)
+        stays = [what["fixed"] for pattern, what in (hints.parts if hints else [])
+                 if "fixed" in what and fnmatch.fnmatchcase(part["name"], pattern)]
+        if (stays[-1] if stays else any(fnmatch.fnmatchcase(part["name"], pattern) for pattern in fixed)) and part["placed"]:
+            part["fixed"] = True
         for said in ("noisy", "quiet"):
             told = [what[said] for pattern, what in (hints.parts if hints else [])
                     if said in what and fnmatch.fnmatchcase(part["name"], pattern)]
