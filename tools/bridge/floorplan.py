@@ -217,6 +217,18 @@ def floorplan_told(found, depth=2, every=False):
                          f"({bridge['at'][0]:.1f}, {bridge['at'][1]:.1f}){reach}; {now}")
         if found["travel"].get("cramped"):
             lines.append(f"  TOO MANY on a gap: side by side they are {found['travel']['cramped']:.0f} mm longer than it")
+    if found.get("pours"):
+        pours = found["pours"]
+        lines += ["", f"supplies poured on {', '.join(pours[0]['layers'])} (under each of the smallest zones, the supply most of "
+                      f"its parts are on): {len(pours)} supplies; {sum(len(p['by_track']) for p in pours)} parts stand under "
+                      f"another's pour and are reached by a track; {sum(p['pieces'] - 1 for p in pours)} pieces more than one each"]
+        for pour in pours[:None if every else 14]:
+            left = (f"; by track: {', '.join(pour['by_track'][:6])}{' ...' if len(pour['by_track']) > 6 else ''}"
+                    if pour["by_track"] else "")
+            lines.append(f"  {pour['net']} ({pour['ground']}): under {len(pour['rects'])} zones, {pour['area']:.0f} mm2, "
+                         f"{pour['parts']} parts on it, in {pour['pieces']} piece{'s' if pour['pieces'] > 1 else ''}{left}")
+        if not every and len(pours) > 14:
+            lines.append(f"  and {len(pours) - 14} more")
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "

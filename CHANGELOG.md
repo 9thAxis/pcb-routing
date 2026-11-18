@@ -44,7 +44,11 @@
   link from board to board) are pulled to the same place of the stack, and the plan says how far apart they
   are left. Ground where no part may stand (the board's rule areas, and `keepouts` in the hints: an opening
   to be cut, what must be reached from above) is no room when a ground is cut: each lot has its share of
-  what is left.
+  what is left. Supplies are poured on the plane layers (`pours`; every plane after the first, which is the
+  ground's): under each of the smallest zones, the supply most of its parts are on, of those of its ground
+  that reach several zones. A supply so poured takes no room in a road but where parts of it stand under
+  another's pour and have none of their own on their side of the cut; the plan names those parts (they are
+  reached by a track) and says in how many pieces each pour is.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

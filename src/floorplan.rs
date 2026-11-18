@@ -234,8 +234,31 @@ pub struct Travel {
     pub mate_mm: f64,
     /// The parts on two grounds whose two domains are on one board and no neighbours.
     pub apart: usize,
+    /// The pieces more than one that the supplies on the plane layers are in: each wants a way to the rest.
+    pub split: usize,
     /// How much longer the parts that stand on the gaps are, side by side, than the gaps they stand on, in mm.
     pub cramped: f64,
+}
+
+/// A supply on a plane layer: the ground it is poured on.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Pour {
+    /// The supply.
+    pub net: String,
+    /// Its ground: the domain it is poured in.
+    pub ground: String,
+    /// The plane layers it is one of the supplies of.
+    pub layers: Vec<String>,
+    /// The grounds of the smallest zones it is poured under, each [x0, y0, x1, y1].
+    pub rects: Vec<[f64; 4]>,
+    /// What those come to, in mm2.
+    pub area: f64,
+    /// How many of its parts stand there: they reach it by a via.
+    pub parts: usize,
+    /// Its parts that stand elsewhere, under the pour of another supply: they are reached by a track.
+    pub by_track: Vec<String>,
+    /// The pieces it is in (zones that are neighbours, or joined by ground no supply is poured on, are one).
+    pub pieces: usize,
 }
 
 /// Where a part that stands on two grounds is given its place.
@@ -384,6 +407,10 @@ pub struct Floorplan {
     pub tall: Vec<(String, f64, Vec<String>, f64)>,
     /// The parts that stand on two grounds, each with the place it is given.
     pub bridges: Vec<Bridge>,
+    /// The supplies poured on the plane layers (every plane after the first, which is the ground's): under
+    /// each of the smallest zones, the supply most of its parts are on, of those that reach several zones.
+    /// A supply so poured takes no room in the roads but where a part of it stands under another's pour.
+    pub pours: Vec<Pour>,
     /// The ground kept free between zones, the roads that serve the most of the board first: a road along
     /// every cut that something crosses, as wide as its tracks take side by side on the layers there are.
     pub roads: Vec<Road>,
@@ -709,8 +736,9 @@ struct Ground<'a> {
     board: &'a Board,
     /// The signal nets, each as its parts.
     nets: &'a [Vec<usize>],
-    /// The supplies, likewise.
-    rails: &'a [Vec<usize>],
+    /// The supplies: of each, the parts that stand on its pour on a plane layer, and those that do not (all of
+    /// them, where there is no such layer).
+    rails: &'a [(Vec<usize>, Vec<usize>)],
     /// Where each part is taken to stand so far.
     at: Vec<Option<Pt>>,
     roads: Vec<Road>,
@@ -960,8 +988,19 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
         let sides: BTreeSet<bool> = parts.iter().filter_map(|p| zone_of.get(p)).map(|&z| first[z]).collect();
         sides.len() == 2
     };
+    // (a supply crosses by a track where a lot has parts of it and none of them on its pour, and the other lot
+    // has any of it)
+    let rail_crosses = |(fed, left): &(Vec<usize>, Vec<usize>)| {
+        let sides = |parts: &Vec<usize>| {
+            let mut found = [false; 2];
+            parts.iter().filter_map(|p| zone_of.get(p)).for_each(|&z| found[usize::from(first[z])] = true);
+            found
+        };
+        let (fed, left) = (sides(fed), sides(left));
+        (0..2).any(|k| left[k] && !fed[k] && (fed[1 - k] || left[1 - k]))
+    };
     let (signals, supplies) =
-        (nets.iter().filter(|n| crosses(n)).count(), on.rails.iter().filter(|n| crosses(n)).count());
+        (nets.iter().filter(|n| crosses(n)).count(), on.rails.iter().filter(|n| rail_crosses(n)).count());
     let length = if wide { rect[2] - rect[0] } else { rect[3] - rect[1] };
     let lanes =
         (signals as f64 + RAIL_LANES * supplies as f64).max(on.asked.get(&this_cut).copied().unwrap_or(0) as f64);
@@ -1511,7 +1550,95 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
 
     // Ground for each zone, from the whole board down.
     let at: Vec<Option<Pt>> = parts.iter().map(|part| (part.fixed && part.placed).then_some(part.at)).collect();
-    let rail_parts: Vec<Vec<usize>> = found.rails.keys().map(|&net| reach[net].iter().copied().collect()).collect();
+    // The supplies on the plane layers (every plane after the first, the ground's): under each of the smallest
+    // zones, as many supplies as there are such layers, those with the most parts there, of the supplies of
+    // its ground that reach several zones (one that stays within a zone is laid there, on the layers of its
+    // parts). A part on two grounds stands on a gap, beside the pours of both.
+    let power_layers: Vec<String> =
+        board.stack.iter().filter(|layer| layer.way == Way::Plane).skip(1).map(|layer| layer.name.clone()).collect();
+    let mut leaf_parts: Vec<(usize, &Vec<usize>)> = Vec::new();
+    fn smallest_of<'w>(work: &'w Work, domain: usize, out: &mut Vec<(usize, &'w Vec<usize>)>) {
+        if work.inside.is_empty() {
+            out.push((domain, &work.parts));
+        }
+        work.inside.iter().for_each(|inner| smallest_of(inner, domain, out));
+    }
+    top.iter().enumerate().for_each(|(domain, work)| smallest_of(work, domain, &mut leaf_parts));
+    let leaf_at: BTreeMap<usize, usize> =
+        leaf_parts.iter().enumerate().flat_map(|(l, (_, own))| own.iter().map(move |&p| (p, l))).collect();
+    let rail_nets: Vec<usize> = found.rails.keys().copied().collect();
+    let in_leaf: Vec<BTreeMap<usize, usize>> = rail_nets
+        .iter()
+        .map(|&net| {
+            let mut count: BTreeMap<usize, usize> = BTreeMap::new();
+            reach[net].iter().filter_map(|p| leaf_at.get(p)).for_each(|&l| *count.entry(l).or_insert(0) += 1);
+            count
+        })
+        .collect();
+    let domain_at: BTreeMap<usize, usize> = domains.iter().enumerate().map(|(d, (g, _))| (*g, d)).collect();
+    let rail_domain: Vec<Option<usize>> =
+        rail_nets.iter().map(|net| found.rails[net].0.and_then(|g| domain_at.get(&g).copied())).collect();
+    let mut on_plane: Vec<Vec<usize>> = vec![Vec::new(); leaf_parts.len()];
+    for (l, (domain, _)) in leaf_parts.iter().enumerate() {
+        let mut asking: Vec<(usize, usize, usize)> = (0..rail_nets.len())
+            .filter(|&r| rail_domain[r] == Some(*domain) && in_leaf[r].len() > 1)
+            .filter_map(|r| in_leaf[r].get(&l).map(|&count| (count, in_leaf[r].len(), r)))
+            .collect();
+        asking.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+        on_plane[l] = asking.into_iter().take(power_layers.len()).map(|ask| ask.2).collect();
+    }
+    let rail_parts: Vec<(Vec<usize>, Vec<usize>)> = (0..rail_nets.len())
+        .map(|r| {
+            let poured = on_plane.iter().any(|rails| rails.contains(&r));
+            let fed = |p: &usize| {
+                poured
+                    && (found.stands[*p].len() > 1
+                        || leaf_at.get(p).is_some_and(|&l| on_plane[l].contains(&r))
+                        || in_leaf[r].len() < 2)
+            };
+            reach[rail_nets[r]].iter().copied().partition(fed)
+        })
+        .collect();
+    // (the pieces each supply's pour is in, given the ground of every smallest zone: zones that are neighbours
+    // are one piece, and so are zones joined through ground that has a plane layer to spare)
+    let pieces = |rects: &[[f64; 4]]| -> Vec<usize> {
+        let count = leaf_parts.len();
+        let mut beside: Vec<Vec<usize>> = vec![Vec::new(); count];
+        for a in 0..count {
+            for b in a + 1..count {
+                if leaf_parts[a].0 == leaf_parts[b].0 && strip_between(rects[a], rects[b], board.gap).is_some() {
+                    beside[a].push(b);
+                    beside[b].push(a);
+                }
+            }
+        }
+        (0..rail_nets.len())
+            .map(|r| {
+                let open = |l: usize| on_plane[l].contains(&r) || on_plane[l].len() < power_layers.len();
+                let mut seen = vec![false; count];
+                let mut found = 0;
+                for from in (0..count).filter(|&l| on_plane[l].contains(&r)) {
+                    if seen[from] {
+                        continue;
+                    }
+                    found += 1;
+                    let mut edge = vec![from];
+                    seen[from] = true;
+                    while let Some(l) = edge.pop() {
+                        for &next in
+                            beside[l].iter().filter(|&&next| open(next) && rail_domain[r] == Some(leaf_parts[next].0))
+                        {
+                            if !seen[next] {
+                                seen[next] = true;
+                                edge.push(next);
+                            }
+                        }
+                    }
+                }
+                found
+            })
+            .collect()
+    };
     // Where the box holds several boards, the domains are parted between them first: in the order their ties
     // give, each board with as many as its room is of all the room (a domain is on one board).
     let overlap = |a: [f64; 4], b: [f64; 4]| {
@@ -1601,7 +1728,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .collect();
     // The parts that stand on two grounds: each with the domain it is counted with, the others it stands on
     // (the one most of its pads are on first), and the parts its signal nets tie it to.
-    let domain_at: BTreeMap<usize, usize> = domains.iter().enumerate().map(|(d, (g, _))| (*g, d)).collect();
     let mut spans: Vec<(usize, usize, Vec<usize>, Vec<usize>)> = Vec::new();
     for p in (0..parts.len()).filter(|&p| found.stands[p].len() > 1) {
         let Some(home) = found.home[p].and_then(|g| domain_at.get(&g).copied()) else { continue };
@@ -1681,6 +1807,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             smallest(work, domain, &mut leaves);
         }
         let mut travel = travelled(&mut roads, &leaves, &nets);
+        let rects: Vec<[f64; 4]> = leaves.iter().map(|leaf| leaf.1).collect();
+        travel.split = pieces(&rects).iter().map(|&n| n.saturating_sub(1)).sum();
         // (how far what goes from domain to domain reaches, and how far what is to be near a point is from it:
         // by the middles of the smallest zones, as the boards stack)
         let mut spot_of: BTreeMap<usize, Pt> = BTreeMap::new();
@@ -1822,6 +1950,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             + NEAR * travel.mate_mm
             + CRAMPED_MM * travel.cramped
             + STRANDED_MM * travel.apart as f64
+            + OVER_MM * travel.split as f64
             + VIA_MM * travel.vias as f64
             + OVER_MM * over as f64
             + STRANDED_MM * travel.stranded as f64
@@ -1926,6 +2055,35 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
     let (laid, mut roads, travel, tall, bridges) = best;
     let top = laid;
+    // The pours, as they are told.
+    let mut rects: Vec<[f64; 4]> = Vec::new();
+    fn grounds_of(work: &Work, out: &mut Vec<[f64; 4]>) {
+        if work.inside.is_empty() {
+            out.push(work.rect);
+        }
+        work.inside.iter().for_each(|inner| grounds_of(inner, out));
+    }
+    top.iter().for_each(|work| grounds_of(work, &mut rects));
+    let in_pieces = pieces(&rects);
+    let mut pours: Vec<Pour> = (0..rail_nets.len())
+        .filter(|&r| in_pieces[r] > 0)
+        .map(|r| {
+            let under: Vec<[f64; 4]> =
+                (0..rects.len()).filter(|&l| on_plane[l].contains(&r)).map(|l| rects[l]).collect();
+            let fed = |p: &&usize| leaf_at.get(p).is_some_and(|&l| on_plane[l].contains(&r));
+            Pour {
+                net: net_name(rail_nets[r]),
+                ground: found.rails[&rail_nets[r]].0.map(net_name).unwrap_or_default(),
+                layers: power_layers.clone(),
+                area: under.iter().map(|r| (r[2] - r[0]) * (r[3] - r[1])).sum::<f64>().round(),
+                rects: under.into_iter().map(|r| r.map(|v| (v * 100.0).round() / 100.0)).collect(),
+                parts: reach[rail_nets[r]].iter().filter(fed).count(),
+                by_track: names(&rail_parts[r].1),
+                pieces: in_pieces[r],
+            }
+        })
+        .collect();
+    pours.sort_by(|a, b| b.area.total_cmp(&a.area).then(a.net.cmp(&b.net)));
     // (what stands on a gap: the parts on a ground of either side)
     for road in roads.iter_mut().filter(|road| road.gap) {
         let side = |p: usize, names: &Vec<String>| found.stands[p].iter().any(|&g| names.contains(&all_nets[g].name));
@@ -2053,6 +2211,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         travel,
         first,
         bridges,
+        pours,
         roads,
     })
 }
@@ -2105,6 +2264,30 @@ mod tests {
         let (a, field) = (found.zones[0].rect, found.zones[1].rect);
         let free = |r: [f64; 4]| (r[2] - r[0].max(10.0)) * 10.0;
         assert!((free(a) / (free(a) + free(field)) - 90.0 / 145.0).abs() < 0.01, "{a:?} {field:?}");
+    }
+
+    #[test]
+    fn a_supply_is_poured_on_the_plane_under_the_zones_it_feeds_and_takes_no_room_in_the_road_between_them() {
+        // the regulator on a sheet of its own: the 3V3 it makes reaches two zones, its input stays within one
+        let mut board = two_grounds();
+        for part in board.parts.iter_mut().filter(|part| ["U2", "C4", "C5"].contains(&part.name.as_str())) {
+            part.sheet = "regulator".to_string();
+        }
+        let within = |found: &Floorplan| found.roads.iter().find(|road| !road.gap).map(|road| road.rails);
+        // with no plane to pour it on, it crosses the road between the two as a track
+        let plain = floorplan(&board).unwrap();
+        assert_eq!((within(&plain), plain.pours.len()), (Some(1), 0));
+        board.stack = square().stack;
+        let found = floorplan(&board).unwrap();
+        // (the supply of the other ground reaches the isolator on the gap: poured too, under its one zone)
+        let [pour, other] = &found.pours[..] else { panic!("{:?}", found.pours) };
+        assert_eq!((other.net.as_str(), other.rects.len(), other.pieces), ("B_VCC", 1, 1));
+        assert_eq!(
+            (pour.net.as_str(), pour.ground.as_str(), &pour.layers),
+            ("A_3V3", "A_GND", &vec!["In4".to_string()])
+        );
+        assert_eq!((pour.rects.len(), pour.parts, pour.pieces, pour.by_track.len()), (2, 5, 1, 0));
+        assert_eq!((within(&found), found.travel.split), (Some(0), 0));
     }
 
     #[test]
