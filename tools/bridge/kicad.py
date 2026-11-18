@@ -42,6 +42,22 @@ def save_board(board, path, fill=True):
     pcbnew.SaveBoard(str(path), board)
 
 
+def move_parts(board, moves):
+    """Stand the parts of a pcbnew board where `moves` says ({reference: (origin [x, y] in mm, angle in degrees)}:
+    see placing.moves). Returns the references moved. Tracks and zones are left as they are: what was laid to
+    the parts where they stood no longer reaches them."""
+    done = []
+    for footprint in board.GetFootprints():
+        move = moves.get(footprint.GetReference())
+        if move is None:
+            continue
+        (x, y), angle = move
+        footprint.SetOrientationDegrees(angle)
+        footprint.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
+        done.append(footprint.GetReference())
+    return sorted(done)
+
+
 def MM(value):
     return pcbnew.ToMM(value)
 

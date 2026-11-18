@@ -132,6 +132,14 @@
   large parts of a block that found no room are placed at once; a part that found no room anywhere is
   told where it stands today. On 109 public boards (1039 parts): none fails, none over another, 17 parts
   on 11 boards without room (46 on 24 before), all on boards their bodies overfill or overhang.
+  A part on a gap has a body like any other (it was a point, and other parts stood on it): it is the first
+  to have its ground, turned so that its pads lie on the side of the gap their nets are of, clear of the
+  others on its gap and of the bodies on other gaps, within its board; no other part stands on it.
+  `tools/kicad_place.py BOARD -o COPY` writes the plan's places to a copy of the board (never the board
+  itself) and reads it back; `tools/floorplan_survey.py BOARDS` judges the plan of many boards;
+  `tools/draw_floorplan.py PLAN.json OUT.png` draws one. The plan tells its nets against the board as it
+  stands by how far apart in the plan their parts are (`against`). The dev board placed so, all 800
+  parts, passes KiCad's rule check with no courtyard over another.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

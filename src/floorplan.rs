@@ -369,7 +369,7 @@ pub struct Place {
     pub part: String,
     /// Where its middle is to stand.
     pub at: Pt,
-    /// The ground its body takes there: [x0, y0, x1, y1]. None for a part on a gap, which is not settled.
+    /// The ground its body takes there: [x0, y0, x1, y1]. None for a part that stays where it stands.
     pub rect: Option<[f64; 4]>,
     /// How far it is turned from how it stands today, in degrees (0, 90, 180 or 270), counter-clockwise as
     /// the board is looked at: by a quarter where its body lies the better so, and so that its pads face
@@ -2772,10 +2772,138 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .sort_by(|a, b| b.changes.cmp(&a.changes).then(a.at[0].total_cmp(&b.at[0])).then(a.at[1].total_cmp(&b.at[1])));
     // A place for every part within its zone. The zones are gone over twice: the second time each part knows
     // where those of the other zones came to stand.
-    let on_gap: BTreeMap<usize, Pt> = bridges
+    let mut on_gap: BTreeMap<usize, Pt> = bridges
         .iter()
         .filter_map(|bridge| parts.iter().position(|part| part.name == bridge.part).map(|p| (p, bridge.at)))
         .collect();
+    // A part on a gap has a body like any other, and it is the first to have its ground: turned so that its
+    // pads lie on the side of the gap their nets belong to, and along the gap clear of the others there. No
+    // other part may stand on it.
+    let size_of = |p: usize| {
+        let side = parts[p].area.sqrt();
+        parts[p].size.unwrap_or([side, side])
+    };
+    let lying = |p: usize, quarters: u8| {
+        let [w, h] = size_of(p);
+        if quarters % 2 == 1 {
+            [h, w]
+        } else {
+            [w, h]
+        }
+    };
+    let domain_named = |name: &str| top.iter().position(|work| work.name == name);
+    // (the domain a net is of: its own if it is a ground, its ground's if a supply, else that of most of its parts)
+    let net_domain = |net: usize| -> Option<usize> {
+        if let Some(&domain) = domain_at.get(&net) {
+            return Some(domain);
+        }
+        if let Some(ground) = found.rails.get(&net).and_then(|rail| rail.0) {
+            return domain_at.get(&ground).copied();
+        }
+        let mut count: BTreeMap<usize, usize> = BTreeMap::new();
+        for domain in reach[net].iter().filter_map(|&q| found.home[q]).filter_map(|ground| domain_at.get(&ground)) {
+            *count.entry(*domain).or_insert(0) += 1;
+        }
+        count.into_iter().max_by_key(|&(domain, n)| (n, usize::MAX - domain)).map(|best| best.0)
+    };
+    let off_rect = |at: Pt, r: [f64; 4]| dist(at, [at[0].clamp(r[0], r[2]), at[1].clamp(r[1], r[3])]);
+    let mut gap_quarter: BTreeMap<usize, u8> = BTreeMap::new();
+    let mut gap_rects: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
+    let body_at = |p: usize, at: Pt, quarters: u8| {
+        let [w, h] = lying(p, quarters);
+        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
+    };
+    {
+        type Strip = (bool, [f64; 4], Vec<(usize, usize, f64, f64)>); // (bridge, part, want along, size)
+        let mut strips: BTreeMap<[i64; 4], Strip> = BTreeMap::new();
+        let mut gap_along: BTreeMap<usize, usize> = BTreeMap::new(); // a part on a gap -> the way its gap runs
+        for (b, bridge) in bridges.iter().enumerate() {
+            let Some(p) = parts.iter().position(|part| part.name == bridge.part) else { continue };
+            let Some(home) = domain_named(&bridge.grounds[0]) else { continue };
+            let here = bridge.at;
+            let across = |quarters: u8| -> f64 {
+                let mut far = 0.0;
+                for (i, net) in parts[p].pads.iter().enumerate() {
+                    let (Some(net), Some(&offset)) = (net, parts[p].offsets.get(i)) else { continue };
+                    let Some(domain) = net_domain(*net).filter(|&domain| to[domain] == to[home]) else { continue };
+                    let from = quartered(quarters, offset);
+                    far += off_rect([here[0] + from[0], here[1] + from[1]], top[domain].rect);
+                }
+                far
+            };
+            let quarters = (0..4u8)
+                .fold((f64::INFINITY, 0u8), |best, k| if across(k) < best.0 - 1e-6 { (across(k), k) } else { best })
+                .1;
+            gap_quarter.insert(p, quarters);
+            let other = domain_named(&bridge.grounds[1]);
+            let strip = other
+                .filter(|_| bridge.on == Across::Gap)
+                .and_then(|other| strip_between(top[home].rect, top[other].rect, board.gap));
+            if let Some((strip, up)) = strip {
+                let along = usize::from(up);
+                let key = strip.map(|v| (v * 1000.0).round() as i64);
+                let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
+                entry.2.push((b, p, here[along], lying(p, quarters)[along] + BESIDE));
+            }
+        }
+        for (up, strip, on_it) in strips.into_values() {
+            let along = usize::from(up);
+            let (want, size): (Vec<f64>, Vec<f64>) = on_it.iter().map(|&(_, _, want, size)| (want, size)).unzip();
+            for (&(b, p, _, _), place) in on_it.iter().zip(spread(&want, &size, strip[along], strip[along + 2])) {
+                let mut at = middle(strip);
+                at[along] = place;
+                bridges[b].at = at;
+                on_gap.insert(p, at);
+                gap_along.insert(p, along);
+            }
+        }
+        // (and each within its board: a long connector on a short gap reaches past the gap, not past the edge;
+        // and off what the board shuts and the bodies on the other gaps: the largest first, each moved along
+        // its gap to the nearest room there is)
+        let mut order: Vec<usize> = (0..bridges.len()).collect();
+        let their_parts: Vec<Option<usize>> =
+            bridges.iter().map(|bridge| parts.iter().position(|part| part.name == bridge.part)).collect();
+        let part_of = |b: usize| their_parts[b];
+        order.sort_by(|&a, &b| {
+            let takes = |b: usize| part_of(b).map_or(0.0, |p| size_of(p)[0] * size_of(p)[1]);
+            takes(b).total_cmp(&takes(a)).then(a.cmp(&b))
+        });
+        for b in order {
+            let Some(p) = part_of(b) else { continue };
+            let Some(home) = domain_named(&bridges[b].grounds[0]) else { continue };
+            let (quarters, region) = (gap_quarter.get(&p).copied().unwrap_or(0), boards[to[home]]);
+            let [w, h] = lying(p, quarters);
+            let hold = |v: f64, low: f64, high: f64, size: f64| {
+                if high - low >= size {
+                    v.clamp(low + size / 2.0, high - size / 2.0)
+                } else {
+                    (low + high) / 2.0
+                }
+            };
+            let mut at =
+                [hold(bridges[b].at[0], region[0], region[2], w), hold(bridges[b].at[1], region[1], region[3], h)];
+            let shut: Vec<[f64; 4]> = board.keepouts.iter().chain(gap_rects.values()).copied().collect();
+            let band = match gap_along.get(&p) {
+                Some(&along) => {
+                    let mut band = body_at(p, at, quarters);
+                    (band[along], band[along + 2]) = (region[along], region[along + 2]);
+                    band
+                }
+                None => region,
+            };
+            if let Some((free, false)) = settled(band, &[([w, h], at)], &shut)[0] {
+                at = free;
+            }
+            bridges[b].at = at.map(|v| (v * 100.0).round() / 100.0);
+            bridges[b].off = parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0);
+            on_gap.insert(p, at);
+            gap_rects.insert(p, body_at(p, at, quarters));
+        }
+    }
+    // (the ground that is shut to every part: what the board shuts, and the bodies on the gaps)
+    let closed = |gaps: &BTreeMap<usize, [f64; 4]>| -> Vec<[f64; 4]> {
+        board.keepouts.iter().chain(gaps.values()).copied().collect()
+    };
     let mut fine_leaves: Vec<(usize, [f64; 4], Vec<usize>)> = Vec::new();
     fn parts_of_leaves(work: &Work, domain: usize, out: &mut Vec<(usize, [f64; 4], Vec<usize>)>) {
         if work.inside.is_empty() {
@@ -3545,7 +3673,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut sides: [Vec<[f64; 4]>; 2] = [Vec::new(), Vec::new()]; // what stands on the front, and on the back
         for with_holes in [true, false] {
             let lot: Vec<usize> = mine.iter().copied().filter(|&p| holed(p) == with_holes).collect();
-            let mut base: Vec<[f64; 4]> = board.keepouts.clone();
+            let mut base: Vec<[f64; 4]> = closed(&gap_rects);
             base.extend(
                 roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
             );
@@ -3570,7 +3698,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 (0..2).filter(|k| on & (1 << k) != 0).for_each(|k| shut.extend(sides[k].iter().copied()));
                 // (and the same with the roads open: a part with holes stands off the main roads if it can, but
                 // on a small board a part may be as large as what the roads leave)
-                let mut over_roads: Vec<[f64; 4]> = board.keepouts.clone();
+                let mut over_roads: Vec<[f64; 4]> = closed(&gap_rects);
                 over_roads.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
                 (0..2).filter(|k| on & (1 << k) != 0).for_each(|k| over_roads.extend(sides[k].iter().copied()));
                 let Some(first) = laid_blocks.get(&p) else {
@@ -3755,7 +3883,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             .copied()
             .filter(|&p| grounds.contains_key(&p) && !goes_first(p) && !in_block.contains_key(&p) && side_of(p) == side)
             .collect();
-        let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+        let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
         shut.extend(settled_first.iter().filter(|first| first.1 & side != 0).map(|first| first.0));
         // (what is disturbed first, off the ground near what disturbs; what of it finds no room so, with the rest)
         let hushed: Vec<usize> = mine.iter().copied().filter(|&p| victim[p]).collect();
@@ -3786,7 +3914,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             if left.is_empty() {
                 continue;
             }
-            let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+            let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
             shut.extend(
                 roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
             );
@@ -3804,7 +3932,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     if stood.get(&p) != Some(&None) {
                         continue;
                     }
-                    let mut open: Vec<[f64; 4]> = board.keepouts.clone();
+                    let mut open: Vec<[f64; 4]> = closed(&gap_rects);
                     open.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
                     let others = work.parts.iter().filter(|&&q| q != p);
                     open.extend(
@@ -3844,7 +3972,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         for &p in own {
             (shift_of[p], domain_of_part[p]) = (shifts[to[*domain]], *domain);
             match (on_gap.get(&p), stood.get(&p)) {
-                (Some(&at), _) => centre[p] = Some(at),
+                (Some(&at), _) => (centre[p], quarter[p]) = (Some(at), gap_quarter.get(&p).copied().unwrap_or(0)),
                 (None, Some(&Some((at, turn)))) => (centre[p], quarter[p]) = (Some(at), u8::from(turn)),
                 // (no room found: told where it stands today if it stands on the board, else where it was pulled)
                 (None, Some(None)) => centre[p] = Some(if parts[p].placed { parts[p].at } else { middle(grounds[&p]) }),
@@ -3904,6 +4032,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         for _ in 0..2 {
             for p in 0..parts.len() {
                 if centre[p].is_none()
+                    || on_gap.contains_key(&p)
                     || parts[p].offsets.is_empty()
                     || stays(&parts[p])
                     || block_quarter.contains_key(&p)
@@ -4019,7 +4148,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let rect_of = |q: usize, centre: &[Option<Pt>], quarter: &[u8]| {
             centre[q].filter(|_| stands(q)).map(|at| taken(q, (at, quarter[q] % 2 == 1)))
         };
-        let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+        let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
         shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
         let open = shut.clone();
         let meets = |a: usize, b: usize| side_of(a) & side_of(b) != 0;
@@ -4077,7 +4206,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // The parts on the gaps are stood along them once more, now by where the parts they are tied to have come
     // to stand (and not the middles of their zones): each gap's parts spread as before.
     {
-        let domain_named = |name: &str| top.iter().position(|work| work.name == name);
         type Strip = (bool, [f64; 4], Vec<(usize, usize, f64, f64)>); // (bridge, part, want along, size)
         let mut strips: BTreeMap<[i64; 4], Strip> = BTreeMap::new();
         for (b, bridge) in bridges.iter().enumerate().filter(|(_, bridge)| bridge.on == Across::Gap) {
@@ -4097,15 +4225,33 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let Some(want) = median(&mates) else { continue };
             let key = strip.map(|v| (v * 1000.0).round() as i64);
             let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
-            entry.2.push((b, p, want[usize::from(up)], parts[p].area.sqrt() + BESIDE));
+            let quarters = gap_quarter.get(&p).copied().unwrap_or(0);
+            entry.2.push((b, p, want[usize::from(up)], lying(p, quarters)[usize::from(up)] + BESIDE));
         }
         for (up, strip, on_it) in strips.into_values() {
             let along = usize::from(up);
             let (want, size): (Vec<f64>, Vec<f64>) = on_it.iter().map(|&(_, _, want, size)| (want, size)).unzip();
             for (&(b, p, _, _), place) in on_it.iter().zip(spread(&want, &size, strip[along], strip[along + 2])) {
-                let mut at = middle(strip);
+                let (Some(was), quarters) = (centre[p], gap_quarter.get(&p).copied().unwrap_or(0)) else { continue };
+                let mut at = was;
                 at[along] = place;
+                // (it goes there if nothing that has its place is in its way there: no body, no other gap's part)
+                let here = body_at(p, at, quarters);
+                let over = |r: [f64; 4]| {
+                    r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6
+                };
+                let bodies = stood
+                    .iter()
+                    .filter(|(&q, _)| q != p && side_of(q) & side_of(p) != 0 && shift_of[q] == shift_of[p])
+                    .filter_map(|(&q, at)| {
+                        at.map(|_| centre[q]).flatten().map(|at| taken(q, (at, quarter[q] % 2 == 1)))
+                    });
+                let others = gap_rects.iter().filter(|(&q, _)| q != p).map(|(_, &r)| r);
+                if bodies.chain(others).chain(board.keepouts.iter().copied()).any(over) {
+                    continue;
+                }
                 centre[p] = Some(at);
+                gap_rects.insert(p, here);
                 bridges[b].at = at.map(|v| (v * 100.0).round() / 100.0);
                 bridges[b].off = parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0);
             }
@@ -4195,7 +4341,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             let domain = domain_of_part[p];
             let ground = top[domain].rect;
-            let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+            let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
             shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
             let in_the_way = |q: &&usize| **q != p && !on_gap.contains_key(q) && side_of(**q) & side_of(p) != 0;
             for &q in top[domain].parts.iter().filter(in_the_way) {
@@ -4524,7 +4670,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let Some(at) = centre[p] else { continue };
             let settled_here = stood.get(&p).is_some_and(|at| at.is_some());
             let (rect, fits) = match (on_gap.contains_key(&p), settled_here) {
-                (true, _) => (None, true),
+                (true, _) => (gap_rects.get(&p).copied(), true),
                 (false, true) => (Some(taken(p, (at, quarter[p] % 2 == 1))), true),
                 (false, false) => (grounds.get(&p).copied(), false),
             };
@@ -4883,9 +5029,11 @@ mod tests {
             "{:?}",
             found.places
         );
-        // the isolator has its place on the gap, and no ground of its own
+        // the isolator has its place on the gap, with its body there: across the gap, on both grounds
         let isolator = found.places.iter().find(|place| place.part == "U3").unwrap();
-        assert_eq!((isolator.rect, isolator.at), (None, found.bridges[0].at));
+        assert_eq!(isolator.at, found.bridges[0].at);
+        let (body, gap) = (isolator.rect.unwrap(), found.roads.iter().find(|road| road.gap).unwrap().rect);
+        assert!(body[0] < gap[2] && body[2] > gap[0], "{body:?} {gap:?}");
         assert_eq!(found.places.len(), 14);
         // every layer change planned where roads meet is told with the ground its via wants
         let square = floorplan(&square()).unwrap();
@@ -5398,7 +5546,7 @@ mod tests {
         let [bridge] = &found.bridges[..] else { panic!("{:?}", found.bridges) };
         assert_eq!((bridge.part.as_str(), bridge.on, bridge.reach), ("U3", Across::Gap, 0.0));
         assert_eq!(bridge.grounds, ["A_GND".to_string(), "FIELD_0V".to_string()]);
-        assert_eq!(bridge.at[0], 24.34);
+        assert!((bridge.at[0] - 24.34).abs() < 0.1, "{bridge:?}");
         assert!(bridge.at[1] > 0.0 && bridge.at[1] < 10.0 && bridge.off.is_some(), "{bridge:?}");
         assert_eq!(found.travel.cramped, 0.0);
         // (as it happens the parts stand where their zones are given ground)
@@ -5431,7 +5579,9 @@ mod tests {
         assert_eq!((small.room, small.needed, &small.zones), (120.0, 55.0, &vec!["FIELD_0V".to_string()]));
         // what stands on both is the link between the boards: on its own, at the edge nearest the other
         let [link] = &found.bridges[..] else { panic!("{:?}", found.bridges) };
-        assert_eq!((link.part.as_str(), link.on, link.at[0], link.reach), ("U3", Across::Link, 26.0, 2.0));
+        assert_eq!((link.part.as_str(), link.on, link.reach), ("U3", Across::Link, 2.0));
+        // (its body within its board, against that edge)
+        assert!(link.at[0] > 24.0 && link.at[0] < 26.0 - 1.5, "{link:?}");
         // (the keep-out is no room: within the large board each lot has its share of what is left)
         // each domain has the whole of its board, and there is no road across the gap between boards
         assert_eq!((found.zones[0].rect, found.zones[1].rect), ([0.0, 0.0, 26.0, 10.0], [28.0, 0.0, 40.0, 10.0]));
