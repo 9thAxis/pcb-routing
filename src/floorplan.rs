@@ -519,6 +519,9 @@ pub struct Floorplan {
     /// The capacitors from a supply to the ground that stand for a chip of their zone, and how many of them
     /// have their pad on the supply within BESIDE_PIN of the pad of that chip they are for.
     pub bypass: [usize; 2],
+    /// Each of those capacitors: (the capacitor, its chip, how far its pad on the supply is from the pad of
+    /// the chip it is for in mm, how many capacitors that pad of the chip has in all).
+    pub capacitors: Vec<(String, String, f64, usize)>,
     /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
     /// is kept free of parts there.
     pub junctions: Vec<Junction>,
@@ -2770,6 +2773,15 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         })
         .count();
     let bypass = [pins.len(), beside];
+    let mut capacitors: Vec<(String, String, f64, usize)> = pins
+        .iter()
+        .filter_map(|(&c, &(mine, chip, pin))| {
+            let (here, there) = (pad_at(c, mine, quarter[c], &centre)?, pad_at(chip, pin, quarter[chip], &centre)?);
+            let shared = at_pad.get(&(chip, pin)).copied().unwrap_or(1);
+            Some((name(c), name(chip), (dist(here, there) * 10.0).round() / 10.0, shared))
+        })
+        .collect();
+    capacitors.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
     for (_, _, own) in &fine_leaves {
         for &p in own {
             let Some(at) = centre[p] else { continue };
@@ -2987,6 +2999,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         pads_first_mm: pads_first_mm.round(),
         pads_mm: pads_mm.round(),
         bypass,
+        capacitors,
         junctions,
         pours,
         roads,
