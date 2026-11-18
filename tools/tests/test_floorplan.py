@@ -78,7 +78,7 @@ class Floorplan(unittest.TestCase):
             part.footprint = "lib:R_0603_1608Metric"
         picture.parts["U9"].footprint = "lib:CP_Elec_8x10.5"
         said = dict(boards=[{}, dict(shift=[-6.0, 0.0], clear=6.0)], heights={"R_0603": 0.5, "CP_Elec": 10.5},
-                    parts={"J1": dict(near=[3.0, 4.0])})
+                    parts={"J1": dict(near=[3.0, 4.0]), "U1": dict(mate="U9")}, keepouts=[[1.0, 1.0, 2.0, 3.0]])
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "b.routing.json").write_text(json.dumps(said))
             hints = k.read_hints(Path(tmp, "b.routing.json"))
@@ -86,18 +86,21 @@ class Floorplan(unittest.TestCase):
         k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), lambda question: asked.append(question) or {})
         (q,) = asked
         self.assertEqual((q["regions"], q["shifts"]), ([[0, 0, 14, 10], [15, 0, 20, 10]], [[0.0, 0.0], [-6.0, 0.0]]))
+        self.assertEqual(q["keepouts"], [[1.0, 1.0, 2.0, 3.0]])
         # the height under the right board is not held to (the standoffs are chosen for it): nothing is asked
         self.assertNotIn("limits", q)
         parts = {part["name"]: part for part in q["parts"]}
         self.assertEqual((parts["U9"]["height"], parts["R10"]["height"], parts["J1"]["near"], "near" in parts["U1"]),
                          (10.5, 0.5, [3.0, 4.0], False))
+        self.assertEqual((parts["U1"]["mate"], "mate" in parts["U9"]), ("U9", False))
         # but the plan says what the ground under it needs: the right board lies over x 9 to 14 of the left one
         found = k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), support.ask)
         (under,) = found["clear"]
         self.assertEqual((under["rect"], under["has"]), ([9.0, 0, 14.0, 10], 6.0))
         self.assertIn(under["needs"], (0.5, 10.5))
         self.assertTrue(any(line.startswith("  under another board (x 9 to 14") for line in k.floorplan_told(found)))
-        for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)})):
+        for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)}), dict(parts={"J1": dict(mate=3)}),
+                      dict(keepouts=[[3, 0, 1, 2]])):
             with tempfile.TemporaryDirectory() as tmp:
                 Path(tmp, "b.routing.json").write_text(json.dumps(wrong))
                 with self.assertRaises(ValueError):

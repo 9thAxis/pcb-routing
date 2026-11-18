@@ -47,9 +47,10 @@ class Hints:
     name: str = ""
     nets: list = field(default_factory=list)  # [(pattern, {what: value})]
     pairs: list = field(default_factory=list)  # [{nets: [a, b], width, gap, ohms}]
-    parts: list = field(default_factory=list)  # [(pattern, {turn: bool, near: [x, y]})]
+    parts: list = field(default_factory=list)  # [(pattern, {turn: bool, near: [x, y], mate: reference})]
     boards: list = field(default_factory=list)  # the boards of the file, left to right: [{shift: [x, y], clear: mm}]
     heights: dict = field(default_factory=dict)  # the beginning of a footprint's name -> how high it stands, mm
+    keepouts: list = field(default_factory=list)  # ground where no part may stand: [[x0, y0, x1, y1]]
 
 
 def read_hints(path):
@@ -62,8 +63,9 @@ def read_hints(path):
     A pattern is a net's name, with * and ? for any run of characters and any one (a name is tried with and
     without its leading /). Later patterns override earlier ones. `parts`: a pattern for the references of
     parts, with whether such a part may be turned where it stands (for advice only: see advice.py) and a
-    point it is to stand near. `boards` and `heights` are for the floorplan (see floorplan.py): how the boards
-    of the file stack, and how high parts stand.
+    point it is to stand near, or the part it mates with (the other half of a link from board to board). `boards` and `heights` are for the floorplan (see floorplan.py): how the boards
+    of the file stack, how high parts stand, and ground where no part may stand (an opening to be cut, what must
+    be reached from above) besides the board's own rule areas.
     """
     name = Path(path).name
     try:
@@ -72,8 +74,8 @@ def read_hints(path):
         raise ValueError(f"{name}: {error}")
     wrong = lambda where, why: ValueError(f"{name}: {where}: {why}")
     number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts", "boards", "heights"}:
-        raise wrong("the file", "an object with `nets`, `pairs`, `parts`, `boards` and `heights`, nothing else")
+    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts", "boards", "heights", "keepouts"}:
+        raise wrong("the file", "an object with `nets`, `pairs`, `parts`, `boards`, `heights` and `keepouts`, nothing else")
     if not (isinstance(data.get("nets", {}), dict) and isinstance(data.get("pairs", []), list)
             and isinstance(data.get("parts", {}), dict)):
         raise wrong("the file", "`nets` is an object (a pattern, and what is said of the nets it names), "
@@ -82,9 +84,10 @@ def read_hints(path):
     point = lambda value: (isinstance(value, list) and len(value) == 2
                            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value))
     for pattern, said in data.get("parts", {}).items():
-        if (not isinstance(said, dict) or set(said) - {"turn", "near"} or not isinstance(said.get("turn", True), bool)
-                or not ("near" not in said or point(said["near"]))):
-            raise wrong(f"parts[{pattern}]", "`turn`: true or false; `near`: a point [x, y]; nothing else")
+        if (not isinstance(said, dict) or set(said) - {"turn", "near", "mate"} or not isinstance(said.get("turn", True), bool)
+                or not ("near" not in said or point(said["near"])) or not isinstance(said.get("mate", ""), str)):
+            raise wrong(f"parts[{pattern}]", "`turn`: true or false; `near`: a point [x, y]; `mate`: the reference "
+                                             "of the part it mates with; nothing else")
         hints.parts.append((pattern, dict(said)))
     boards = data.get("boards", [])
     if not isinstance(boards, list) or not all(
@@ -96,6 +99,12 @@ def read_hints(path):
     if not isinstance(heights, dict) or not all(number(v) for v in heights.values()):
         raise wrong("heights", "the beginning of a footprint's name, and how high such a part stands in mm")
     hints.heights = dict(heights)
+    keepouts = data.get("keepouts", [])
+    if not isinstance(keepouts, list) or not all(
+            isinstance(k, list) and len(k) == 4 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in k)
+            and k[0] < k[2] and k[1] < k[3] for k in keepouts):
+        raise wrong("keepouts", "a list of grounds where no part may stand, each [x0, y0, x1, y1]")
+    hints.keepouts = [list(k) for k in keepouts]
     for pattern, said in data.get("nets", {}).items():
         if not isinstance(said, dict):
             raise wrong(f"nets[{pattern}]", "an object")

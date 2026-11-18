@@ -36,7 +36,15 @@
   under a board needs, beside what the stack has. What is weighed now counts how far the nets between
   domains reach as the boards stack and how far a part is from the point it is to be near; and each of the
   larger cuts is also tried across the shorter side of its ground. For each zone: the ground it is given and
-  how its parts stand to that today.
+  how its parts stand to that today. A part that stands on two grounds is given its place (`bridges`): on the
+  gap between its two domains, across its middle, and along it as near what the part is tied to on both
+  sides as the other parts of that gap allow (none over another); a domain is given ground for the parts
+  that stand half on it; two domains that share such a part and are no neighbours cost the plan dearly, and
+  so do parts longer side by side than their gap. Two parts that mate (`parts`, `mate`: the two halves of a
+  link from board to board) are pulled to the same place of the stack, and the plan says how far apart they
+  are left. Ground where no part may stand (the board's rule areas, and `keepouts` in the hints: an opening
+  to be cut, what must be reached from above) is no room when a ground is cut: each lot has its share of
+  what is left.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

@@ -72,6 +72,7 @@ def floorplan(picture, rules, ask):
     shut = [box_of(area.rings[0]) for area in picture.areas
             if area.tracks and area.vias and set(picture.layers) <= set(area.layers) and area.rings]
     boards.sort()
+    shut += [list(k) for k in (rules.settings.hints.keepouts if rules.settings.hints else [])]
     # How the boards stack, from the hints (`boards`, left to right): what is added to a place on each to say
     # where it is in the stack; and under a board that says how much it clears, the ground of every other
     # board that lies beneath it has that much height.
@@ -98,7 +99,10 @@ def floorplan(picture, rules, ask):
         tall = height(of)
         near = [what["near"] for pattern, what in (hints.parts if hints else [])
                 if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
-        part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}))
+        mate = [what["mate"] for pattern, what in (hints.parts if hints else [])
+                if "mate" in what and fnmatch.fnmatchcase(part["name"], pattern)]
+        part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}),
+                    **(dict(mate=mate[-1]) if mate else {}))
     # The height between two boards of a stack is not held to: it is what the standoffs are chosen for. The
     # plan is made as if there were room, and says how much each such ground then needs (`clear` in the hints
     # is what the stack has now, to compare).
@@ -201,6 +205,18 @@ def floorplan_told(found, depth=2, every=False):
         one, other = (", ".join(side) for side in gap["between"])
         on_it = ", ".join(gap["parts"]) if gap["parts"] else "no part"
         lines.append(f"  gap {gap['width']:.0f} mm between [{one}] and [{other}]: {on_it} on it")
+    if found.get("bridges"):
+        lines += ["", "the parts on two grounds, each given its place (on the gap between its two domains, as near what it "
+                      "is tied to on both sides as the others there allow):"]
+        how = dict(gap="on the gap between", link="the link from board to board,", apart="NOT NEIGHBOURS:")
+        for bridge in found["bridges"]:
+            reach = {"gap": "", "link": f", {bridge['reach']:.0f} mm sideways from the other as the boards stack",
+                     "apart": f", {bridge['reach']:.0f} mm from the other"}[bridge["on"]]
+            now = "not placed yet" if bridge["off"] is None else f"{bridge['off']:.0f} mm from where it stands"
+            lines.append(f"  {bridge['part']}: {how[bridge['on']]} {bridge['grounds'][0]} and {bridge['grounds'][1]}, at "
+                         f"({bridge['at'][0]:.1f}, {bridge['at'][1]:.1f}){reach}; {now}")
+        if found["travel"].get("cramped"):
+            lines.append(f"  TOO MANY on a gap: side by side they are {found['travel']['cramped']:.0f} mm longer than it")
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "
@@ -208,7 +224,8 @@ def floorplan_told(found, depth=2, every=False):
     if travel:
         each = travel["vias"] / travel["nets"] if travel["nets"] else 0.0
         lines += ["", f"between domains (through the parts on the gaps, and from board to board): {travel['through_mm']:.0f} mm "
-                      f"of reach; the parts that are to stand near a point are {travel['near_mm']:.0f} mm from it in all"]
+                      f"of reach; the parts that are to stand near a point are {travel['near_mm']:.0f} mm from it in all"
+                      + (f"; the parts that mate are {travel['mate_mm']:.0f} mm apart as the boards stack" if travel.get("mate_mm") else "")]
         lines += [f"every net between zones of one domain given a way along the roads: {travel['nets']} nets, "
                       f"{travel['mm']:.0f} mm, {travel['vias']} layer changes ({each:.1f} a net); {travel['over']} roads asked "
                       f"for more than they hold; {travel['through']} nets go from domain to domain through the parts on "
