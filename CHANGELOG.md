@@ -105,7 +105,11 @@
   their pads are joined to, until parts of one colour sit alike in their sheets; no reliance on their
   numbering); the first is laid out by itself on empty ground (its blocks as they are, its other parts
   each set down by what it is tied to) and every copy is placed whole, as it lies, like a block. Parts of
-  the sheet that stand in a block of a chip on another sheet go with that chip.
+  the sheet that stand in a block of a chip on another sheet go with that chip. A chain is allowed what a
+  part of its size stands from a pad (a large capacitor or an inductor cannot stand as near as a small
+  one). When the small parts are gone over, a part joined to few is tried by each of them and at their
+  mean, not only at their middle, with room looked for further off where there is none near; and a part
+  that could not be brought near its pad is not held where it stands.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

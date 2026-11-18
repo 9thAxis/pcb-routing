@@ -1084,6 +1084,8 @@ const SWITCHED: usize = 5;
 /// room is looked for, in mm.
 const REFINES: usize = 4;
 const REFINE_MM: f64 = 8.0;
+/// A part joined to no more parts than this is tried by each of them, and at their mean.
+const FEW: usize = 4;
 /// What the nets of a part may grow by, in mm, when it is moved to the one pad it is there for.
 const OWN_PAD_MM: f64 = 1.0;
 /// A sheet is looked at for repeats if it has this many parts; and its parts are coloured this many times.
@@ -3657,8 +3659,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         shut.extend(mine.iter().filter(|&&q| q != c && hard(q)).filter_map(|&q| rect_of(q, &centre, &quarter)));
         let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
         if dist(at, pad) >= dist(was, pad) - 1e-6 {
-            // (it stands as near its pad already as there is room to: it is not moved from there later)
-            by_its_pad.insert(c);
+            // (it stands as near its pad already as there is room to: if that is by it, it is not moved from
+            // there later; if it is far, it is left to be moved with the other small parts)
+            if dist(was, pad) <= BLOCK_REACH {
+                by_its_pad.insert(c);
+            }
             continue;
         }
         let turn = turn != quarter_more;
@@ -3797,21 +3802,30 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             } else {
                 None
             };
-            let Some(want) = own_pad.or_else(|| median(&mates)) else { continue };
-            if dist(want, was) < SETTLE {
+            // Where it may want to be: by the pad it is for, if it is for one; else at the middle of what it is
+            // joined to, and (a part joined to few, which is as well anywhere between them) at their mean and
+            // by each of them. Room is looked for near each, then further (twice and four times as far); the
+            // place that leaves its nets the shortest is the one tried.
+            let mut wants: Vec<Pt> = Vec::new();
+            match own_pad {
+                Some(pad) => wants.push(pad),
+                None => {
+                    wants.extend(median(&mates));
+                    if !mates.is_empty() && mates.len() <= FEW {
+                        let n = mates.len() as f64;
+                        wants.push([
+                            mates.iter().map(|m| m[0]).sum::<f64>() / n,
+                            mates.iter().map(|m| m[1]).sum::<f64>() / n,
+                        ]);
+                        wants.extend(mates.iter().copied());
+                    }
+                }
+            }
+            if wants.is_empty() || dist(wants[0], was) < SETTLE {
                 continue;
             }
             let domain = domain_of_part[p];
             let ground = top[domain].rect;
-            let window = [
-                ground[0].max(want[0] - REFINE_MM),
-                ground[1].max(want[1] - REFINE_MM),
-                ground[2].min(want[0] + REFINE_MM),
-                ground[3].min(want[1] + REFINE_MM),
-            ];
-            if window[2] - window[0] < SETTLE || window[3] - window[1] < SETTLE {
-                continue;
-            }
             let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
             shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
             for &q in top[domain].parts.iter().filter(|&&q| q != p && !on_gap.contains_key(&q)) {
@@ -3821,9 +3835,35 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             let [w, h] = body(p);
             let lying = if quarter[p] % 2 == 1 { [h, w] } else { [w, h] };
-            let Some((at, turn)) = settled(window, &[(lying, want)], &shut)[0] else { continue };
             let stack = |at: Pt| [at[0] + shift[0], at[1] + shift[1]];
-            let (now, then) = (boxes(p, stack(was), &centre), boxes(p, stack(at), &centre));
+            let now = boxes(p, stack(was), &centre);
+            let mut tried: Option<(f64, Pt, bool)> = None;
+            for want in wants {
+                let window = |reach: f64| {
+                    [
+                        ground[0].max(want[0] - reach),
+                        ground[1].max(want[1] - reach),
+                        ground[2].min(want[0] + reach),
+                        ground[3].min(want[1] + reach),
+                    ]
+                };
+                let room = [1.0, 2.0, 4.0].iter().find_map(|&times| {
+                    let within = window(times * REFINE_MM);
+                    let has_size = within[2] - within[0] >= SETTLE && within[3] - within[1] >= SETTLE;
+                    if has_size {
+                        settled(within, &[(lying, want)], &shut)[0]
+                    } else {
+                        None
+                    }
+                });
+                if let Some((at, turn)) = room {
+                    let then = boxes(p, stack(at), &centre);
+                    if tried.map_or(true, |best| then < best.0 - 1e-6) {
+                        tried = Some((then, at, turn));
+                    }
+                }
+            }
+            let Some((then, at, turn)) = tried else { continue };
             let nearer = own_pad.is_some_and(|pad| dist(at, pad) < dist(was, pad) - SETTLE && then <= now + OWN_PAD_MM);
             if then < now - 1e-6 || nearer {
                 let turn = turn != (quarter[p] % 2 == 1);
@@ -3981,7 +4021,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             along += dist(here, b);
             let direct = dist(a, b);
-            if along > BACK * direct + (through.len() + 1) as f64 * BESIDE_PIN {
+            // (each part may stand as far from the pad on either side of it as a part of its size stands by a pad)
+            let room: f64 =
+                through.iter().map(|&m| 2.0 * by_pad(m)).sum::<f64>() - (through.len() - 1) as f64 * BESIDE_PIN;
+            if along > BACK * direct + room {
                 let round = |v: f64| (v * 10.0).round() / 10.0;
                 back.push((
                     name(from),
