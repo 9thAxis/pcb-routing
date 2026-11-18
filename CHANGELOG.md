@@ -140,6 +140,9 @@
   `tools/draw_floorplan.py PLAN.json OUT.png` draws one. The plan tells its nets against the board as it
   stands by how far apart in the plan their parts are (`against`). The dev board placed so, all 800
   parts, passes KiCad's rule check with no courtyard over another.
+  The two sides of a board share its ground: a zone needs the more of what its parts take on the front and
+  on the back, and a part with holes takes its ground on both. A part can be told to stay where it stands
+  (`fixed` in the hints, `--fixed PATTERN` on the commands).
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

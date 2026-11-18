@@ -785,3 +785,17 @@ fn a_board_without_size_or_a_pad_on_a_net_that_is_not_there_is_refused() {
     board.parts[0].pads.push(Some(99));
     assert!(floorplan(&board).is_err());
 }
+
+#[test]
+fn parts_on_the_two_sides_of_a_board_share_its_ground() {
+    // all on the front: the sum; some on the back: the more of the two sides; one with holes: on both
+    let mut board = two_grounds();
+    let all: Vec<usize> = (0..board.parts.len()).collect();
+    let sum: f64 = board.parts.iter().map(|part| part.area).sum();
+    assert!((super::ground::taken_by(&board, &all) - sum).abs() < 1e-9);
+    let (a, b, c) = (board.parts[0].area, board.parts[1].area, board.parts[2].area);
+    board.parts[0].back = true;
+    assert!((super::ground::taken_by(&board, &[0, 1, 2]) - a.max(b + c)).abs() < 1e-9);
+    board.parts[1].through = true;
+    assert!((super::ground::taken_by(&board, &[0, 1, 2]) - (b + a.max(c))).abs() < 1e-9);
+}

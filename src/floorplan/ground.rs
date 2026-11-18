@@ -58,6 +58,24 @@ pub(super) fn cut_of(zones: &[Work]) -> String {
     names.join(" | ")
 }
 
+/// The ground a lot of parts takes, in mm2. A board has two sides: what stands on the front and what stands on
+/// the back share the same ground, so the lot takes the more of the two, and a part with holes takes its ground
+/// on both.
+pub(super) fn taken_by(board: &Board, parts: &[usize]) -> f64 {
+    let (mut front, mut back, mut through) = (0.0, 0.0, 0.0);
+    for &p in parts {
+        let part = &board.parts[p];
+        if part.through {
+            through += part.area;
+        } else if part.back {
+            back += part.area;
+        } else {
+            front += part.area;
+        }
+    }
+    through + f64::max(front, back)
+}
+
 /// Give the zones of `zones` ground within `rect`, and theirs within that (see the module). `at`: where each
 /// part is taken to stand so far (a fixed part where it stands; another at the middle of the ground its zone
 /// has been given, once it has).
@@ -88,10 +106,7 @@ pub(super) fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains:
         _ => {}
     }
     let count = zones.len();
-    let area: Vec<f64> = zones
-        .iter()
-        .map(|zone| (zone.parts.iter().map(|&p| board.parts[p].area).sum::<f64>() + zone.more).max(1.0))
-        .collect();
+    let area: Vec<f64> = zones.iter().map(|zone| (taken_by(board, &zone.parts) + zone.more).max(1.0)).collect();
     let total: f64 = area.iter().sum();
     let mut zone_of: BTreeMap<usize, usize> = BTreeMap::new();
     for (z, zone) in zones.iter().enumerate() {

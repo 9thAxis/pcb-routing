@@ -1,7 +1,7 @@
 //! What is known of a board before anything is laid out, and the small things every stage asks of it.
 
 use super::constants::{BESIDE_PIN, LARGE, SWITCHED};
-use super::ground::Work;
+use super::ground::{taken_by, Work};
 use super::power::{powered, Powered};
 use super::settle::{area, overlap, quartered};
 use super::types::{Board, Net, Part, Pin, Way};
@@ -257,7 +257,7 @@ impl Known<'_> {
 
     /// The ground a zone needs, in mm2.
     pub(super) fn need(&self, work: &Work) -> f64 {
-        work.parts.iter().map(|&p| self.parts[p].area).sum::<f64>() + work.more
+        taken_by(self.board, &work.parts) + work.more
     }
 
     /// The body of a part as it is given: [wide, high].
