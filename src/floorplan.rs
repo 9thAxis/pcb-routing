@@ -1632,6 +1632,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
     }
     let found = powered(board);
+    // (what a capacitor may stand for: a part of more than two pads that is no capacitor and no connector)
+    let is_chip = |q: usize| !parts[q].capacitor && !parts[q].edge && parts[q].pads.len() > 2;
     let name = |p: usize| parts[p].name.clone();
     let names = |list: &[usize]| -> Vec<String> {
         let mut out: Vec<String> = list.iter().map(|&p| name(p)).collect();
@@ -1739,9 +1741,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut has: BTreeMap<(usize, usize), usize> = BTreeMap::new();
             for &c in own.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
                 for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
-                    let chips = own.iter().filter(|&&q| {
-                        !parts[q].capacitor && parts[q].pads.len() > 2 && parts[q].pads.contains(&Some(rail))
-                    });
+                    let chips = own.iter().filter(|&&q| is_chip(q) && parts[q].pads.contains(&Some(rail)));
                     if let Some(&chip) = chips.min_by_key(|&&q| (has.get(&(rail, q)).copied().unwrap_or(0), q)) {
                         *has.entry((rail, chip)).or_insert(0) += 1;
                         *ties.entry((c.min(chip), c.max(chip))).or_insert(0.0) += BESIDE_CHIP;
@@ -1792,6 +1792,25 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let local: Vec<Vec<usize>> =
             nets.iter().map(|net| net.iter().copied().filter(|p| mine.contains(p)).collect()).collect();
         let mut ties = tied(&local, &|p| atom_of.get(&p).copied());
+        // (a capacitor from a supply to a ground with no chip of its own sheet on that supply is for a chip
+        // of another: its group is tied to that chip's, the chips taking them in turn)
+        let mut has: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+        for &c in mine.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
+            for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
+                let chips = || mine.iter().filter(|&&q| is_chip(q) && parts[q].pads.contains(&Some(rail)));
+                if chips().any(|&q| sheet(q) == sheet(c)) {
+                    continue;
+                }
+                if let Some(&chip) = chips().min_by_key(|&&q| (has.get(&(rail, q)).copied().unwrap_or(0), q)) {
+                    *has.entry((rail, chip)).or_insert(0) += 1;
+                    if let (Some(&a), Some(&b)) = (atom_of.get(&c), atom_of.get(&chip)) {
+                        if a != b {
+                            *ties.entry((a.min(b), a.max(b))).or_insert(0.0) += 1.0;
+                        }
+                    }
+                }
+            }
+        }
         // (and by the supply each would have of the plane: the groups most of whose parts are on one supply
         // are tied by it, GATHERED nets for each, that what is fed alike be gathered together)
         let mut asking: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); atoms.len()];
@@ -2454,15 +2473,20 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // its zone on that supply, the chips taking them in turn)
     let mut fine_nets: Vec<Vec<usize>> = nets.clone();
     let mut bypasses: Vec<(usize, usize, usize)> = Vec::new(); // (the capacitor, its chip, the supply)
-    for (_, _, own) in &fine_leaves {
-        let mut taken: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let mut taken: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for (domain, _, own) in &fine_leaves {
         for &c in own.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
             for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
-                let chip = own
-                    .iter()
-                    .filter(|&&q| !parts[q].capacitor && parts[q].pads.len() > 2 && parts[q].pads.contains(&Some(rail)))
-                    .min_by_key(|&&q| (taken.get(&(rail, q)).copied().unwrap_or(0), q));
-                if let Some(&chip) = chip {
+                // (a chip of its zone; failing that, one of its domain)
+                let of = |among: &Vec<usize>| {
+                    among
+                        .iter()
+                        .copied()
+                        .filter(|&q| is_chip(q) && parts[q].pads.contains(&Some(rail)))
+                        .min_by_key(|&q| (taken.get(&(rail, q)).copied().unwrap_or(0), q))
+                };
+                let chip = of(own).or_else(|| of(&top[*domain].parts));
+                if let Some(chip) = chip {
                     *taken.entry((rail, chip)).or_insert(0) += 1;
                     fine_nets.extend(vec![vec![c, chip]; BYPASS]);
                     if bypasses.last().map_or(true, |last| last.0 != c) {
@@ -2751,7 +2775,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 _ => done = false,
             }
         }
-        if done {
+        // (and only if what it moves and itself are the nearer what they are joined to for it, all told)
+        let reach = |centre: &[Option<Pt>], quarter: &[u8]| -> f64 {
+            moved.iter().chain([&c]).map(|&q| reach_of(q, quarter[q], centre, quarter, &pins)).sum()
+        };
+        if done && reach(&new_centre, &new_quarter) < reach(&centre, &quarter) - 1e-6 {
             for &q in moved.iter().chain([&c]) {
                 if let Some(at) = new_centre[q] {
                     stood.insert(q, Some((at, new_quarter[q] % 2 == 1)));
