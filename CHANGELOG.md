@@ -100,7 +100,12 @@
   nearest what they join outside it; a block with no room is taken apart and its parts placed singly.
   Blocks of one make-up (the same chip, the same parts by the same pads) are laid out by the same steps
   and come out alike, however their parts stand in the file; the plan names them. Chains are measured from
-  pad to pad.
+  pad to pad. Sheets that repeat are laid out alike (`repeats`): two sheets are of one make-up if their
+  parts are of the same kinds joined the same way (the parts are coloured by their kind and then by what
+  their pads are joined to, until parts of one colour sit alike in their sheets; no reliance on their
+  numbering); the first is laid out by itself on empty ground (its blocks as they are, its other parts
+  each set down by what it is tied to) and every copy is placed whole, as it lies, like a block. Parts of
+  the sheet that stand in a block of a chip on another sheet go with that chip.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

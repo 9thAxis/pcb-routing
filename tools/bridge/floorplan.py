@@ -299,6 +299,11 @@ def floorplan_told(found, depth=2, every=False):
         for count, same, size, chips in alike[:None if every else 10]:
             lines.append(f"    {count} blocks of {size} parts ({', '.join(chips[:8])}{' ...' if len(chips) > 8 else ''}): "
                          + ("all laid out alike" if same == count else f"{same} laid out alike, {count - same} NOT"))
+    for repeat in found.get("repeats", [])[:None if every else 10]:
+        names = ", ".join(repeat["sheets"][:4]) + (f" and {len(repeat['sheets']) - 4} more" if len(repeat["sheets"]) > 4 else "")
+        how = (f"{repeat['alike']} of them placed whole, laid out alike" if repeat["alike"]
+               else "placed part by part (not laid out alike)")
+        lines.append(f"  {len(repeat['sheets'])} sheets of one make-up, {repeat['parts']} parts each ({names}): {how}")
     if found.get("served"):
         lines.append(f"  filter and protection parts that stand for one pad (a capacitor from a chip's input to ground or across "
                      f"two of its inputs, a diode or a part in series at a connector): {found['served'][1]} of "

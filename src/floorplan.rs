@@ -343,6 +343,21 @@ pub struct Place {
     pub off: Option<f64>,
 }
 
+/// Sheets of one make-up: the same parts joined the same way.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Repeat {
+    /// The sheets.
+    pub sheets: Vec<String>,
+    /// The parts of each.
+    pub parts: usize,
+    /// How many of them are laid out alike: placed whole, as the first of them was laid out by itself. 0
+    /// where they were left to be placed part by part (too few of their parts have ground in one domain, or
+    /// the first found no room laid out by itself).
+    pub alike: usize,
+    /// The sheet that was laid out.
+    pub like: String,
+}
+
 /// A switching regulator with the parts of its loop, which stand by it.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Loop {
@@ -575,6 +590,9 @@ pub struct Floorplan {
     /// many of them came out laid out alike, the parts in each, the chips), the most numerous first. Those
     /// of one make-up are laid out by the same steps, and so alike.
     pub alike: Vec<(usize, usize, usize, Vec<String>)>,
+    /// The sheets that repeat, the largest first: of each make-up one is laid out by itself and every copy
+    /// placed as it lies.
+    pub repeats: Vec<Repeat>,
     /// The switching regulators, each with its loop: the largest loop first.
     pub loops: Vec<Loop>,
     /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
@@ -1068,6 +1086,11 @@ const REFINES: usize = 4;
 const REFINE_MM: f64 = 8.0;
 /// What the nets of a part may grow by, in mm, when it is moved to the one pad it is there for.
 const OWN_PAD_MM: f64 = 1.0;
+/// A sheet is looked at for repeats if it has this many parts; and its parts are coloured this many times.
+const REPEAT_LEAST: usize = 3;
+/// How far from its middle a sheet that is laid out by itself may reach, in mm.
+const UNIT_REACH: f64 = 40.0;
+const COLOURINGS: usize = 4;
 /// A block is first looked for room no further than this from where it is wanted, in mm; and of the ways it
 /// may be turned, those that come within AS_NEAR of the nearest are weighed by what its pads join.
 const BLOCK_NEAR: f64 = 25.0;
@@ -3015,7 +3038,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             pins,
         }
     };
-    let laid_blocks: BTreeMap<usize, Block> = members_of
+    let mut laid_blocks: BTreeMap<usize, Block> = members_of
         .iter()
         .map(|(&head, list)| (head, lay_block(head, list)))
         .filter(|(_, block)| block.at.len() > 1)
@@ -3024,6 +3047,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // footprint and its value) and, for each part by it, its kind and the pads it stands between; a layout is
     // where each such part lies from the chip and how it is turned.
     let kind = |p: usize| format!("{}|{}", parts[p].footprint, parts[p].value);
+    // (the block a part stands in, by its chip)
+    let in_blocks = |p: usize, blocks: &BTreeMap<usize, Block>| -> Option<usize> {
+        blocks.iter().find(|(_, block)| block.at.iter().any(|placed| placed.0 == p)).map(|(&head, _)| head)
+    };
     type Made = BTreeMap<(String, Vec<String>), Vec<(usize, Vec<String>)>>; // make-up -> [(chip, layout)]
     let mut made: Made = BTreeMap::new();
     for (&head, block) in &laid_blocks {
@@ -3051,6 +3078,238 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .collect();
     alike.sort_by(|a, b| (b.0 * b.2).cmp(&(a.0 * a.2)).then(a.3.cmp(&b.3)));
     let blocks = [laid_blocks.len(), laid_blocks.values().map(|block| block.at.len()).sum()];
+    // Sheets that repeat are laid out alike: one is laid out, by itself on empty ground, and every copy is
+    // placed as that one lies, as one body. Two sheets repeat if their parts are of the same kinds, joined the
+    // same way: told by colouring the parts, each by its kind, then again and again by what its pads are
+    // joined to (the kinds and pads of the parts on each net within the sheet; whether the net is a ground,
+    // a supply, or leaves the sheet), until two parts have one colour only if they sit alike in their
+    // sheets. The parts of two such sheets are matched colour by colour.
+    let mut unit_groups: Vec<(Vec<String>, usize, Vec<usize>)> = Vec::new(); // (the sheets, parts of each, a part of each)
+    {
+        let mut of_sheet: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for p in (0..parts.len()).filter(|&p| !stays(&parts[p])) {
+            of_sheet.entry(sheet(p)).or_default().push(p);
+        }
+        let mut by_make: BTreeMap<Vec<String>, Vec<&String>> = BTreeMap::new();
+        for (name, own) in of_sheet.iter().filter(|(_, own)| own.len() >= REPEAT_LEAST) {
+            let mut kinds: Vec<String> = own.iter().map(|&p| kind(p)).collect();
+            kinds.sort();
+            by_make.entry(kinds).or_default().push(name);
+        }
+        for sheets in by_make.values().filter(|sheets| sheets.len() > 1) {
+            // (the colours, the same numbers for all these sheets)
+            let mut colour: BTreeMap<usize, usize> = BTreeMap::new();
+            let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+            for &name in sheets {
+                for &p in &of_sheet[name] {
+                    let next = seen.len();
+                    colour.insert(p, *seen.entry(format!("{} {}", kind(p), parts[p].pads.len())).or_insert(next));
+                }
+            }
+            for _ in 0..COLOURINGS {
+                let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+                let mut then: BTreeMap<usize, usize> = BTreeMap::new();
+                for &name in sheets {
+                    let own: BTreeSet<usize> = of_sheet[name].iter().copied().collect();
+                    for &p in &of_sheet[name] {
+                        let mut told = format!("{}", colour[&p]);
+                        for net in &parts[p].pads {
+                            let Some(net) = *net else {
+                                told.push_str(" -");
+                                continue;
+                            };
+                            let class = if found.grounds.contains(&net) {
+                                "G".to_string()
+                            } else if found.rails.contains_key(&net) {
+                                format!("R{net}")
+                            } else if reach[net].iter().any(|q| !own.contains(q)) {
+                                "Sx".to_string()
+                            } else {
+                                "S".to_string()
+                            };
+                            let mut on: Vec<(usize, usize)> = Vec::new();
+                            if is_signal(net) {
+                                for &q in reach[net].iter().filter(|q| own.contains(q) && **q != p) {
+                                    let pads = (0..parts[q].pads.len()).filter(|&i| parts[q].pads[i] == Some(net));
+                                    on.extend(pads.map(|i| (colour[&q], i)));
+                                }
+                                on.sort_unstable();
+                            }
+                            told.push_str(&format!(" {class}{on:?}"));
+                        }
+                        let next = seen.len();
+                        then.insert(p, *seen.entry(told).or_insert(next));
+                    }
+                }
+                colour = then;
+            }
+            // (each sheet's parts in the order of their colours; sheets with the same colours are one make-up)
+            let mut same: BTreeMap<Vec<usize>, Vec<(&String, Vec<usize>)>> = BTreeMap::new();
+            for &name in sheets {
+                let mut own = of_sheet[name].clone();
+                own.sort_by(|&a, &b| colour[&a].cmp(&colour[&b]).then(parts[a].name.cmp(&parts[b].name)));
+                same.entry(own.iter().map(|p| colour[p]).collect()).or_default().push((name, own));
+            }
+            for copies in same.into_values().filter(|copies| copies.len() > 1) {
+                let names: Vec<String> = copies.iter().map(|copy| copy.0.clone()).collect();
+                // A part is of its sheet's body if, in every copy, it has ground in the copy's domain, with its
+                // pads known, and stands in no block that reaches out of the sheet.
+                let within_sheet = |own: &Vec<usize>, p: usize| -> bool {
+                    let block = in_blocks(p, &laid_blocks);
+                    let inner =
+                        block.map_or(true, |head| laid_blocks[&head].at.iter().all(|placed| own.contains(&placed.0)));
+                    grounds.contains_key(&p)
+                        && part_domain.get(&p) == part_domain.get(&own[0])
+                        && !parts[p].offsets.is_empty()
+                        && inner
+                };
+                let whole: Vec<usize> = (0..copies[0].1.len())
+                    .filter(|&j| copies.iter().all(|(_, own)| within_sheet(own, own[j])))
+                    .collect();
+                if whole.len() < REPEAT_LEAST {
+                    unit_groups.push((names, copies[0].1.len(), Vec::new()));
+                    continue;
+                }
+                // The first is laid out: its blocks as they are, its other parts each by itself; the largest
+                // first at the middle, then each time what is tied the most to what lies already, set down as
+                // near the parts it is tied to as there is room, turned the way that leaves its pads nearest theirs.
+                let model = &copies[0].1;
+                let chosen: BTreeSet<usize> = whole.iter().map(|&j| model[j]).collect();
+                let mut items: Vec<Vec<(usize, Pt, u8)>> = Vec::new(); // each: its parts, where from its middle, quarters from their drawing
+                let mut taken_up: BTreeSet<usize> = BTreeSet::new();
+                for &p in &chosen {
+                    if taken_up.contains(&p) {
+                        continue;
+                    }
+                    match in_blocks(p, &laid_blocks) {
+                        Some(head) => {
+                            let block = &laid_blocks[&head];
+                            taken_up.extend(block.drawn.iter().map(|placed| placed.0));
+                            items.push(block.drawn.clone());
+                        }
+                        None => {
+                            taken_up.insert(p);
+                            items.push(vec![(p, [0.0, 0.0], 0)]);
+                        }
+                    }
+                }
+                let takes = |item: &Vec<(usize, Pt, u8)>| -> f64 {
+                    item.iter().map(|&(p, _, _)| body(p)[0] * body(p)[1]).sum()
+                };
+                let tied = |item: &Vec<(usize, Pt, u8)>, lies: &BTreeMap<usize, (Pt, u8)>| -> usize {
+                    let mine: BTreeSet<usize> = item.iter().map(|placed| placed.0).collect();
+                    nets.iter()
+                        .filter(|net| net.iter().any(|p| mine.contains(p)) && net.iter().any(|p| lies.contains_key(p)))
+                        .count()
+                };
+                let mut lies: BTreeMap<usize, (Pt, u8)> = BTreeMap::new();
+                let mut shut: Vec<[f64; 4]> = Vec::new();
+                let ground = [-UNIT_REACH, -UNIT_REACH, UNIT_REACH, UNIT_REACH];
+                let mut left: Vec<Vec<(usize, Pt, u8)>> = items;
+                let mut fits = true;
+                while !left.is_empty() {
+                    let next = (0..left.len())
+                        .max_by(|&a, &b| {
+                            tied(&left[a], &lies)
+                                .cmp(&tied(&left[b], &lies))
+                                .then(takes(&left[a]).total_cmp(&takes(&left[b])))
+                                .then(b.cmp(&a))
+                        })
+                        .unwrap_or(0);
+                    let item = left.remove(next);
+                    let mine: BTreeSet<usize> = item.iter().map(|placed| placed.0).collect();
+                    // (the pads of what lies already that this is joined to)
+                    let pad_of = |p: usize, i: usize, at: Pt, q: u8| {
+                        let from = quartered(q, drawn_pad(p, i));
+                        [at[0] + from[0], at[1] + from[1]]
+                    };
+                    let mut theirs: BTreeMap<usize, Vec<Pt>> = BTreeMap::new();
+                    for (&q, &(at, turn)) in &lies {
+                        for (i, net) in parts[q].pads.iter().enumerate() {
+                            if let Some(net) =
+                                net.filter(|&net| is_signal(net) && reach[net].iter().any(|p| mine.contains(p)))
+                            {
+                                theirs.entry(net).or_default().push(pad_of(q, i, at, turn));
+                            }
+                        }
+                    }
+                    let all: Vec<Pt> = theirs.values().flatten().copied().collect();
+                    let want = median(&all).unwrap_or([0.0, 0.0]);
+                    let ways: Vec<Vec<[f64; 4]>> = (0..4u8)
+                        .map(|way| {
+                            item.iter().map(|&(p, at, q)| drawn_rect(p, quartered(way, at), (q + way) % 4)).collect()
+                        })
+                        .collect();
+                    let tried = settled_shape(ground, &ways, want, &shut, UNIT_REACH);
+                    let apart = |way: u8, here: Pt| -> f64 {
+                        let mut far = 0.0;
+                        for &(p, at, q) in &item {
+                            let from = quartered(way, at);
+                            let at = [here[0] + from[0], here[1] + from[1]];
+                            for (i, net) in parts[p].pads.iter().enumerate() {
+                                let Some(pads) = net.and_then(|net| theirs.get(&net)) else { continue };
+                                let pad = pad_of(p, i, at, (q + way) % 4);
+                                far += pads.iter().map(|&there| dist(pad, there)).fold(f64::INFINITY, f64::min);
+                            }
+                        }
+                        far
+                    };
+                    let nearest = tried.iter().flatten().map(|&at| dist(at, want)).fold(f64::INFINITY, f64::min);
+                    let best = tried
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(way, at)| at.map(|at| (way as u8, at)))
+                        .filter(|&(_, at)| dist(at, want) <= nearest + AS_NEAR)
+                        .map(|(way, at)| (apart(way, at), way, at))
+                        .fold(
+                            None::<(f64, u8, Pt)>,
+                            |best, now| if best.is_some_and(|b| b.0 <= now.0) { best } else { Some(now) },
+                        );
+                    let Some((_, way, here)) = best else {
+                        fits = false;
+                        break;
+                    };
+                    for &(p, at, q) in &item {
+                        let from = quartered(way, at);
+                        let (to, turn) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
+                        lies.insert(p, (to, turn));
+                        shut.push(drawn_rect(p, to, turn));
+                    }
+                }
+                if !fits || shut.is_empty() {
+                    unit_groups.push((names, copies[0].1.len(), Vec::new()));
+                    continue;
+                }
+                let low = |k: usize| shut.iter().map(|r| r[k]).fold(f64::INFINITY, f64::min);
+                let high = |k: usize| shut.iter().map(|r| r[k + 2]).fold(f64::NEG_INFINITY, f64::max);
+                let mid = [(low(0) + high(0)) / 2.0, (low(1) + high(1)) / 2.0];
+                // (every copy is a block of its own parts lying as the first's: with the pads its own blocks gave)
+                let mut keys: Vec<usize> = Vec::new();
+                for (_, own) in &copies {
+                    let mut pins: Vec<(usize, (usize, usize, usize))> = Vec::new();
+                    let mut at: Vec<(usize, Pt, u8)> = Vec::new();
+                    let mut drawn: Vec<(usize, Pt, u8)> = Vec::new();
+                    for &j in &whole {
+                        let (p, (to, turn)) = (own[j], lies[&model[j]]);
+                        let from = [to[0] - mid[0], to[1] - mid[1]];
+                        at.push((p, from, (turn + 4 - stands_turned(p)) % 4));
+                        drawn.push((p, from, turn));
+                    }
+                    let mine: BTreeSet<usize> = at.iter().map(|placed| placed.0).collect();
+                    let heads: Vec<usize> = laid_blocks.keys().copied().filter(|head| mine.contains(head)).collect();
+                    for head in heads {
+                        if let Some(block) = laid_blocks.remove(&head) {
+                            pins.extend(block.pins);
+                        }
+                    }
+                    let through = mine.iter().any(|&p| parts[p].through);
+                    keys.push(at[0].0);
+                    laid_blocks.insert(at[0].0, Block { at, drawn, through, pins });
+                }
+                unit_groups.push((names, whole.len(), keys));
+            }
+        }
+    }
     // (what of a block's parts found no room in it is no part of it, and is placed with the rest)
     let in_block: BTreeMap<usize, usize> =
         laid_blocks.iter().flat_map(|(&head, block)| block.at.iter().map(move |&(p, _, _)| (p, head))).collect();
@@ -3578,6 +3837,17 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
     }
     face(&centre, &mut quarter, &pins);
+    // (the sheets that repeat, as they came out: a copy is laid out like the others if it was placed whole)
+    let mut repeats: Vec<Repeat> = unit_groups
+        .iter()
+        .map(|(names, count, keys)| Repeat {
+            sheets: names.clone(),
+            parts: *count,
+            alike: keys.iter().filter(|key| block_quarter.contains_key(key)).count(),
+            like: names[0].clone(),
+        })
+        .collect();
+    repeats.sort_by(|a, b| (b.sheets.len() * b.parts).cmp(&(a.sheets.len() * a.parts)).then(a.sheets.cmp(&b.sheets)));
     let pads_mm = all_reach(&centre, &quarter);
     // (a capacitor is by its pad within BESIDE_PIN; a large one within its own length and a millimetre: its
     // pad cannot be nearer than its body allows)
@@ -3947,6 +4217,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         bridges,
         blocks,
         alike,
+        repeats,
         served,
         chains,
         back,
@@ -4317,6 +4588,43 @@ mod tests {
             assert!(dist(at(chip), at(cap)) < 6.0 && dist(at(chip), at(resistor)) < 6.0, "{:?}", found.places);
         }
         assert_eq!(found.bypass, [2, 2]);
+        // drawn on a sheet each, with one part more that stands by no pad, the two are sheets of one make-up:
+        // the first is laid out by itself, and both are placed whole, as it lies
+        let mut board = board;
+        board.nets.extend(["X1", "X2"].map(|name| Net { name: name.to_string(), supply: false, pair: false }));
+        let (x1, x2) = (Some(board.nets.len() - 2), Some(board.nets.len() - 1));
+        for (name, of, to, turned) in [("R3", "A1", x1, 0), ("R4", "A2", x2, 1)] {
+            let mut more = board.parts.iter().find(|part| part.name == "R1").unwrap().clone();
+            (more.name, more.pads) = (name.to_string(), vec![net(of), to]);
+            (more.angle, more.size) =
+                (90.0 * f64::from(turned), Some(if turned == 1 { [1.0, 2.0] } else { [2.0, 1.0] }));
+            more.offsets = small.iter().map(|&offset| quartered(turned, offset)).collect();
+            board.parts.push(more);
+        }
+        let mut far = board.parts.iter().find(|part| part.name == "U1").unwrap().clone();
+        (far.name, far.value, far.pads) = ("U9".to_string(), "mux".to_string(), vec![net("VCC"), net("GND"), x1, x2]);
+        board.parts.push(far);
+        for part in board.parts.iter_mut() {
+            part.sheet = match part.name.as_str() {
+                "U1" | "C1" | "R1" | "R3" => "channel 1",
+                "U2" | "C2" | "R2" | "R4" => "channel 2",
+                _ => "the rest",
+            }
+            .to_string();
+        }
+        let found = floorplan(&board).unwrap();
+        let [repeat] = &found.repeats[..] else { panic!("{:?}", found.repeats) };
+        assert_eq!((repeat.sheets.len(), repeat.parts, repeat.alike, repeat.like.as_str()), (2, 4, 2, "channel 1"));
+        // alike: every two parts of the one are as far apart as the same two of the other
+        let at = |name: &str| found.places.iter().find(|place| place.part == name).unwrap().at;
+        let (one, other) = (["U1", "C1", "R1", "R3"], ["U2", "C2", "R2", "R4"]);
+        for i in 0..4 {
+            for j in i + 1..4 {
+                let (a, b) = (dist(at(one[i]), at(one[j])), dist(at(other[i]), at(other[j])));
+                assert!((a - b).abs() < 0.02, "{} {}: {a} {b}", one[i], one[j]);
+            }
+        }
+        assert!(found.places.iter().all(|place| place.fits));
     }
 
     #[test]
