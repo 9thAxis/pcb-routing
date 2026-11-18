@@ -48,7 +48,11 @@
   ground's): under each of the smallest zones, the supply most of its parts are on, of those of its ground
   that reach several zones. A supply so poured takes no room in a road but where parts of it stand under
   another's pour and have none of their own on their side of the cut; the plan names those parts (they are
-  reached by a track) and says in how many pieces each pour is.
+  reached by a track) and says in how many pieces each pour is. The supply a group of parts would have of
+  the plane has its say in where zones go: groups fed alike are tied when zones are gathered into larger
+  ones, and the zones under one pour pull each other when ground is given, that a pour be a few large
+  pieces and not a patchwork (on a board with two supplies wanted almost everywhere: 8 pieces too many to
+  3, for 6 % more track between zones).
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

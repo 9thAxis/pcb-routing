@@ -443,6 +443,10 @@ const TALL_MM: f64 = 500.0;
 /// What a track more than a road holds counts for when layings out are weighed, in mm; and a net given no way.
 const OVER_MM: f64 = 50.0;
 const STRANDED_MM: f64 = 200.0;
+/// What ties the smallest zones under the pour of one supply to each other, as so many nets for each.
+const POURED: f64 = 8.0;
+/// And what ties them when zones are gathered into larger ones.
+const GATHERED: f64 = 4.0;
 /// What a mm of parts more than their gap is long counts for when layings out are weighed, in mm.
 const CRAMPED_MM: f64 = 20.0;
 /// Two grounds no further apart than this many gaps, corner to corner, are neighbours.
@@ -755,6 +759,9 @@ struct Ground<'a> {
     asked: &'a BTreeMap<String, usize>,
     /// The part each part mates with, if any.
     mates: &'a [Option<usize>],
+    /// For each supply poured on a plane layer: a part of each of the smallest zones it is poured under. Those
+    /// zones are pulled together, that the pour be of one piece.
+    kin: &'a [Vec<usize>],
 }
 
 /// The ground between two grounds that are neighbours, no further apart than `most`, and whether it runs up
@@ -871,7 +878,22 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
             zone_of.insert(part, z);
         }
     }
-    let ties = tied(nets, &|part| zone_of.get(&part).copied());
+    let mut ties = tied(nets, &|part| zone_of.get(&part).copied());
+    // (zones under the pour of one supply are tied by it: each of the smallest to every other, POURED nets in all)
+    let mut kin_here: Vec<(BTreeMap<usize, f64>, f64)> = Vec::new();
+    for kin in on.kin.iter().filter(|kin| kin.len() > 1) {
+        let each = POURED / (kin.len() - 1) as f64;
+        let mut here: BTreeMap<usize, f64> = BTreeMap::new();
+        kin.iter().filter_map(|p| zone_of.get(p)).for_each(|&z| *here.entry(z).or_insert(0.0) += 1.0);
+        let list: Vec<(usize, f64)> = here.iter().map(|(&z, &n)| (z, n)).collect();
+        for (i, &(a, of_a)) in list.iter().enumerate() {
+            for &(b, of_b) in &list[i + 1..] {
+                *ties.entry((a, b)).or_insert(0.0) += each * of_a * of_b;
+            }
+        }
+        kin_here.push((here, each));
+    }
+    let ties = ties;
     // Where each zone is pulled: by its fixed parts where they stand, by what it is tied to outside these zones
     // where that has been given ground, and by the others of these zones, each where it is pulled itself. The
     // place that all of it together asks for is found by going round until nothing moves much.
@@ -884,6 +906,12 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
                 let there = [there[0] - shift[0], there[1] - shift[1]];
                 touched.iter().for_each(|&z| outside[z].push((there, weight)));
             }
+        }
+    }
+    for (kin, (here, each)) in on.kin.iter().filter(|kin| kin.len() > 1).zip(&kin_here) {
+        for there in kin.iter().filter(|p| !zone_of.contains_key(p)).filter_map(|&p| at[p]) {
+            let there = [there[0] - shift[0], there[1] - shift[1]];
+            here.iter().for_each(|(&z, &count)| outside[z].push((there, each * count)));
         }
     }
     for (&part, &z) in zone_of.iter().filter(|(&p, _)| board.parts[p].fixed && board.parts[p].placed) {
@@ -1409,6 +1437,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let sheet = |p: usize| if parts[p].sheet.is_empty() { "(on no sheet)".to_string() } else { parts[p].sheet.clone() };
     let sheet_size = |name: &str| (0..parts.len()).filter(|&p| sheet(p) == name).count();
     let mut apart: Vec<Apart> = Vec::new();
+    let power_layers: Vec<String> =
+        board.stack.iter().filter(|layer| layer.way == Way::Plane).skip(1).map(|layer| layer.name.clone()).collect();
     let mut within = |lot: &[usize]| -> Vec<Work> {
         let mine: BTreeSet<usize> = lot.iter().copied().collect();
         let mut sheets: Vec<String> = mine.iter().map(|&p| sheet(p)).collect::<BTreeSet<_>>().into_iter().collect();
@@ -1467,7 +1497,30 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         };
         let local: Vec<Vec<usize>> =
             nets.iter().map(|net| net.iter().copied().filter(|p| mine.contains(p)).collect()).collect();
-        let ties = tied(&local, &|p| atom_of.get(&p).copied());
+        let mut ties = tied(&local, &|p| atom_of.get(&p).copied());
+        // (and by the supply each would have of the plane: the groups most of whose parts are on one supply
+        // are tied by it, GATHERED nets for each, that what is fed alike be gathered together)
+        let mut asking: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); atoms.len()];
+        for &net in found.rails.keys() {
+            let mut count: BTreeMap<usize, usize> = BTreeMap::new();
+            reach[net].iter().filter_map(|p| atom_of.get(p)).for_each(|&a| *count.entry(a).or_insert(0) += 1);
+            if count.len() > 1 {
+                count.iter().for_each(|(&a, &n)| asking[a].push((n, count.len(), net)));
+            }
+        }
+        let mut fed_by: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (a, asks) in asking.iter_mut().enumerate() {
+            asks.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+            asks.iter().take(power_layers.len()).for_each(|ask| fed_by.entry(ask.2).or_default().push(a));
+        }
+        for alike in fed_by.values().filter(|alike| alike.len() > 1) {
+            for (i, &a) in alike.iter().enumerate() {
+                for &b in &alike[i + 1..] {
+                    *ties.entry((a.min(b), a.max(b))).or_insert(0.0) += GATHERED / (alike.len() - 1) as f64;
+                }
+            }
+        }
+        let ties = ties;
         let mut levels: Vec<Vec<Vec<usize>>> =
             vec![(0..atoms.len()).filter(|&a| !atoms[a].1.is_empty()).map(|a| vec![a]).collect()];
         loop {
@@ -1554,8 +1607,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // zones, as many supplies as there are such layers, those with the most parts there, of the supplies of
     // its ground that reach several zones (one that stays within a zone is laid there, on the layers of its
     // parts). A part on two grounds stands on a gap, beside the pours of both.
-    let power_layers: Vec<String> =
-        board.stack.iter().filter(|layer| layer.way == Way::Plane).skip(1).map(|layer| layer.name.clone()).collect();
     let mut leaf_parts: Vec<(usize, &Vec<usize>)> = Vec::new();
     fn smallest_of<'w>(work: &'w Work, domain: usize, out: &mut Vec<(usize, &'w Vec<usize>)>) {
         if work.inside.is_empty() {
@@ -1597,6 +1648,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         || in_leaf[r].len() < 2)
             };
             reach[rail_nets[r]].iter().copied().partition(fed)
+        })
+        .collect();
+    let kin: Vec<Vec<usize>> = (0..rail_nets.len())
+        .map(|r| {
+            let under = (0..leaf_parts.len()).filter(|&l| on_plane[l].contains(&r));
+            under.filter_map(|l| leaf_parts[l].1.first().copied()).collect()
         })
         .collect();
     // (the pieces each supply's pour is in, given the ground of every smallest zone: zones that are neighbours
@@ -1772,6 +1829,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             sided,
             asked,
             mates: &mate_of,
+            kin: &kin,
         };
         let mut lots: Vec<Vec<Work>> = (0..boards.len()).map(|_| Vec::new()).collect();
         let mut places: Vec<(usize, usize)> = Vec::new();
