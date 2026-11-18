@@ -52,6 +52,7 @@ class Part:
     value: str = ""
     footprint: str = ""
     angle: float = 0.0  # how it is turned, in degrees
+    back: bool = False  # whether it stands on the back of the board
     box: object = None  # its courtyard as it stands, [x0, y0, x1, y1]; None if its footprint draws none
 
 

@@ -347,7 +347,7 @@ def read_board(board, ignored, ask, pours=True):
         picture.parts[footprint.GetReference()] = Part(
             at=xy(footprint.GetPosition()), sheet=footprint.GetSheetname(), file=footprint.GetSheetfile(),
             value=footprint.GetValue(), footprint=footprint.GetFPIDAsString(),
-            angle=footprint.GetOrientationDegrees(),
+            angle=footprint.GetOrientationDegrees(), back=bool(footprint.IsFlipped()),
             box=[MM(around.GetLeft()), MM(around.GetTop()), MM(around.GetRight()), MM(around.GetBottom())] if around else None)
 
     for track in board.GetTracks():

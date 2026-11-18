@@ -123,6 +123,15 @@
   pad on a net the hints call sensitive. Layings out are weighed by how much nearer than 15 mm the zones
   of the one are to the zones of the other; what disturbs is placed first, and what is disturbed then
   keeps 15 mm from it wherever there is room. The plan names each pair that stands nearer.
+  Parts stand on their side of the board: a part on the back takes no ground from one on the front unless
+  either has holes, and a part that stands by a pad of a chip on the other side stands under that pad. A
+  part joined to no other (a mounting hole, a mark for the camera, though its pad be on a net of its own)
+  stays where it stands; what has no pad at all (a logo) is in no part's way. A part with pads round its
+  outline and no courtyard drawn (a module on two rows of pins) is told in pieces, and other parts may
+  stand between them. A part with holes stands off the main roads if it can and on one if it cannot; the
+  large parts of a block that found no room are placed at once; a part that found no room anywhere is
+  told where it stands today. On 109 public boards (1039 parts): none fails, none over another, 17 parts
+  on 11 boards without room (46 on 24 before), all on boards their bodies overfill or overhang.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

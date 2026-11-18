@@ -33,6 +33,42 @@ def bodies(picture):
     return found
 
 
+PIECE_APART = 3.0  # pads of a part further apart than this, in mm, are of two pieces of its body
+PIECES_MOST = 0.6  # a body is told in pieces if they take no more than this of its box
+
+
+def pieces(picture):
+    """For each part whose footprint draws no courtyard and whose pads stand in groups apart from each other (a
+    module on two rows of pins, a pair of headers), its body in pieces: the box of each group of pads and BODY
+    round it, [x0, y0, x1, y1] as the part stands. A part is in pieces only if they leave much of its box free
+    (see PIECES_MOST): the ground between them is then other parts' to take."""
+    of = {}
+    for pad in picture.pads:
+        if pad.part and not picture.parts[pad.part].box:
+            of.setdefault(pad.part, []).append(pad.at)
+    found = {}
+    for reference, at in of.items():
+        left, groups = list(range(len(at))), []
+        while left:
+            group, edge = [], [left.pop()]
+            while edge:
+                i = edge.pop()
+                group.append(i)
+                near = [j for j in left if abs(at[i][0] - at[j][0]) <= PIECE_APART and abs(at[i][1] - at[j][1]) <= PIECE_APART]
+                left = [j for j in left if j not in near]
+                edge += near
+            groups.append(group)
+        if len(groups) < 2:
+            continue
+        boxes = [[min(at[i][0] for i in g) - BODY, min(at[i][1] for i in g) - BODY,
+                  max(at[i][0] for i in g) + BODY, max(at[i][1] for i in g) + BODY] for g in groups]
+        whole = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+        taken = sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes)
+        if taken <= PIECES_MOST * (whole[2] - whole[0]) * (whole[3] - whole[1]):
+            found[reference] = sorted(boxes)
+    return found
+
+
 # What the schematic calls a pin, as the engine knows it (see `Pin` in src/floorplan.rs).
 PINS = dict(input="input", output="output", bidirectional="both", tri_state="output", passive="passive",
             power_in="power_in", power_out="power_out", open_collector="output", open_emitter="output")
@@ -82,6 +118,8 @@ def floorplan(picture, rules, ask):
                 drilled.add(pad.part)
     # (what a part takes of the board: its body; the room for tracks is what the zones are given beyond that)
     area = {part: max((box[2] - box[0]) * (box[3] - box[1]), 0.01) for part, box in bodies(picture).items()}
+    in_pieces = pieces(picture)
+    area.update({part: sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes) for part, boxes in in_pieces.items()})
     placed = lambda part: x0 <= part.at[0] <= x1 and y0 <= part.at[1] <= y1
     guesses = rules.settings.guesses
     # (a part is said by the middle of its body, which is what is placed and turned; its own origin, that the
@@ -92,6 +130,7 @@ def floorplan(picture, rules, ask):
                   diode=bool(DIODE_PART.match(reference)), area=round(area.get(reference, 1.0), 2),
                   pads=pads.get(reference, []), offsets=offsets.get(reference, []), pins=pins.get(reference, []),
                   anchor=[round(part.at[k] - mid[reference][k], 4) for k in (0, 1)], through=reference in drilled,
+                  back=bool(part.back),
                   value=part.value or "", footprint=(part.footprint or "").split(":")[-1], angle=part.angle)
              for reference, part in sorted(picture.parts.items())]
     # (a net is sensitive here if the hints say so: a name alone does not make the parts on it be kept from
@@ -148,6 +187,10 @@ def floorplan(picture, rules, ask):
         # (its body, to be settled: see `bodies`; what it takes of the board, above, is by its pads and more:
         # the tracks to it want room too)
         box = body[part["name"]]
+        if part["name"] in in_pieces:
+            at = mid[part["name"]]
+            part["pieces"] = [[round(b[0] - at[0], 3), round(b[1] - at[1], 3), round(b[2] - at[0], 3), round(b[3] - at[1], 3)]
+                              for b in in_pieces[part["name"]]]
         if box[2] > box[0] and box[3] > box[1]:
             part["size"] = [round(box[2] - box[0], 3), round(box[3] - box[1], 3)]
         part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}),

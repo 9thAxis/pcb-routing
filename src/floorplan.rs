@@ -84,6 +84,15 @@ pub struct Part {
     /// Whether it has a pad with a hole: it takes its ground on every layer, and stands on no road.
     #[serde(default)]
     pub through: bool,
+    /// Its body in pieces, each [x0, y0, x1, y1] from `at` as it stands, where it does not take the whole of
+    /// its box: a part with pads round its outline and nothing drawn between (a module on two rows of
+    /// pins) leaves the ground between them to other parts. None given: its box is its body.
+    #[serde(default)]
+    pub pieces: Vec<[f64; 4]>,
+    /// Whether it stands on the back of the board. It stays on its side: a part on the one side takes no
+    /// ground from a part on the other, unless either has holes.
+    #[serde(default)]
+    pub back: bool,
     /// Where its own origin is from `at` (the middle of its body), as it stands: what its file places it by.
     #[serde(default)]
     pub anchor: Pt,
@@ -366,6 +375,10 @@ pub struct Place {
     /// the board is looked at: by a quarter where its body lies the better so, and so that its pads face
     /// what they are joined to.
     pub turn: u16,
+    /// Whether it stands on the back of the board.
+    pub back: bool,
+    /// For a part whose body is in pieces: the ground of each, where it is placed. Else none: `rect` is it.
+    pub pieces: Vec<[f64; 4]>,
     /// Whether there was room for its body, one way or the other, on the ground of its domain. Where there
     /// was not, its place is where it was pulled, over others.
     pub fits: bool,
@@ -1829,13 +1842,23 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
 /// The floorplan of a board (see the module). An error if a pad names a net that is not there, or the board
 /// has no size.
 pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
-    // A part on the board with no pad on any net is the board's own (a mounting hole, a mark): it stays where
-    // it stands, and no other part may stand on its body.
-    let stays = |part: &Part| part.placed && part.pads.iter().all(|net| net.is_none());
+    // A part on the board that is joined to no other part (no pad on a net, or only on nets of its own: a
+    // mounting hole, a mark for the camera) is the board's own: it stays where it stands, and no other part
+    // may stand on its body.
+    let mut joins: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); board.nets.len()];
+    for (p, part) in board.parts.iter().enumerate() {
+        for &net in part.pads.iter().flatten().filter(|&&net| net < board.nets.len()) {
+            joins[net].insert(p);
+        }
+    }
+    let stays = |part: &Part| {
+        part.placed && part.pads.iter().flatten().all(|&net| joins.get(net).map_or(true, |on| on.len() < 2))
+    };
     let held: Board;
     let board = if board.parts.iter().any(stays) {
         let mut with = board.clone();
-        for part in board.parts.iter().filter(|part| stays(part)) {
+        // (but what has no pad at all is drawn on the board, not mounted on it: a mark, a logo. It is in no part's way)
+        for part in board.parts.iter().filter(|part| stays(part) && !part.pads.is_empty()) {
             let side = part.area.sqrt();
             let [w, h] = part.size.unwrap_or([side, side]);
             with.keepouts.push([
@@ -2996,6 +3019,28 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // that part much of the board (a lesser road, a track or two, goes round it); the others may stand over
     // a road, whose tracks run on the layers beneath.
     let goes_first = |p: usize| parts[p].through || aggressor[p] || body(p)[0] * body(p)[1] >= LARGE;
+    // (the sides of the board a part takes ground on: 1 the front, 2 the back, 3 both, for a part with holes.
+    // Two parts are in each other's way only if they have a side in common)
+    let side_of = |p: usize| {
+        if parts[p].through {
+            3u8
+        } else if parts[p].back {
+            2
+        } else {
+            1
+        }
+    };
+    // (the ground a part takes where it stands: its box, or its pieces where it is given in pieces)
+    let stands_on = |p: usize, (at, turn): (Pt, bool)| -> Vec<[f64; 4]> {
+        if parts[p].pieces.is_empty() {
+            return vec![taken(p, (at, turn))];
+        }
+        let piece = |r: &[f64; 4]| {
+            let (a, b) = (quartered(u8::from(turn), [r[0], r[1]]), quartered(u8::from(turn), [r[2], r[3]]));
+            [at[0] + a[0].min(b[0]), at[1] + a[1].min(b[1]), at[0] + a[0].max(b[0]), at[1] + a[1].max(b[1])]
+        };
+        parts[p].pieces.iter().map(piece).collect()
+    };
     // A chip (or a connector) and the parts that stand by its pads are a block: laid out once, by themselves
     // on empty ground (the chip in the middle, each part beside the pad it is for, in the order they are
     // taken), and then placed as one body. Where each is taken after its neighbours, the ground by a chip's
@@ -3014,8 +3059,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     for &(c, by, net) in &order {
         let head = block_head.get(&by).copied().unwrap_or(by);
         let free = c != head && !block_head.contains_key(&c) && !members_of.contains_key(&c);
-        let together =
-            grounds.contains_key(&head) && grounds.contains_key(&c) && part_domain.get(&c) == part_domain.get(&head);
+        let together = grounds.contains_key(&head)
+            && grounds.contains_key(&c)
+            && part_domain.get(&c) == part_domain.get(&head)
+            // (a part in pieces is no head of a block: what stands by it may stand between its pieces)
+            && parts[head].pieces.is_empty();
         if free && together && !parts[by].offsets.is_empty() && !parts[head].offsets.is_empty() {
             block_head.insert(c, head);
             members_of.entry(head).or_default().push((c, by, net));
@@ -3053,7 +3101,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let [hw, hh] = body(head);
         let reach = hw.max(hh) / 2.0 + BLOCK_REACH;
         let ground = [-reach, -reach, reach, reach];
-        let mut shut: Vec<[f64; 4]> = vec![drawn_rect(head, [0.0, 0.0], 0)];
+        // (what lies already, with the sides of the board it takes ground on)
+        let mut shut: Vec<([f64; 4], u8)> = vec![(drawn_rect(head, [0.0, 0.0], 0), side_of(head))];
         let mut at_pad: BTreeMap<(usize, usize), usize> = BTreeMap::new();
         let mut pins: Vec<(usize, (usize, usize, usize))> = Vec::new();
         for &(c, by, net) in list {
@@ -3101,9 +3150,15 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             ];
             let (_, want, along_x) =
                 sides.iter().fold(sides[0], |best, side| if side.0 < best.0 { *side } else { best });
-            let lying = if along_x { [long, short] } else { [short, long] };
+            // (a part on the other side of the board from what it stands by stands under the pad itself, as
+            // its footprint is drawn or a quarter from that: there is nothing of the other in its way)
+            let under = side_of(c) & side_of(by) == 0;
+            let (want, lying) =
+                if under { (pad, [cw, ch]) } else { (want, if along_x { [long, short] } else { [short, long] }) };
             let quarter_more = (lying[0] - cw).abs() > 1e-9;
-            let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
+            let in_its_way: Vec<[f64; 4]> =
+                shut.iter().filter(|lies| lies.1 & side_of(c) != 0).map(|lies| lies.0).collect();
+            let Some((at, turn)) = settled(ground, &[(lying, want)], &in_its_way)[0] else { continue };
             if dist(at, pad) > BLOCK_REACH {
                 continue;
             }
@@ -3123,10 +3178,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             *at_pad.entry((by, pin)).or_insert(0) += 1;
             pos.insert(c, (at, q));
-            shut.push(drawn_rect(c, at, q));
+            shut.push((drawn_rect(c, at, q), side_of(c)));
         }
-        let low = |k: usize| shut.iter().map(|r| r[k]).fold(f64::INFINITY, f64::min);
-        let high = |k: usize| shut.iter().map(|r| r[k + 2]).fold(f64::NEG_INFINITY, f64::max);
+        let low = |k: usize| shut.iter().map(|lies| lies.0[k]).fold(f64::INFINITY, f64::min);
+        let high = |k: usize| shut.iter().map(|lies| lies.0[k + 2]).fold(f64::NEG_INFINITY, f64::max);
         let mid = [(low(0) + high(0)) / 2.0, (low(1) + high(1)) / 2.0];
         Block {
             // (told as each part stands in the file: turned from that by what it is turned from its drawing,
@@ -3482,14 +3537,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     && (laid_blocks.contains_key(&p) || (goes_first(p) && !in_block.contains_key(&p)))
             })
             .collect();
-        let mut found: Vec<[f64; 4]> = Vec::new();
+        let mut sides: [Vec<[f64; 4]>; 2] = [Vec::new(), Vec::new()]; // what stands on the front, and on the back
         for with_holes in [true, false] {
             let lot: Vec<usize> = mine.iter().copied().filter(|&p| holed(p) == with_holes).collect();
-            let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
-            shut.extend(
+            let mut base: Vec<[f64; 4]> = board.keepouts.clone();
+            base.extend(
                 roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
             );
-            shut.extend(found.iter().copied());
             // (the largest first, a block by what its parts take; each one by one, on what the others left)
             let takes = |p: usize| -> f64 {
                 // (copies side by side take their turn as one of them would: by what one copy takes)
@@ -3503,15 +3557,29 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             lot.sort_by(|&a, &b| loud(b).cmp(&loud(a)).then(takes(b).total_cmp(&takes(a))).then(a.cmp(&b)));
             for p in lot {
                 let want = middle(grounds[&p]);
+                // (what is in its way: what is shut, and what stands on the sides it takes ground on)
+                let on = laid_blocks
+                    .get(&p)
+                    .map_or(side_of(p), |block| block.at.iter().fold(0, |on, placed| on | side_of(placed.0)));
+                let mut shut: Vec<[f64; 4]> = base.clone();
+                (0..2).filter(|k| on & (1 << k) != 0).for_each(|k| shut.extend(sides[k].iter().copied()));
+                // (and the same with the roads open: a part with holes stands off the main roads if it can, but
+                // on a small board a part may be as large as what the roads leave)
+                let mut over_roads: Vec<[f64; 4]> = board.keepouts.clone();
+                over_roads.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
+                (0..2).filter(|k| on & (1 << k) != 0).for_each(|k| over_roads.extend(sides[k].iter().copied()));
                 let Some(first) = laid_blocks.get(&p) else {
                     let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
                     let away = if victim[p] { settled(work.rect, &[(body(p), want)], &kept)[0] } else { None };
-                    let at = away.or_else(|| settled(work.rect, &[(body(p), want)], &shut)[0]);
+                    let at = away
+                        .or_else(|| settled(work.rect, &[(body(p), want)], &shut)[0])
+                        .or_else(|| settled(work.rect, &[(body(p), want)], &over_roads)[0]);
                     if aggressor[p] {
                         halos.extend(at.map(|at| round_it(taken(p, at))));
                     }
-                    shut.extend(at.map(|at| taken(p, at)));
-                    found.extend(at.map(|at| taken(p, at)));
+                    if let Some(at) = at {
+                        (0..2).filter(|k| side_of(p) & (1 << k) != 0).for_each(|k| sides[k].extend(stands_on(p, at)));
+                    }
                     stood.insert(p, at);
                     continue;
                 };
@@ -3603,7 +3671,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
                         let hushed = block.at.iter().any(|placed| victim[placed.0]);
                         let away = if hushed { best_for(block, false, &kept) } else { None };
-                        let mut chosen = away.or_else(|| best_for(block, anywhere, &shut));
+                        let mut chosen = away.or_else(|| best_for(block, anywhere, &shut)).or_else(|| {
+                            if n == last {
+                                best_for(block, true, &over_roads)
+                            } else {
+                                None
+                            }
+                        });
                         // (copies side by side are worth it if their pads are not much further from what
                         // they join than with each copy where it would stand by itself)
                         if let (true, Some((together, _, _))) = (n < last && board.rows == Rows::Cheap, chosen) {
@@ -3618,10 +3692,22 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         let Some((_, way, here)) = chosen else {
                             placed_all = false;
                             if n == last {
-                                // (no room for it as a block: its parts are placed with the rest, each by itself)
-                                block.at.iter().for_each(|&(m, _, _)| {
-                                    stood.insert(m, None);
-                                });
+                                // (no room for it as a block: its parts are placed with the rest, each by
+                                // itself; but those that go first have their place now, before the small ones)
+                                for &(m, _, _) in &block.at {
+                                    let alone = if goes_first(m) {
+                                        settled(work.rect, &[(body(m), middle(grounds[&m]))], &shut)[0]
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(at) = alone {
+                                        shut.extend(stands_on(m, at));
+                                        (0..2)
+                                            .filter(|k| side_of(m) & (1 << k) != 0)
+                                            .for_each(|k| sides[k].extend(stands_on(m, at)));
+                                    }
+                                    stood.insert(m, alone);
+                                }
                                 continue;
                             }
                             break;
@@ -3632,7 +3718,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                             stood.insert(m, Some((to, quarters % 2 == 1)));
                             block_quarter.insert(m, quarters);
                             shut.push(taken(m, (to, quarters % 2 == 1)));
-                            found.push(taken(m, (to, quarters % 2 == 1)));
+                            (0..2)
+                                .filter(|k| side_of(m) & (1 << k) != 0)
+                                .for_each(|k| sides[k].extend(stands_on(m, (to, quarters % 2 == 1))));
                             if aggressor[m] {
                                 halos.push(round_it(taken(m, (to, quarters % 2 == 1))));
                             }
@@ -3650,15 +3738,20 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
     }
     // Then the others, zone by zone, each on the ground of its own.
-    let settled_first: Vec<[f64; 4]> = stood.iter().filter_map(|(&p, at)| at.map(|at| taken(p, at))).collect();
-    for (_, rect, own) in &fine_leaves {
+    let settled_first: Vec<([f64; 4], u8)> = stood
+        .iter()
+        .filter_map(|(&p, at)| at.map(|at| (p, at)))
+        .flat_map(|(p, at)| stands_on(p, at).into_iter().map(move |r| (r, side_of(p))))
+        .collect();
+    for (side, (_, rect, own)) in [1u8, 2].into_iter().flat_map(|side| fine_leaves.iter().map(move |leaf| (side, leaf)))
+    {
         let mine: Vec<usize> = own
             .iter()
             .copied()
-            .filter(|&p| grounds.contains_key(&p) && !goes_first(p) && !in_block.contains_key(&p))
+            .filter(|&p| grounds.contains_key(&p) && !goes_first(p) && !in_block.contains_key(&p) && side_of(p) == side)
             .collect();
         let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
-        shut.extend(settled_first.iter().copied());
+        shut.extend(settled_first.iter().filter(|first| first.1 & side != 0).map(|first| first.0));
         // (what is disturbed first, off the ground near what disturbs; what of it finds no room so, with the rest)
         let hushed: Vec<usize> = mine.iter().copied().filter(|&p| victim[p]).collect();
         let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
@@ -3666,7 +3759,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         for (&p, at) in hushed.iter().zip(settled(*rect, &bodies, &kept)) {
             if let Some(at) = at {
                 stood.insert(p, Some(at));
-                shut.push(taken(p, at));
+                shut.extend(stands_on(p, at));
             }
         }
         let mine: Vec<usize> = mine.into_iter().filter(|p| !stood.get(p).is_some_and(|at| at.is_some())).collect();
@@ -3678,12 +3771,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // holes, off the roads and gaps too; then the others, which may stand over a road (its tracks run on
     // the layers beneath them) but over no gap.
     for work in top.iter() {
-        for with_holes in [true, false] {
+        for (with_holes, side) in [(true, 3u8), (false, 1), (false, 2)] {
             let left: Vec<usize> = work
                 .parts
                 .iter()
                 .copied()
-                .filter(|&p| stood.get(&p) == Some(&None) && parts[p].through == with_holes)
+                .filter(|&p| stood.get(&p) == Some(&None) && parts[p].through == with_holes && side_of(p) == side)
                 .collect();
             if left.is_empty() {
                 continue;
@@ -3692,9 +3785,48 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             shut.extend(
                 roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
             );
-            shut.extend(work.parts.iter().filter_map(|&p| stood.get(&p).copied().flatten().map(|at| taken(p, at))));
+            let in_the_way = work.parts.iter().filter(|&&p| side_of(p) & side != 0);
+            shut.extend(
+                in_the_way
+                    .filter_map(|&p| stood.get(&p).copied().flatten().map(|at| (p, at)))
+                    .flat_map(|(p, at)| stands_on(p, at)),
+            );
             let bodies: Vec<([f64; 2], Pt)> = left.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
             stood.extend(left.iter().copied().zip(settled(work.rect, &bodies, &shut)));
+            // (a part with holes that found no room off the main roads may stand on one: one by one)
+            if with_holes {
+                for &p in &left {
+                    if stood.get(&p) != Some(&None) {
+                        continue;
+                    }
+                    let mut open: Vec<[f64; 4]> = board.keepouts.clone();
+                    open.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
+                    let others = work.parts.iter().filter(|&&q| q != p);
+                    open.extend(
+                        others
+                            .filter_map(|&q| stood.get(&q).copied().flatten().map(|at| (q, at)))
+                            .flat_map(|(q, at)| stands_on(q, at)),
+                    );
+                    stood.insert(p, settled(work.rect, &[(body(p), middle(grounds[&p]))], &open)[0]);
+                }
+            }
+        }
+    }
+    // And what found no room anywhere stays where it stands today, if it stands on the board and nothing that
+    // has its place is in its way there: its designer found that room for it.
+    let homeless: Vec<usize> = (0..parts.len()).filter(|p| stood.get(p) == Some(&None) && parts[*p].placed).collect();
+    for p in homeless {
+        let here = taken(p, (parts[p].at, false));
+        let over =
+            |r: [f64; 4]| r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6;
+        let in_its_way = stood
+            .iter()
+            .filter(|(&q, _)| q != p && side_of(q) & side_of(p) != 0)
+            .filter_map(|(&q, at)| at.map(|at| (q, at)))
+            .flat_map(|(q, at)| stands_on(q, at))
+            .any(over);
+        if !in_its_way && !board.keepouts.iter().any(|&shut| over(shut)) {
+            stood.insert(p, Some((parts[p].at, false)));
         }
     }
     // Where the middle of each part is (as its board is drawn), how many quarters it is turned, and what is
@@ -3709,7 +3841,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             match (on_gap.get(&p), stood.get(&p)) {
                 (Some(&at), _) => centre[p] = Some(at),
                 (None, Some(&Some((at, turn)))) => (centre[p], quarter[p]) = (Some(at), u8::from(turn)),
-                (None, Some(None)) => centre[p] = Some(middle(grounds[&p])),
+                // (no room found: told where it stands today if it stands on the board, else where it was pulled)
+                (None, Some(None)) => centre[p] = Some(if parts[p].placed { parts[p].at } else { middle(grounds[&p]) }),
                 _ => {}
             }
             if let Some(&quarters) = block_quarter.get(&p).filter(|_| stood.get(&p).is_some_and(|at| at.is_some())) {
@@ -3770,6 +3903,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     || stays(&parts[p])
                     || block_quarter.contains_key(&p)
                 {
+                    continue;
+                }
+                // (a body in pieces is not turned again: the ground between its pieces is taken as it stands)
+                if !parts[p].pieces.is_empty() {
                     continue;
                 }
                 let [w, h] = body(p);
@@ -3880,7 +4017,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
         shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
         let open = shut.clone();
-        shut.extend(mine.iter().filter(|&&q| q != c && hard(q)).filter_map(|&q| rect_of(q, &centre, &quarter)));
+        let meets = |a: usize, b: usize| side_of(a) & side_of(b) != 0;
+        shut.extend(
+            mine.iter().filter(|&&q| q != c && hard(q) && meets(q, c)).filter_map(|&q| rect_of(q, &centre, &quarter)),
+        );
         let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
         if dist(at, pad) >= dist(was, pad) - 1e-6 {
             // (it stands as near its pad already as there is room to: if that is by it, it is not moved from
@@ -3899,13 +4039,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut moved: Vec<usize> = mine
             .iter()
             .copied()
-            .filter(|&q| q != c && !hard(q) && rect_of(q, &centre, &quarter).is_some_and(over))
+            .filter(|&q| q != c && !hard(q) && meets(q, c) && rect_of(q, &centre, &quarter).is_some_and(over))
             .collect();
         moved.sort_by(|&a, &b| parts[b].area.total_cmp(&parts[a].area).then(a.cmp(&b)));
         let mut done = true;
         for &q in &moved {
             let mut shut = open.clone();
-            let others = mine.iter().filter(|&&other| other != q && (other == c || stands(other)));
+            let others = mine.iter().filter(|&&other| other != q && meets(other, q) && (other == c || stands(other)));
             shut.extend(
                 others.filter_map(|&other| new_centre[other].map(|at| taken(other, (at, new_quarter[other] % 2 == 1)))),
             );
@@ -4052,7 +4192,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let ground = top[domain].rect;
             let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
             shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
-            for &q in top[domain].parts.iter().filter(|&&q| q != p && !on_gap.contains_key(&q)) {
+            let in_the_way = |q: &&usize| **q != p && !on_gap.contains_key(q) && side_of(**q) & side_of(p) != 0;
+            for &q in top[domain].parts.iter().filter(in_the_way) {
                 if let Some(at) = centre[q].filter(|_| stood.get(&q).is_some_and(|at| at.is_some())) {
                     shut.push(taken(q, (at, quarter[q] % 2 == 1)));
                 }
@@ -4388,6 +4529,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 at: at.map(round2),
                 rect: rect.map(|r| r.map(round2)),
                 turn: 90 * u16::from(quarter[p] % 4),
+                back: parts[p].back,
+                pieces: if parts[p].pieces.is_empty() || rect.is_none() {
+                    Vec::new()
+                } else {
+                    stands_on(p, (at, quarter[p] % 2 == 1)).into_iter().map(|r| r.map(round2)).collect()
+                },
                 fits,
                 off: parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0),
             });
@@ -4400,6 +4547,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             at: part.at.map(round2),
             rect: None,
             turn: 0,
+            back: part.back,
+            pieces: Vec::new(),
             fits: true,
             off: Some(0.0),
         });
@@ -4926,6 +5075,8 @@ mod tests {
             offsets: offsets.iter().map(|&offset| quartered(turned, offset)).collect(),
             pins: Vec::new(),
             through: false,
+            pieces: Vec::new(),
+            back: false,
             anchor: [0.0, 0.0],
             angle: 90.0 * f64::from(turned),
             value: kind.to_string(),
@@ -5034,6 +5185,39 @@ mod tests {
             }
         }
         assert!(found.places.iter().all(|place| place.fits));
+        // Two chips that each fill the board have room only on a side each; a part joined to nothing stays
+        // where it stands and is in the others' way; a mark with no pad at all is in no one's.
+        let wide = [[-3.0, 0.0], [3.0, 0.0]];
+        let mut small = board.clone();
+        small.outline = [0.0, 0.0, 10.0, 10.0];
+        small.parts = vec![
+            part("U1", "amp", [5.0, 5.0], [8.0, 8.0], &["A1", "B1"], &wide, 0),
+            part("U2", "amp", [5.0, 5.0], [8.0, 8.0], &["A1", "B1"], &wide, 0),
+        ];
+        assert_eq!(floorplan(&small).unwrap().places.iter().filter(|place| place.fits).count(), 1);
+        small.parts[1].back = true;
+        let both = floorplan(&small).unwrap();
+        assert!(both.places.iter().all(|place| place.fits) && both.places[1].back, "{:?}", both.places);
+        let mut hole = part("H1", "hole", [5.0, 5.0], [3.0, 3.0], &["A2"], &[[0.0, 0.0]], 0);
+        hole.through = true;
+        small.parts.push(hole);
+        let held = floorplan(&small).unwrap();
+        let of = |name: &str| held.places.iter().find(|place| place.part == name).unwrap();
+        assert_eq!((of("H1").at, of("H1").rect, of("H1").off), ([5.0, 5.0], None, Some(0.0)));
+        assert!(!of("U1").fits && !of("U2").fits, "{:?}", held.places);
+        small.parts[2].pads.clear();
+        small.parts[2].offsets.clear();
+        assert!(floorplan(&small).unwrap().places.iter().all(|place| place.fits));
+        // A part given in pieces (two rows of pins far apart) leaves the ground between them to another.
+        small.parts.truncate(1);
+        small.parts[0].through = true;
+        small.parts[0].pieces = vec![[-4.0, -4.0, -3.0, 4.0], [3.0, -4.0, 4.0, 4.0]];
+        small.parts.push(part("R1", "10k", [5.0, 5.0], [3.0, 2.5], &["A1", "B1"], &[[-0.5, 0.0], [0.5, 0.0]], 0));
+        let between = floorplan(&small).unwrap();
+        assert!(between.places.iter().all(|place| place.fits), "{:?}", between.places);
+        assert_eq!(between.places.iter().find(|place| place.part == "U1").unwrap().pieces.len(), 2);
+        small.parts[0].pieces.clear();
+        assert!(floorplan(&small).unwrap().places.iter().any(|place| !place.fits));
     }
 
     #[test]
@@ -5077,6 +5261,8 @@ mod tests {
             pins: Vec::new(),
             anchor: [0.0, 0.0],
             through: false,
+            pieces: Vec::new(),
+            back: false,
             angle: 0.0,
             value: String::new(),
             footprint: String::new(),
@@ -5238,6 +5424,8 @@ mod tests {
             pins: Vec::new(),
             anchor: [0.0, 0.0],
             through: false,
+            pieces: Vec::new(),
+            back: false,
             angle: 0.0,
             value: String::new(),
             footprint: String::new(),
