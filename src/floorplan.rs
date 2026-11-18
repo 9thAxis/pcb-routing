@@ -542,6 +542,8 @@ const ANCHOR: f64 = 4.0;
 const RAIL_LANES: f64 = 4.0;
 /// The most of a board's room that the parts of its domains may take: the rest is for roads and for routing.
 const BOARD_FULL: f64 = 0.6;
+/// And the most they may take where no parting of the domains leaves every board under BOARD_FULL.
+const BOARD_MOST: f64 = 0.85;
 /// What a way under the parts of a zone that is not its end counts for, as so many times its length.
 const THROUGH: f64 = 2.0;
 /// What a layer change counts for when a way is chosen, in mm of track.
@@ -2065,27 +2067,48 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         // each board holding no more than BOARD_FULL of its room; of ways as good, the most even.
         let ways = (boards.len() as f64).powi(top.len() as i32);
         if ways <= 20_000.0 {
-            let between = tied(&nets, &|p| of_top.get(&p).copied());
-            let mut best: Option<(f64, f64, Vec<usize>)> = None;
-            for code in 0..ways as usize {
-                let (mut way, mut rest) = (Vec::with_capacity(top.len()), code);
-                for _ in 0..top.len() {
-                    way.push(rest % boards.len());
-                    rest /= boards.len();
-                }
-                let fill: Vec<f64> = (0..boards.len())
-                    .map(|b| {
-                        (0..top.len()).filter(|&z| way[z] == b).map(|z| need(&top[z])).sum::<f64>() / room(boards[b])
-                    })
+            let mut between = tied(&nets, &|p| of_top.get(&p).copied());
+            // (a part on two grounds stands on the gap between its two domains: they are on one board)
+            for p in (0..parts.len()).filter(|&p| found.stands[p].len() > 1) {
+                let on: Vec<usize> = top
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, work)| found.stands[p].iter().any(|&g| all_nets[g].name == work.name))
+                    .map(|(z, _)| z)
                     .collect();
-                if fill.iter().any(|&f| f > BOARD_FULL || f == 0.0) {
-                    continue;
+                for (i, &a) in on.iter().enumerate() {
+                    for &b in &on[i + 1..] {
+                        *between.entry((a.min(b), a.max(b))).or_insert(0.0) += ANCHOR;
+                    }
                 }
-                let across: f64 = between.iter().filter(|(&(a, b), _)| way[a] != way[b]).map(|(_, w)| *w).sum();
-                let uneven =
-                    fill.iter().fold(0.0f64, |m, &f| m.max(f)) - fill.iter().fold(f64::INFINITY, |m, &f| m.min(f));
-                if best.as_ref().map_or(true, |b| (across, uneven) < (b.0, b.1)) {
-                    best = Some((across, uneven, way));
+            }
+            let mut best: Option<(f64, f64, Vec<usize>)> = None;
+            // (no board fuller than BOARD_FULL where that can be; else than BOARD_MOST; else as it may)
+            for most in [BOARD_FULL, BOARD_MOST, f64::INFINITY] {
+                if best.is_some() {
+                    break;
+                }
+                for code in 0..ways as usize {
+                    let (mut way, mut rest) = (Vec::with_capacity(top.len()), code);
+                    for _ in 0..top.len() {
+                        way.push(rest % boards.len());
+                        rest /= boards.len();
+                    }
+                    let fill: Vec<f64> = (0..boards.len())
+                        .map(|b| {
+                            (0..top.len()).filter(|&z| way[z] == b).map(|z| need(&top[z])).sum::<f64>()
+                                / room(boards[b])
+                        })
+                        .collect();
+                    if fill.iter().any(|&f| f > most || f == 0.0) {
+                        continue;
+                    }
+                    let across: f64 = between.iter().filter(|(&(a, b), _)| way[a] != way[b]).map(|(_, w)| *w).sum();
+                    let uneven =
+                        fill.iter().fold(0.0f64, |m, &f| m.max(f)) - fill.iter().fold(f64::INFINITY, |m, &f| m.min(f));
+                    if best.as_ref().map_or(true, |b| (across, uneven) < (b.0, b.1)) {
+                        best = Some((across, uneven, way));
+                    }
                 }
             }
             if let Some((_, _, way)) = best {
