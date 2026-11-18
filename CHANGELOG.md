@@ -65,6 +65,13 @@
   pad on a net (a mounting hole) stays where it stands and no part is put on it. Parts with holes and
   large parts are settled first, over the ground of their domain; a part without holes may stand over a
   road when its zone is full (the road's tracks run beneath), a part with holes on none of the main ones.
+  Each part is then turned so that its pads face what they are joined to (`turn` is now degrees: of the
+  ways its body may lie, the one that leaves its pads nearest the nearest other pad of their nets), and a
+  capacitor from a supply to a ground is of the group of a chip of its sheet on that supply, stands beside
+  the pad of the chip that is on that supply (the chip's pads taking them in turn, the smallest capacitors
+  first), lies away from the chip with its own supply pad toward the chip's, and takes that place though a
+  small part stood there, which is settled again beside. The plan says how far the pads are from what they
+  join before and after, and how many capacitors have their pad within 3 mm of the one they are for.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

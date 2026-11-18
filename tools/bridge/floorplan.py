@@ -282,11 +282,14 @@ def floorplan_told(found, depth=2, every=False):
         tight = [p for p in places if not p["fits"]]
         longer = 100 * (found["parts_then_mm"] / found["parts_now_mm"] - 1) if found["parts_now_mm"] else 0.0
         lines += ["", f"a place for every part within its zone: {len(places)} parts, {sum(1 for p in places if p['turn'])} "
-                      f"turned a quarter; {len(tight)} found no room on the ground of their domain"
+                      f"turned; {len(tight)} found no room on the ground of their domain"
                       + (f" ({', '.join(p['part'] for p in tight[:12])}{' ...' if len(tight) > 12 else ''})" if tight else ""),
                   f"  the signal nets all of whose parts stand on the board today: {found['parts_now_mm']:.0f} mm as they "
                   f"stand, {found['parts_then_mm']:.0f} mm with each part at its place ({abs(longer):.0f} % "
-                  f"{'longer' if longer > 0 else 'shorter'})"]
+                  f"{'longer' if longer > 0 else 'shorter'})",
+                  f"  each then turned so that its pads face what they are joined to: from pad to the nearest other pad of "
+                  f"its net, {found['pads_first_mm']:.0f} mm in all before and {found['pads_mm']:.0f} mm after; "
+                  f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad within 3 mm of the pad they are for"]
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "

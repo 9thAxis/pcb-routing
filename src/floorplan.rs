@@ -326,8 +326,10 @@ pub struct Place {
     pub at: Pt,
     /// The ground its body takes there: [x0, y0, x1, y1]. None for a part on a gap, which is not settled.
     pub rect: Option<[f64; 4]>,
-    /// Whether it is turned a quarter from how it stands today.
-    pub turn: bool,
+    /// How far it is turned from how it stands today, in degrees (0, 90, 180 or 270), counter-clockwise as
+    /// the board is looked at: by a quarter where its body lies the better so, and so that its pads face
+    /// what they are joined to.
+    pub turn: u16,
     /// Whether there was room for its body, one way or the other, on the ground of its domain. Where there
     /// was not, its place is where it was pulled, over others.
     pub fits: bool,
@@ -508,6 +510,15 @@ pub struct Floorplan {
     pub parts_now_mm: f64,
     /// The same nets with each part at its place (see `parts_now_mm`).
     pub parts_then_mm: f64,
+    /// How far the pads of the signal nets are from the nearest other pad of their net in all, in mm, with
+    /// each part at its place and turned only as its body lies; and the same once each is turned so that
+    /// its pads face what they are joined to.
+    pub pads_first_mm: f64,
+    /// See `pads_first_mm`.
+    pub pads_mm: f64,
+    /// The capacitors from a supply to the ground that stand for a chip of their zone, and how many of them
+    /// have their pad on the supply within BESIDE_PIN of the pad of that chip they are for.
+    pub bypass: [usize; 2],
     /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
     /// is kept free of parts there.
     pub junctions: Vec<Junction>,
@@ -551,6 +562,9 @@ const STRANDED_MM: f64 = 200.0;
 const POURED: f64 = 8.0;
 /// And what ties them when zones are gathered into larger ones.
 const GATHERED: f64 = 4.0;
+/// What ties a capacitor from a supply to a ground to a chip of its sheet on that supply when the sheet's
+/// parts are grouped, as so much of a net: enough that it is of the chip's group.
+const BESIDE_CHIP: f64 = 0.25;
 /// What ties a capacitor from a supply to the ground to the chip it stands by, as so many nets.
 const BYPASS: usize = 3;
 /// What a mm of parts more than their gap is long counts for when layings out are weighed, in mm.
@@ -936,6 +950,46 @@ fn spread(want: &[f64], size: &[f64], low: f64, high: f64) -> Vec<f64> {
         }
     }
     at
+}
+
+/// A capacitor is by the pad it is for if its own pad on that supply is no further from it than this, in mm.
+const BESIDE_PIN: f64 = 3.0;
+
+/// A place turned so many quarters counter-clockwise as the board is looked at (its y runs down).
+fn quartered(quarters: u8, at: Pt) -> Pt {
+    match quarters % 4 {
+        0 => at,
+        1 => [at[1], -at[0]],
+        2 => [-at[0], -at[1]],
+        _ => [-at[1], at[0]],
+    }
+}
+
+/// What a capacitor's value says it holds, in farads: `100n`, `4u7 16V`, `10uF`, `22 pF`; None if it says none.
+pub fn farads(value: &str) -> Option<f64> {
+    let text: String = value.trim().replace(['µ', 'μ'], "u");
+    let mut digits = String::new();
+    let mut scale = None;
+    for c in text.chars() {
+        match c {
+            '0'..='9' | '.' => digits.push(c),
+            'p' | 'n' | 'u' | 'm' if scale.is_none() && !digits.is_empty() => {
+                scale = Some(match c {
+                    'p' => 1e-12,
+                    'n' => 1e-9,
+                    'u' => 1e-6,
+                    _ => 1e-3,
+                });
+                if !digits.contains('.') {
+                    digits.push('.');
+                }
+            }
+            ' ' if scale.is_none() => {}
+            _ => break,
+        }
+    }
+    let number: f64 = digits.trim_end_matches('.').parse().ok()?;
+    scale.map(|scale| number * scale)
 }
 
 /// A body of this many mm2 or more is settled before the others, over the whole ground of its domain.
@@ -1672,11 +1726,25 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut own: Vec<usize> = mine.iter().copied().filter(|&p| &sheet(p) == of_sheet).collect();
             own.sort_by_key(|&p| name(p));
             let here: BTreeSet<usize> = own.iter().copied().collect();
-            let ties: BTreeMap<(usize, usize), f64> = between_parts
+            let mut ties: BTreeMap<(usize, usize), f64> = between_parts
                 .iter()
                 .filter(|(&(a, b), _)| here.contains(&a) && here.contains(&b))
                 .map(|(&k, &w)| (k, w))
                 .collect();
+            // (a capacitor from a supply to a ground is tied to a chip of the sheet on that supply, the chips
+            // taking them in turn: it is there for the chip, though no signal says so)
+            let mut has: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+            for &c in own.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
+                for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
+                    let chips = own.iter().filter(|&&q| {
+                        !parts[q].capacitor && parts[q].pads.len() > 2 && parts[q].pads.contains(&Some(rail))
+                    });
+                    if let Some(&chip) = chips.min_by_key(|&&q| (has.get(&(rail, q)).copied().unwrap_or(0), q)) {
+                        *has.entry((rail, chip)).or_insert(0) += 1;
+                        *ties.entry((c.min(chip), c.max(chip))).or_insert(0.0) += BESIDE_CHIP;
+                    }
+                }
+            }
             let is_tied: BTreeSet<usize> = ties.keys().flat_map(|&(a, b)| [a, b]).collect();
             let nodes: Vec<usize> = own.iter().copied().filter(|p| is_tied.contains(p)).collect();
             let mut groups = communities(&nodes, &ties);
@@ -2382,6 +2450,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // (the nets of the parts: the signals, and for each capacitor from a supply to a ground a tie to a chip of
     // its zone on that supply, the chips taking them in turn)
     let mut fine_nets: Vec<Vec<usize>> = nets.clone();
+    let mut bypasses: Vec<(usize, usize, usize)> = Vec::new(); // (the capacitor, its chip, the supply)
     for (_, _, own) in &fine_leaves {
         let mut taken: BTreeMap<(usize, usize), usize> = BTreeMap::new();
         for &c in own.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
@@ -2393,6 +2462,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 if let Some(&chip) = chip {
                     *taken.entry((rail, chip)).or_insert(0) += 1;
                     fine_nets.extend(vec![vec![c, chip]; BYPASS]);
+                    if bypasses.last().map_or(true, |last| last.0 != c) {
+                        bypasses.push((c, chip, rail));
+                    }
                 }
             }
         }
@@ -2502,21 +2574,217 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             stood.extend(left.iter().copied().zip(settled(work.rect, &bodies, &shut)));
         }
     }
+    // Where the middle of each part is (as its board is drawn), how many quarters it is turned, and what is
+    // added to its place to say where that is in the stack.
+    let mut centre: Vec<Option<Pt>> = vec![None; parts.len()];
+    let mut quarter: Vec<u8> = vec![0; parts.len()];
+    let mut shift_of: Vec<Pt> = vec![[0.0, 0.0]; parts.len()];
+    let mut domain_of_part: Vec<usize> = vec![0; parts.len()];
     for (domain, _, own) in &fine_leaves {
-        let shift = shifts[to[*domain]];
         for &p in own {
-            let (at, rect, turn, fits) = match (on_gap.get(&p), stood.get(&p)) {
-                (Some(&at), _) => (at, None, false, true),
-                (None, Some(&Some((at, turn)))) => (at, Some(taken(p, (at, turn))), turn, true),
-                (None, Some(None)) => (middle(grounds[&p]), Some(grounds[&p]), false, false),
-                _ => continue,
+            (shift_of[p], domain_of_part[p]) = (shifts[to[*domain]], *domain);
+            match (on_gap.get(&p), stood.get(&p)) {
+                (Some(&at), _) => centre[p] = Some(at),
+                (None, Some(&Some((at, turn)))) => (centre[p], quarter[p]) = (Some(at), u8::from(turn)),
+                (None, Some(None)) => centre[p] = Some(middle(grounds[&p])),
+                _ => {}
+            }
+        }
+    }
+    // Then each part is turned so that its pads face what they are joined to: of the ways its body may lie
+    // (as it was settled, or that turned half round; any of the four for a square one or one on a gap), the
+    // one that leaves its pads nearest the nearest other pad of their nets. A capacitor that stands for a
+    // chip counts the way from its pad on the supply to the pad of the chip it is for.
+    let mut pads_on: Vec<Vec<(usize, usize)>> = vec![Vec::new(); all_nets.len()];
+    for (p, part) in parts.iter().enumerate() {
+        for (i, net) in part.pads.iter().enumerate() {
+            if let Some(net) = net.filter(|&net| is_signal(net)) {
+                pads_on[net].push((p, i));
+            }
+        }
+    }
+    let pad_at = |p: usize, i: usize, quarters: u8, centre: &[Option<Pt>]| -> Option<Pt> {
+        let at = centre[p]?;
+        let from = parts[p].offsets.get(i).map_or([0.0, 0.0], |&offset| quartered(quarters, offset));
+        Some([at[0] + shift_of[p][0] + from[0], at[1] + shift_of[p][1] + from[1]])
+    };
+    type Pins = BTreeMap<usize, (usize, usize, usize)>; // a capacitor -> (its pad, its chip, the chip's pad)
+    let reach_of = |p: usize, quarters: u8, centre: &[Option<Pt>], quarter: &[u8], pins: &Pins| -> f64 {
+        let mut all = 0.0;
+        for (i, net) in parts[p].pads.iter().enumerate() {
+            let (Some(net), Some(here)) = (net, pad_at(p, i, quarters, centre)) else { continue };
+            let others = pads_on[*net].iter().filter(|other| other.0 != p);
+            let nearest = others
+                .filter_map(|&(q, j)| pad_at(q, j, quarter[q], centre))
+                .map(|there| (there[0] - here[0]).abs() + (there[1] - here[1]).abs())
+                .fold(f64::INFINITY, f64::min);
+            if nearest.is_finite() {
+                all += nearest;
+            }
+        }
+        if let Some(&(i, chip, j)) = pins.get(&p) {
+            if let (Some(here), Some(there)) = (pad_at(p, i, quarters, centre), pad_at(chip, j, quarter[chip], centre))
+            {
+                all += BYPASS as f64 * ((there[0] - here[0]).abs() + (there[1] - here[1]).abs());
+            }
+        }
+        all
+    };
+    let face = |centre: &[Option<Pt>], quarter: &mut Vec<u8>, pins: &Pins| {
+        for _ in 0..2 {
+            for p in 0..parts.len() {
+                if centre[p].is_none() || parts[p].offsets.is_empty() || stays(&parts[p]) {
+                    continue;
+                }
+                let [w, h] = body(p);
+                let any = on_gap.contains_key(&p) || (w - h).abs() < SETTLE;
+                let ways: Vec<u8> = if any { vec![0, 1, 2, 3] } else { vec![quarter[p] % 2, quarter[p] % 2 + 2] };
+                let mut best = (reach_of(p, quarter[p], centre, quarter, pins), quarter[p]);
+                for way in ways {
+                    let far = reach_of(p, way, centre, quarter, pins);
+                    if far < best.0 - 1e-6 {
+                        best = (far, way);
+                    }
+                }
+                quarter[p] = best.1;
+            }
+        }
+    };
+    let no_pins: Pins = BTreeMap::new();
+    let all_reach = |centre: &[Option<Pt>], quarter: &[u8]| -> f64 {
+        (0..parts.len()).map(|p| reach_of(p, quarter[p], centre, quarter, &no_pins)).sum()
+    };
+    let pads_first_mm = all_reach(&centre, &quarter);
+    face(&centre, &mut quarter, &no_pins);
+    // A capacitor that stands for a chip is moved beside the pad of the chip that is on its supply (the pads
+    // of the chip taking them in turn, the smallest capacitors first: they want to be the nearest), just off
+    // the chip's body, as near that as what stands there leaves room; if that is nearer the pad than it stood.
+    let mut pins: Pins = BTreeMap::new();
+    let mut at_pad: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let with_capacitors: BTreeSet<usize> = bypasses.iter().map(|bypass| bypass.1).collect();
+    let mut by_its_pad: BTreeSet<usize> = BTreeSet::new();
+    let mut order = bypasses.clone();
+    order.sort_by(|a, b| {
+        let held = |c: usize| farads(&parts[c].value).unwrap_or(f64::INFINITY);
+        held(a.0).total_cmp(&held(b.0)).then(parts[a.0].name.cmp(&parts[b.0].name))
+    });
+    for (c, chip, rail) in order {
+        let (Some(was), Some(chip_at)) = (centre[c], centre[chip]) else { continue };
+        if parts[chip].offsets.is_empty() || on_gap.contains_key(&c) {
+            continue;
+        }
+        let pad_of = |i: usize| {
+            let from = quartered(quarter[chip], parts[chip].offsets[i]);
+            [chip_at[0] + from[0], chip_at[1] + from[1]]
+        };
+        let on_rail = (0..parts[chip].pads.len()).filter(|&i| parts[chip].pads[i] == Some(rail));
+        let Some(pin) = on_rail.min_by(|&a, &b| {
+            let taken = |i: usize| at_pad.get(&(chip, i)).copied().unwrap_or(0);
+            taken(a).cmp(&taken(b)).then(dist(pad_of(a), was).total_cmp(&dist(pad_of(b), was))).then(a.cmp(&b))
+        }) else {
+            continue;
+        };
+        *at_pad.entry((chip, pin)).or_insert(0) += 1;
+        if let Some(mine) = parts[c].pads.iter().position(|&net| net == Some(rail)) {
+            pins.insert(c, (mine, chip, pin));
+        }
+        // (just off the chip's body, on the side its pad is nearest)
+        let (pad, [w, h]) = (pad_of(pin), body(chip));
+        let (w, h) = if quarter[chip] % 2 == 1 { (h, w) } else { (w, h) };
+        let chip_body = [chip_at[0] - w / 2.0, chip_at[1] - h / 2.0, chip_at[0] + w / 2.0, chip_at[1] + h / 2.0];
+        // (lying away from the chip, its own pad on the supply toward the chip's: so the track between is short)
+        let [cw, ch] = body(c);
+        let (long, short) = (cw.max(ch), cw.min(ch));
+        let half = long / 2.0;
+        let sides = [
+            (pad[0] - chip_body[0], [chip_body[0] - half, pad[1]], true),
+            (chip_body[2] - pad[0], [chip_body[2] + half, pad[1]], true),
+            (pad[1] - chip_body[1], [pad[0], chip_body[1] - half], false),
+            (chip_body[3] - pad[1], [pad[0], chip_body[3] + half], false),
+        ];
+        let (_, want, along_x) = sides.iter().fold(sides[0], |best, side| if side.0 < best.0 { *side } else { best });
+        let lying = if along_x { [long, short] } else { [short, long] };
+        // (whether lying so is a quarter from how its body is given)
+        let quarter_more = (lying[0] - cw).abs() > 1e-9;
+        // It takes the place it wants there though a small part stands on it: that one is settled again, as
+        // near where it stood as may be. What is not moved for it: what was settled first, a chip that has
+        // capacitors of its own, and a capacitor that has its place by its pad.
+        let domain = domain_of_part[c];
+        let (ground, mine) = (top[domain].rect, &top[domain].parts);
+        let stands = |q: usize| !on_gap.contains_key(&q) && stood.get(&q).is_some_and(|at| at.is_some());
+        let hard = |q: usize| goes_first(q) || with_capacitors.contains(&q) || by_its_pad.contains(&q);
+        let rect_of = |q: usize, centre: &[Option<Pt>], quarter: &[u8]| {
+            centre[q].filter(|_| stands(q)).map(|at| taken(q, (at, quarter[q] % 2 == 1)))
+        };
+        let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+        shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
+        let open = shut.clone();
+        shut.extend(mine.iter().filter(|&&q| q != c && hard(q)).filter_map(|&q| rect_of(q, &centre, &quarter)));
+        let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
+        if dist(at, pad) >= dist(was, pad) - 1e-6 {
+            continue;
+        }
+        let turn = turn != quarter_more;
+        let (mut new_centre, mut new_quarter) = (centre.clone(), quarter.clone());
+        (new_centre[c], new_quarter[c]) = (Some(at), u8::from(turn));
+        let here = taken(c, (at, turn));
+        let over =
+            |r: [f64; 4]| r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6;
+        let mut moved: Vec<usize> = mine
+            .iter()
+            .copied()
+            .filter(|&q| q != c && !hard(q) && rect_of(q, &centre, &quarter).is_some_and(over))
+            .collect();
+        moved.sort_by(|&a, &b| parts[b].area.total_cmp(&parts[a].area).then(a.cmp(&b)));
+        let mut done = true;
+        for &q in &moved {
+            let mut shut = open.clone();
+            let others = mine.iter().filter(|&&other| other != q && (other == c || stands(other)));
+            shut.extend(
+                others.filter_map(|&other| new_centre[other].map(|at| taken(other, (at, new_quarter[other] % 2 == 1)))),
+            );
+            match (centre[q], settled(ground, &[(body(q), centre[q].unwrap_or(at))], &shut)[0]) {
+                (Some(_), Some((to, turn))) => (new_centre[q], new_quarter[q]) = (Some(to), u8::from(turn)),
+                _ => done = false,
+            }
+        }
+        if done {
+            for &q in moved.iter().chain([&c]) {
+                if let Some(at) = new_centre[q] {
+                    stood.insert(q, Some((at, new_quarter[q] % 2 == 1)));
+                }
+            }
+            (centre, quarter) = (new_centre, new_quarter);
+            by_its_pad.insert(c);
+        }
+    }
+    face(&centre, &mut quarter, &pins);
+    let pads_mm = all_reach(&centre, &quarter);
+    let beside = pins
+        .iter()
+        .filter(|(&c, &(mine, chip, pin))| {
+            match (pad_at(c, mine, quarter[c], &centre), pad_at(chip, pin, quarter[chip], &centre)) {
+                (Some(here), Some(there)) => dist(here, there) <= BESIDE_PIN,
+                _ => false,
+            }
+        })
+        .count();
+    let bypass = [pins.len(), beside];
+    for (_, _, own) in &fine_leaves {
+        for &p in own {
+            let Some(at) = centre[p] else { continue };
+            let settled_here = stood.get(&p).is_some_and(|at| at.is_some());
+            let (rect, fits) = match (on_gap.contains_key(&p), settled_here) {
+                (true, _) => (None, true),
+                (false, true) => (Some(taken(p, (at, quarter[p] % 2 == 1))), true),
+                (false, false) => (grounds.get(&p).copied(), false),
             };
-            spot[p] = Some([at[0] + shift[0], at[1] + shift[1]]);
+            spot[p] = Some([at[0] + shift_of[p][0], at[1] + shift_of[p][1]]);
             places.push(Place {
                 part: name(p),
                 at: at.map(round2),
                 rect: rect.map(|r| r.map(round2)),
-                turn,
+                turn: 90 * u16::from(quarter[p] % 4),
                 fits,
                 off: parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0),
             });
@@ -2528,7 +2796,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             part: part.name.clone(),
             at: part.at.map(round2),
             rect: None,
-            turn: false,
+            turn: 0,
             fits: true,
             off: Some(0.0),
         });
@@ -2716,6 +2984,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         places,
         parts_now_mm: parts_now_mm.round(),
         parts_then_mm: parts_then_mm.round(),
+        pads_first_mm: pads_first_mm.round(),
+        pads_mm: pads_mm.round(),
+        bypass,
         junctions,
         pours,
         roads,
@@ -2792,7 +3063,7 @@ mod tests {
             (pour.net.as_str(), pour.ground.as_str(), &pour.layers),
             ("A_3V3", "A_GND", &vec!["In4".to_string()])
         );
-        assert_eq!((pour.rects.len(), pour.parts, pour.pieces, pour.by_track.len()), (2, 5, 1, 0));
+        assert_eq!((pour.rects.len() >= 2, pour.parts, pour.pieces, pour.by_track.len()), (true, 5, 1, 0));
         assert_eq!((within(&found), found.travel.split), (Some(0), 0));
         // within a zone a bypass capacitor stands by the chip it is for: nearer it than the zone's other parts are
         let at = |name: &str| found.places.iter().find(|place| place.part == name).unwrap().at;
@@ -2841,6 +3112,62 @@ mod tests {
         // and none stands on ground that is shut
         let found = settled(ground, &[([2.0, 2.0], [1.0, 1.0])], &[[0.0, 0.0, 4.0, 4.0]]);
         assert_eq!(found, [Some(([5.0, 1.0], false))]);
+    }
+
+    #[test]
+    fn a_value_says_what_a_capacitor_holds_and_a_place_is_turned_by_quarters() {
+        let near = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < b * 1e-9);
+        assert!(near(farads("100n"), 100e-9) && near(farads("4u7 16V"), 4.7e-6) && near(farads("10uF"), 10e-6));
+        assert!(near(farads("22 pF"), 22e-12) && near(farads("2.2µF X7R"), 2.2e-6));
+        assert_eq!((farads("10k"), farads("BOARD LINK"), farads("")), (None, None, None));
+        // (east, turned a quarter counter-clockwise as the board is looked at, is north: y runs down)
+        assert_eq!(
+            (quartered(1, [1.0, 0.0]), quartered(2, [1.0, 0.5]), quartered(3, [1.0, 0.0])),
+            ([0.0, -1.0], [-1.0, -0.5], [0.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn a_part_is_turned_so_its_pads_face_what_they_join_and_a_bypass_capacitor_stands_by_its_pad() {
+        // the chip's supply pad is on its west side; its capacitors have their supply pad first
+        let mut board = two_grounds();
+        board.outline = [0.0, 0.0, 60.0, 30.0];
+        for part in board.parts.iter_mut() {
+            match part.name.as_str() {
+                "U1" => {
+                    (part.size, part.area) = (Some([5.0, 5.0]), 25.0);
+                    part.offsets = vec![[-2.0, 0.0], [2.0, 0.0], [0.0, 2.0], [0.0, -2.0]];
+                }
+                "C1" | "C2" => {
+                    (part.size, part.area) = (Some([2.0, 1.0]), 2.0);
+                    part.offsets = vec![[-0.5, 0.0], [0.5, 0.0]];
+                    part.value = if part.name == "C1" { "100n" } else { "4u7" }.to_string();
+                }
+                _ => {}
+            }
+        }
+        let found = floorplan(&board).unwrap();
+        let place = |name: &str| found.places.iter().find(|place| place.part == name).unwrap();
+        let chip = place("U1");
+        let pad = {
+            let from = quartered((chip.turn / 90) as u8, [-2.0, 0.0]);
+            [chip.at[0] + from[0], chip.at[1] + from[1]]
+        };
+        // (the chips on the supply take its capacitors in turn: the first is U1's, and stands by its supply pad)
+        assert!(
+            found.bypass[0] >= 1 && found.bypass[0] == found.bypass[1],
+            "{:?} {chip:?} {:?}",
+            found.bypass,
+            place("C1")
+        );
+        // with its own supply pad toward the chip's: nearer it than its ground pad is
+        let cap = place("C1");
+        let end = |offset: Pt| {
+            let from = quartered((cap.turn / 90) as u8, offset);
+            dist([cap.at[0] + from[0], cap.at[1] + from[1]], pad)
+        };
+        assert!(end([-0.5, 0.0]) <= BESIDE_PIN && end([-0.5, 0.0]) < end([0.5, 0.0]), "{cap:?} {pad:?}");
+        assert!(found.pads_mm <= found.pads_first_mm);
     }
 
     #[test]
@@ -3000,7 +3327,8 @@ mod tests {
         // (the keep-out is no room: within the large board each lot has its share of what is left)
         // each domain has the whole of its board, and there is no road across the gap between boards
         assert_eq!((found.zones[0].rect, found.zones[1].rect), ([0.0, 0.0, 26.0, 10.0], [28.0, 0.0, 40.0, 10.0]));
-        assert!(found.roads.iter().all(|road| road.level > 0), "{:?}", found.roads);
+        let within = |road: &Road| road.rect[2] <= 26.0 + 1e-6 || road.rect[0] >= 28.0 - 1e-6;
+        assert!(found.roads.iter().all(|road| !road.gap && within(road)), "{:?}", found.roads);
     }
 
     /// Four chips in a square on one ground, each tied to the next round the square by eight nets.
