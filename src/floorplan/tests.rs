@@ -961,3 +961,13 @@ fn what_is_set_of_the_making_of_a_plan_is_checked_and_used() {
     assert_eq!(told, Tune { quiet_mm: 20.0, ..Tune::default() });
     assert!(serde_json::from_str::<Tune>(r#"{"quiet": 20}"#).is_err());
 }
+
+#[test]
+fn a_value_is_kept_between_bounds_that_may_have_passed_each_other_by_the_last_digit() {
+    use super::settle::between;
+    assert_eq!((between(5.0, 0.0, 3.0), between(-1.0, 0.0, 3.0), between(2.0, 0.0, 3.0)), (3.0, 0.0, 2.0));
+    assert_eq!(
+        between(7.0, -1.1583910484750994, -1.1583910484751012),
+        (-1.1583910484750994 + -1.1583910484751012) / 2.0
+    );
+}

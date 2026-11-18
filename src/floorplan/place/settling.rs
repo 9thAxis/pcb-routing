@@ -5,7 +5,7 @@ use super::Site;
 use crate::floorplan::constants::{AS_NEAR, BLOCK_NEAR, MAIN};
 use crate::floorplan::ground::{arrange, taken_by, Ground, Work};
 use crate::floorplan::known::Known;
-use crate::floorplan::settle::{middle, quartered, settled, settled_shape};
+use crate::floorplan::settle::{between, middle, quartered, settled, settled_shape};
 use crate::floorplan::types::Rows;
 use crate::geom::dist;
 use crate::model::Pt;
@@ -96,8 +96,8 @@ fn packed(site: &Site, fine_nets: &[Vec<usize>], stand: &[Option<Pt>], leaf: (us
     }
     let mid = middle(rect);
     let pull = if all > 0.0 { [sum[0] / all, sum[1] / all] } else { mid };
-    let x = pull[0].clamp(rect[0] + wide / 2.0, rect[2] - wide / 2.0);
-    let y = pull[1].clamp(rect[1] + high / 2.0, rect[3] - high / 2.0);
+    let x = between(pull[0], rect[0] + wide / 2.0, rect[2] - wide / 2.0);
+    let y = between(pull[1], rect[1] + high / 2.0, rect[3] - high / 2.0);
     [x - wide / 2.0, y - high / 2.0, x + wide / 2.0, y + high / 2.0]
 }
 

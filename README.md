@@ -110,6 +110,7 @@ front end's questions about zones and pairs as JSON. Try `examples/two_nets.json
 * [How it works](https://github.com/9thAxis/pcb-routing/blob/main/docs/how-it-works.md): the problem, the method, the limits, sources.
 * [Benchmarks](https://github.com/9thAxis/pcb-routing/blob/main/docs/benchmarks.md): every table and how it was measured.
 * [Hints](https://github.com/9thAxis/pcb-routing/blob/main/docs/hints.md): telling the router what the nets are for.
+* [Floorplan tuning](https://github.com/9thAxis/pcb-routing/blob/main/docs/floorplan-tuning.md): what a board may set of the making of a floorplan, and how the defaults were checked.
 * [Design notes](https://github.com/9thAxis/pcb-routing/blob/main/docs/design-notes.md): what each step bought, and what was dropped.
 * [Measuring route quality](https://github.com/9thAxis/pcb-routing/blob/main/tools/quality/README.md).
 

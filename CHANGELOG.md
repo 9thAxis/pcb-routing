@@ -165,6 +165,12 @@
   designers' at the geometric mean (1.19 before), the worst 1.42 (1.76); with their connectors held, 1.11
   (1.17) and 1.34 (1.64). The second of two copies of a sheet that found room only on a road is no longer
   set down over the first.
+  What of the making of a plan a board may set is in the question (`tune`, thirteen values each with its
+  default, checked) and in the hints file; docs/floorplan-tuning.md says what each is. Every constant of the
+  floorplan was halved and doubled over 118 boards, free and with their connectors held (97 variants,
+  `tools/dev/constants_sweep.py`): the values as they are stand at the median, none is better both ways by more
+  than 0.01 at the mean, and no variant puts one body over another. A bound worked out twice that came out apart
+  by the last digit no longer stops a plan.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

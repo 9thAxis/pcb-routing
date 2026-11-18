@@ -4,7 +4,7 @@ use super::{domain_named, Site, Standing};
 use crate::floorplan::boards::Boards;
 use crate::floorplan::ground::Work;
 use crate::floorplan::known::Known;
-use crate::floorplan::settle::{median, middle, off_rect, quartered, settled, spread, strip_between};
+use crate::floorplan::settle::{between, median, middle, off_rect, quartered, settled, spread, strip_between};
 use crate::floorplan::types::{Across, Bridge};
 use crate::geom::dist;
 use crate::model::Pt;
@@ -98,7 +98,7 @@ pub(super) fn on_gaps(cx: &Known, top: &[Work], on: &Boards, bridges: &mut [Brid
             let [w, h] = cx.lying(p, quarters);
             let hold = |v: f64, low: f64, high: f64, size: f64| {
                 if high - low >= size {
-                    v.clamp(low + size / 2.0, high - size / 2.0)
+                    between(v, low + size / 2.0, high - size / 2.0)
                 } else {
                     (low + high) / 2.0
                 }

@@ -52,7 +52,7 @@ pub(super) fn spread(want: &[f64], size: &[f64], low: f64, high: f64) -> Vec<f64
     let room = high - low;
     let settled = |mut lot: Lot| {
         let start = lot.asks / lot.count as f64;
-        lot.start = if lot.size >= room { low - (lot.size - room) / 2.0 } else { start.clamp(low, high - lot.size) };
+        lot.start = if lot.size >= room { low - (lot.size - room) / 2.0 } else { between(start, low, high - lot.size) };
         lot
     };
     let mut order: Vec<usize> = (0..want.len()).collect();
@@ -275,6 +275,16 @@ pub(super) fn settled_shape(
             best.map(|b| b.1)
         })
         .collect()
+}
+
+/// A value kept between two bounds; between the two where they have passed each other, as two that are
+/// worked out to be the same may by the last digit.
+pub(super) fn between(value: f64, low: f64, high: f64) -> f64 {
+    if low <= high {
+        value.clamp(low, high)
+    } else {
+        (low + high) / 2.0
+    }
 }
 
 /// The ground two rectangles share, in mm2.
