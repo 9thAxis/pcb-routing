@@ -133,6 +133,8 @@ pub(super) fn placed(cx: &Known, top: &[Work], roads: &[Road], on: &Boards, brid
     // (what of a block's parts found no room in it is no part of it, and is placed with the rest)
     let in_block: BTreeMap<usize, usize> =
         laid_blocks.iter().flat_map(|(&head, block)| block.at.iter().map(move |&(p, _, _)| (p, head))).collect();
+    // Then the bodies themselves are settled on the ground of each zone, each as near the middle of the ground
+    // that came to it as the others allow, the largest first; no part on ground that is shut.
     let mut on = settled_first(site, &grounds, &gap_rects, &laid_blocks, &alternatives, &in_block);
     settled_rest(site, &grounds, &gap_rects, &in_block, &mut on);
     let (centre, quarter) = lies(site, &grounds, &on);

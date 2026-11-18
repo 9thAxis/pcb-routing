@@ -282,7 +282,7 @@ pub struct Road {
     pub(super) cut: String,
 }
 
-/// What the connections between zones come to when each is given a way along the roads (see [`floorplan`]).
+/// What the connections between zones come to when each is given a way along the roads (see [`floorplan`](super::floorplan)).
 #[derive(Serialize, Clone, Debug, PartialEq, Default)]
 pub struct Travel {
     /// The nets given a way.
@@ -560,7 +560,7 @@ pub struct Zone {
 /// gathered into.
 pub type Apart = (String, Vec<(Vec<String>, String)>);
 
-/// What [`floorplan`] finds.
+/// What [`floorplan`](super::floorplan) finds.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Floorplan {
     /// The power.

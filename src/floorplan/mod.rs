@@ -13,6 +13,12 @@
 //! its longer side, the zones in the order they are pulled along it, into two lots as near the same size as
 //! that order allows, each with the share of the board its zones need; each half is cut again, down to the
 //! smallest zones.
+//!
+//! The work is done in stages, each a function with what it reads and what it leaves: what is known of the
+//! board (`known`), its power (`power`), the zone tree (`zones`), the supplies on the plane layers (`planes`),
+//! the boards of the box (`boards`), the laying out and the search for the best (`layout`, which gives ground
+//! by `ground` and ways by `ways`), a place for every part (`place`, with stages of its own), and what is
+//! told of the layout (`report`). `plan` runs them in turn; `ties` and `settle` are what they share.
 
 mod boards;
 mod constants;
