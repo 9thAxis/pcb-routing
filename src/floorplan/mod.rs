@@ -19,6 +19,7 @@ mod constants;
 mod ground;
 mod known;
 mod layout;
+mod place;
 mod plan;
 mod planes;
 mod power;
