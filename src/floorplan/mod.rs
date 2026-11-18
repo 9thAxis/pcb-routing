@@ -16,12 +16,14 @@
 
 mod constants;
 mod ground;
+mod known;
 mod plan;
 mod power;
 mod settle;
 mod ties;
 mod types;
 mod ways;
+mod zones;
 
 #[cfg(test)]
 mod tests;

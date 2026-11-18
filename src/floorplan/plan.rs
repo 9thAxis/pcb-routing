@@ -2,12 +2,17 @@
 
 use super::constants::*;
 use super::ground::{arrange, Ground, Work};
-use super::power::powered;
-use super::settle::{farads, median, middle, quartered, settled, settled_shape, spread, strip_between};
-use super::ties::{communities, gathered, in_line, tied};
+use super::known::{standing, Known};
+use super::power::power_told;
+use super::settle::{
+    area, farads, median, middle, off_rect, overlap, quartered, round1, round2, settled, settled_shape, spread,
+    strip_between,
+};
+use super::ties::{in_line, tied};
 use super::types::*;
 use super::ways::travelled;
-use crate::error::{invalid, Error};
+use super::zones::zone_tree;
+use crate::error::Error;
 use crate::geom::dist;
 use crate::model::Pt;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,363 +20,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The floorplan of a board (see the module). An error if a pad names a net that is not there, or the board
 /// has no size.
 pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
-    // A part on the board that is joined to no other part (no pad on a net, or only on nets of its own: a
-    // mounting hole, a mark for the camera) is the board's own: it stays where it stands, and no other part
-    // may stand on its body.
-    let mut joins: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); board.nets.len()];
-    for (p, part) in board.parts.iter().enumerate() {
-        for &net in part.pads.iter().flatten().filter(|&&net| net < board.nets.len()) {
-            joins[net].insert(p);
-        }
-    }
-    let stays = |part: &Part| {
-        part.placed && part.pads.iter().flatten().all(|&net| joins.get(net).map_or(true, |on| on.len() < 2))
-    };
-    let held: Board;
-    let board = if board.parts.iter().any(stays) {
-        let mut with = board.clone();
-        // (but what has no pad at all is drawn on the board, not mounted on it: a mark, a logo. It is in no part's way)
-        for part in board.parts.iter().filter(|part| stays(part) && !part.pads.is_empty()) {
-            let side = part.area.sqrt();
-            let [w, h] = part.size.unwrap_or([side, side]);
-            with.keepouts.push([
-                part.at[0] - w / 2.0,
-                part.at[1] - h / 2.0,
-                part.at[0] + w / 2.0,
-                part.at[1] + h / 2.0,
-            ]);
-        }
-        held = with;
-        &held
-    } else {
-        board
-    };
-    let (parts, all_nets) = (&board.parts, &board.nets);
-    let [x0, y0, x1, y1] = board.outline;
-    if !(x1 > x0 && y1 > y0) {
-        return Err(invalid("box", "has no size"));
-    }
-    for (p, part) in parts.iter().enumerate() {
-        if part.pads.iter().flatten().any(|&net| net >= all_nets.len()) {
-            return Err(invalid(format!("parts[{p}].pads"), format!("names a net of {}", all_nets.len())));
-        }
-        for (what, count) in [("offsets", part.offsets.len()), ("pins", part.pins.len())] {
-            if count != 0 && count != part.pads.len() {
-                return Err(invalid(format!("parts[{p}].{what}"), format!("{count} for {} pads", part.pads.len())));
-            }
-        }
-    }
-    let mut mate_of: Vec<Option<usize>> = vec![None; parts.len()];
-    for (p, part) in parts.iter().enumerate() {
-        if let Some(mate) = &part.mate {
-            let Some(other) = parts.iter().position(|other| &other.name == mate).filter(|&other| other != p) else {
-                return Err(invalid(format!("parts[{p}].mate"), format!("names no other part: {mate}")));
-            };
-            (mate_of[p], mate_of[other]) = (Some(other), Some(p));
-        }
-    }
-    let found = powered(board);
-    // (what a capacitor may stand for: a part of more than two pads that is no capacitor and no connector)
-    let is_chip = |q: usize| !parts[q].capacitor && !parts[q].edge && parts[q].pads.len() > 2;
-    let name = |p: usize| parts[p].name.clone();
-    let names = |list: &[usize]| -> Vec<String> {
-        let mut out: Vec<String> = list.iter().map(|&p| name(p)).collect();
-        out.sort();
-        out
-    };
-    let net_name = |net: usize| all_nets[net].name.clone();
-
-    // The signal nets: what is no ground and no supply, each as the parts it reaches.
-    let mut reach: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); all_nets.len()];
-    for (p, part) in parts.iter().enumerate() {
-        for &net in part.pads.iter().flatten() {
-            reach[net].insert(p);
-        }
-    }
-    let is_signal = |net: usize| !found.grounds.contains(&net) && !found.rails.contains_key(&net);
-    let signal: Vec<usize> = (0..all_nets.len()).filter(|&net| is_signal(net) && reach[net].len() > 1).collect();
-    let nets: Vec<Vec<usize>> = signal.iter().map(|&net| reach[net].iter().copied().collect()).collect();
-    let between_parts = tied(&nets, &Some);
-
-    // The power, as it is told.
-    let mut domains: Vec<(usize, Vec<usize>)> = found
-        .grounds
-        .iter()
-        .map(|&g| (g, (0..parts.len()).filter(|&p| found.home[p] == Some(g)).collect::<Vec<usize>>()))
-        .filter(|(_, own)| !own.is_empty())
-        .collect();
-    domains.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(net_name(a.0).cmp(&net_name(b.0))));
-    let adrift: Vec<usize> = (0..parts.len()).filter(|&p| found.home[p].is_none() && !stays(&parts[p])).collect();
-    let rails_of = |g: usize| -> Vec<Rail> {
-        let mut rails: Vec<Rail> = found
-            .rails
-            .iter()
-            .filter(|(_, rail)| rail.0 == Some(g))
-            .map(|(&net, rail)| Rail {
-                net: net_name(net),
-                parts: names(&reach[net].iter().copied().collect::<Vec<_>>()),
-                capacitors: rail.1,
-            })
-            .collect();
-        rails.sort_by(|a, b| b.parts.len().cmp(&a.parts.len()).then(a.net.cmp(&b.net)));
-        rails
-    };
-    let mut links: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    for (p, part) in parts.iter().enumerate().filter(|(_, part)| !part.capacitor) {
-        let on: BTreeSet<String> =
-            part.pads.iter().flatten().filter(|net| found.rails.contains_key(net)).map(|&net| net_name(net)).collect();
-        let on: Vec<String> = on.into_iter().collect();
-        for (i, a) in on.iter().enumerate() {
-            for b in &on[i + 1..] {
-                links.entry((a.clone(), b.clone())).or_default().push(name(p));
-            }
-        }
-    }
-    let mut between: Vec<(String, Vec<String>)> = (0..parts.len())
-        .filter(|&p| found.stands[p].len() > 1)
-        .map(|p| {
-            let mut on: Vec<String> = found.stands[p].iter().map(|&g| net_name(g)).collect();
-            on.sort();
-            (name(p), on)
-        })
-        .collect();
-    between.sort();
-    let power = Power {
-        domains: domains
-            .iter()
-            .map(|(g, own)| Domain { ground: net_name(*g), parts: names(own), rails: rails_of(*g) })
-            .collect(),
-        between,
-        links: links
-            .into_iter()
-            .map(|((a, b), mut by)| {
-                (a, b, {
-                    by.sort();
-                    by
-                })
-            })
-            .collect(),
-        adrift: names(&adrift),
-    };
-
-    // The zones within a lot of parts: the groups within each sheet, gathered level by level.
-    let sheet = |p: usize| if parts[p].sheet.is_empty() { "(on no sheet)".to_string() } else { parts[p].sheet.clone() };
-    let sheet_size = |name: &str| (0..parts.len()).filter(|&p| sheet(p) == name).count();
-    let mut apart: Vec<Apart> = Vec::new();
-    let power_layers: Vec<String> =
-        board.stack.iter().filter(|layer| layer.way == Way::Plane).skip(1).map(|layer| layer.name.clone()).collect();
-    // What disturbs, and what is disturbed. A part disturbs if that is said of it; and without being told, a
-    // chip that switches an inductor (see the loops), with that inductor and what else is on the node. A part
-    // is disturbed if that is said of it, or it has a pad on a sensitive net; but not one that disturbs.
-    let mut aggressor: Vec<bool> = parts.iter().map(|part| part.noisy == Some(true)).collect();
-    for node in (0..all_nets.len()).filter(|&net| is_signal(net) && reach[net].len() <= SWITCHED) {
-        let on: Vec<usize> = reach[node].iter().copied().collect();
-        let chips = on.iter().filter(|&&q| is_chip(q)).count();
-        let coils = on.iter().filter(|&&q| parts[q].inductor).count();
-        if chips == 1 && coils == 1 {
-            for &q in on.iter().filter(|&&q| parts[q].noisy != Some(false) && !parts[q].capacitor) {
-                aggressor[q] = true;
-            }
-        }
-    }
-    let victim: Vec<bool> = (0..parts.len())
-        .map(|p| {
-            let on_sensitive = parts[p].pads.iter().flatten().any(|&net| all_nets[net].sensitive);
-            !aggressor[p] && parts[p].quiet != Some(false) && (parts[p].quiet == Some(true) || on_sensitive)
-        })
-        .collect();
-    let mut within = |lot: &[usize]| -> Vec<Work> {
-        let mine: BTreeSet<usize> = lot.iter().copied().collect();
-        let mut sheets: Vec<String> = mine.iter().map(|&p| sheet(p)).collect::<BTreeSet<_>>().into_iter().collect();
-        sheets.sort();
-        let mut atoms: Vec<(String, Vec<usize>)> = Vec::new();
-        let mut atom_of: BTreeMap<usize, usize> = BTreeMap::new();
-        for of_sheet in &sheets {
-            let mut own: Vec<usize> = mine.iter().copied().filter(|&p| &sheet(p) == of_sheet).collect();
-            own.sort_by_key(|&p| name(p));
-            let here: BTreeSet<usize> = own.iter().copied().collect();
-            let mut ties: BTreeMap<(usize, usize), f64> = between_parts
-                .iter()
-                .filter(|(&(a, b), _)| here.contains(&a) && here.contains(&b))
-                .map(|(&k, &w)| (k, w))
-                .collect();
-            // (a capacitor from a supply to a ground is tied to a chip of the sheet on that supply, the chips
-            // taking them in turn: it is there for the chip, though no signal says so)
-            let mut has: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-            for &c in own.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
-                for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
-                    let chips = own.iter().filter(|&&q| is_chip(q) && parts[q].pads.contains(&Some(rail)));
-                    if let Some(&chip) = chips.min_by_key(|&&q| (has.get(&(rail, q)).copied().unwrap_or(0), q)) {
-                        *has.entry((rail, chip)).or_insert(0) += 1;
-                        *ties.entry((c.min(chip), c.max(chip))).or_insert(0.0) += BESIDE_CHIP;
-                    }
-                }
-            }
-            let is_tied: BTreeSet<usize> = ties.keys().flat_map(|&(a, b)| [a, b]).collect();
-            let nodes: Vec<usize> = own.iter().copied().filter(|p| is_tied.contains(p)).collect();
-            let mut groups = communities(&nodes, &ties);
-            if groups.is_empty() {
-                groups.push(Vec::new());
-            }
-            groups[0].extend(own.iter().copied().filter(|p| !is_tied.contains(p)));
-            for mut group in groups {
-                group.sort_by_key(|&p| name(p));
-                for &p in &group {
-                    atom_of.insert(p, atoms.len());
-                }
-                atoms.push((of_sheet.clone(), group));
-            }
-        }
-        // (a zone by the sheet most of its parts are drawn on; and by its first parts, if it is not all of it)
-        let named = |members: &[usize]| -> String {
-            let mut count: BTreeMap<&str, usize> = BTreeMap::new();
-            for &atom in members {
-                *count.entry(atoms[atom].0.as_str()).or_insert(0) += atoms[atom].1.len();
-            }
-            let mut most: (&str, usize) = ("", 0);
-            for (&of_sheet, &n) in &count {
-                if n > most.1 {
-                    most = (of_sheet, n);
-                }
-            }
-            let mut of_it: Vec<String> = members
-                .iter()
-                .filter(|&&atom| atoms[atom].0 == most.0)
-                .flat_map(|&atom| names(&atoms[atom].1))
-                .collect();
-            of_it.sort();
-            let some = if most.1 == sheet_size(most.0) {
-                String::new()
-            } else {
-                format!(" ({}{})", of_it[..of_it.len().min(3)].join(", "), if of_it.len() > 3 { " ..." } else { "" })
-            };
-            let more = count.len() - 1;
-            format!("{}{}{}", most.0, some, if more > 0 { format!(" and {more} more") } else { String::new() })
-        };
-        let local: Vec<Vec<usize>> =
-            nets.iter().map(|net| net.iter().copied().filter(|p| mine.contains(p)).collect()).collect();
-        let mut ties = tied(&local, &|p| atom_of.get(&p).copied());
-        // (a capacitor from a supply to a ground with no chip of its own sheet on that supply is for a chip
-        // of another: its group is tied to that chip's, the chips taking them in turn)
-        let mut has: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-        for &c in mine.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
-            for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
-                let chips = || mine.iter().filter(|&&q| is_chip(q) && parts[q].pads.contains(&Some(rail)));
-                if chips().any(|&q| sheet(q) == sheet(c)) {
-                    continue;
-                }
-                if let Some(&chip) = chips().min_by_key(|&&q| (has.get(&(rail, q)).copied().unwrap_or(0), q)) {
-                    *has.entry((rail, chip)).or_insert(0) += 1;
-                    if let (Some(&a), Some(&b)) = (atom_of.get(&c), atom_of.get(&chip)) {
-                        if a != b {
-                            *ties.entry((a.min(b), a.max(b))).or_insert(0.0) += 1.0;
-                        }
-                    }
-                }
-            }
-        }
-        // (and by the supply each would have of the plane: the groups most of whose parts are on one supply
-        // are tied by it, GATHERED nets for each, that what is fed alike be gathered together)
-        let mut asking: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); atoms.len()];
-        for &net in found.rails.keys() {
-            let mut count: BTreeMap<usize, usize> = BTreeMap::new();
-            reach[net].iter().filter_map(|p| atom_of.get(p)).for_each(|&a| *count.entry(a).or_insert(0) += 1);
-            if count.len() > 1 {
-                count.iter().for_each(|(&a, &n)| asking[a].push((n, count.len(), net)));
-            }
-        }
-        let mut fed_by: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for (a, asks) in asking.iter_mut().enumerate() {
-            asks.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
-            asks.iter().take(power_layers.len()).for_each(|ask| fed_by.entry(ask.2).or_default().push(a));
-        }
-        for alike in fed_by.values().filter(|alike| alike.len() > 1) {
-            for (i, &a) in alike.iter().enumerate() {
-                for &b in &alike[i + 1..] {
-                    *ties.entry((a.min(b), a.max(b))).or_insert(0.0) += GATHERED / (alike.len() - 1) as f64;
-                }
-            }
-        }
-        let ties = ties;
-        let mut levels: Vec<Vec<Vec<usize>>> =
-            vec![(0..atoms.len()).filter(|&a| !atoms[a].1.is_empty()).map(|a| vec![a]).collect()];
-        loop {
-            let last = &levels[levels.len() - 1];
-            let next = gathered(last, &ties);
-            if next.len() == last.len() || next.len() < 2 {
-                break;
-            }
-            levels.push(next);
-        }
-        let parts_of = |members: &[usize]| -> Vec<usize> {
-            members.iter().flat_map(|&atom| atoms[atom].1.iter().copied()).collect()
-        };
-        let blank = [0.0; 4];
-        let mut kept: Vec<(Vec<usize>, Work)> = levels[0]
-            .iter()
-            .map(|members| {
-                (
-                    members.clone(),
-                    Work { name: named(members), parts: parts_of(members), inside: Vec::new(), rect: blank, more: 0.0 },
-                )
-            })
-            .collect();
-        for level in &levels[1..] {
-            let mut made: Vec<(Vec<usize>, Work)> = Vec::new();
-            for members in level {
-                let of: BTreeSet<usize> = members.iter().copied().collect();
-                let (mut inside, rest): (Vec<_>, Vec<_>) =
-                    kept.into_iter().partition(|(under, _)| under.iter().all(|a| of.contains(a)));
-                kept = rest;
-                if inside.len() == 1 {
-                    made.push((members.clone(), inside.remove(0).1));
-                } else {
-                    let mut inner: Vec<Work> = inside.into_iter().map(|(_, work)| work).collect();
-                    inner.sort_by(|a, b| b.parts.len().cmp(&a.parts.len()).then(a.name.cmp(&b.name)));
-                    made.push((
-                        members.clone(),
-                        Work { name: named(members), parts: parts_of(members), inside: inner, rect: blank, more: 0.0 },
-                    ));
-                }
-            }
-            kept = made;
-        }
-        // A sheet whose groups are not gathered together at the first level: drawn as one, tied apart.
-        let first = if levels.len() > 1 { &levels[1] } else { &levels[0] };
-        let mut first_of: BTreeMap<usize, usize> = BTreeMap::new();
-        for (g, members) in first.iter().enumerate() {
-            for &atom in members {
-                first_of.insert(atom, g);
-            }
-        }
-        for of_sheet in &sheets {
-            let own: Vec<usize> =
-                (0..atoms.len()).filter(|&a| &atoms[a].0 == of_sheet && !atoms[a].1.is_empty()).collect();
-            let into: BTreeSet<usize> = own.iter().map(|a| first_of[a]).collect();
-            if into.len() > 1 {
-                apart.push((
-                    of_sheet.clone(),
-                    own.iter().map(|&a| (names(&atoms[a].1), named(&first[first_of[&a]]))).collect(),
-                ));
-            }
-        }
-        let mut zones: Vec<Work> = kept.into_iter().map(|(_, work)| work).collect();
-        zones.sort_by(|a, b| b.parts.len().cmp(&a.parts.len()).then(a.name.cmp(&b.name)));
-        zones
-    };
-    let mut top: Vec<Work> = Vec::new();
-    for (g, own) in &domains {
-        let inside = within(own);
-        // (a part counted with another domain that stands on this ground too takes half its ground here)
-        let half =
-            |p: usize| if found.home[p] != Some(*g) && found.stands[p].contains(g) { parts[p].area / 2.0 } else { 0.0 };
-        let more = (0..parts.len()).map(half).sum();
-        top.push(Work { name: net_name(*g), parts: own.clone(), inside, rect: [0.0; 4], more });
-    }
-    if !adrift.is_empty() {
-        let inside = within(&adrift);
-        top.push(Work { name: "(on no ground)".to_string(), parts: adrift.clone(), inside, rect: [0.0; 4], more: 0.0 });
-    }
+    let (stays, held) = standing(board);
+    let board = held.as_ref().unwrap_or(board);
+    let cx = &Known::of(board, stays)?;
+    let power = power_told(cx);
+    let (top, apart) = zone_tree(cx);
+    let (parts, all_nets, found, reach, nets, signal) =
+        (cx.parts, cx.all_nets, &cx.found, &cx.reach, &cx.nets, &cx.signal);
+    let (mate_of, aggressor, victim, power_layers, domain_at) =
+        (&cx.mate_of, &cx.aggressor, &cx.victim, &cx.power_layers, &cx.domain_at);
 
     // Ground for each zone, from the whole board down.
     let at: Vec<Option<Pt>> = parts.iter().map(|part| (part.fixed && part.placed).then_some(part.at)).collect();
@@ -398,7 +55,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             count
         })
         .collect();
-    let domain_at: BTreeMap<usize, usize> = domains.iter().enumerate().map(|(d, (g, _))| (*g, d)).collect();
     let rail_domain: Vec<Option<usize>> =
         rail_nets.iter().map(|net| found.rails[net].0.and_then(|g| domain_at.get(&g).copied())).collect();
     let mut on_plane: Vec<Vec<usize>> = vec![Vec::new(); leaf_parts.len()];
@@ -470,11 +126,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     };
     // Where the box holds several boards, the domains are parted between them first: in the order their ties
     // give, each board with as many as its room is of all the room (a domain is on one board).
-    let overlap = |a: [f64; 4], b: [f64; 4]| {
-        (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0)
-    };
-    let ground = |r: [f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-    let room = |r: [f64; 4]| (ground(r) - board.keepouts.iter().map(|&k| overlap(r, k)).sum::<f64>()).max(1.0);
     let mut with_shift: Vec<([f64; 4], Pt)> = if board.regions.is_empty() {
         vec![(board.outline, [0.0, 0.0])]
     } else {
@@ -485,35 +136,34 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     with_shift.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]).then(a.0[1].total_cmp(&b.0[1])));
     let boards: Vec<[f64; 4]> = with_shift.iter().map(|board| board.0).collect();
     let shifts: Vec<Pt> = with_shift.iter().map(|board| board.1).collect();
-    let need = |work: &Work| work.parts.iter().map(|&p| parts[p].area).sum::<f64>() + work.more;
     let mut to: Vec<usize> = vec![0; top.len()];
     if boards.len() > 1 && top.len() > 1 {
         let mut of_top: BTreeMap<usize, usize> = BTreeMap::new();
         for (z, work) in top.iter().enumerate() {
             of_top.extend(work.parts.iter().map(|&p| (p, z)));
         }
-        let line = in_line(top.len(), &tied(&nets, &|p| of_top.get(&p).copied()));
+        let line = in_line(top.len(), &tied(nets, &|p| of_top.get(&p).copied()));
         let mut order: Vec<usize> = (0..top.len()).collect();
         order.sort_by(|&a, &b| line[a].total_cmp(&line[b]).then(a.cmp(&b)));
-        let all_room: f64 = boards.iter().map(|&r| room(r)).sum();
-        let all_need: f64 = top.iter().map(need).sum::<f64>().max(1.0);
+        let all_room: f64 = boards.iter().map(|&r| cx.room(r)).sum();
+        let all_need: f64 = top.iter().map(|work| cx.need(work)).sum::<f64>().max(1.0);
         // (the order, or the order turned round: whichever leaves each board nearer what its room is of all)
         let parted = |order: &[usize]| -> (f64, Vec<usize>) {
             let (mut to, mut at_board, mut taken, mut off) = (vec![0usize; top.len()], 0usize, 0.0f64, 0.0f64);
             for (k, &z) in order.iter().enumerate() {
-                let share = room(boards[at_board]) / all_room * all_need;
+                let share = cx.room(boards[at_board]) / all_room * all_need;
                 let left = order.len() - k;
                 let must_move = left <= boards.len() - 1 - at_board;
-                let over = taken + need(&top[z]) - share;
+                let over = taken + cx.need(&top[z]) - share;
                 if at_board + 1 < boards.len() && taken > 0.0 && (must_move || over > share - taken) {
                     off += (taken - share).abs();
                     at_board += 1;
                     taken = 0.0;
                 }
                 to[z] = at_board;
-                taken += need(&top[z]);
+                taken += cx.need(&top[z]);
             }
-            off += (taken - room(boards[at_board]) / all_room * all_need).abs();
+            off += (taken - cx.room(boards[at_board]) / all_room * all_need).abs();
             (off, to)
         };
         let turned: Vec<usize> = order.iter().rev().copied().collect();
@@ -524,7 +174,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         // each board holding no more than BOARD_FULL of its room; of ways as good, the most even.
         let ways = (boards.len() as f64).powi(top.len() as i32);
         if ways <= 20_000.0 {
-            let mut between = tied(&nets, &|p| of_top.get(&p).copied());
+            let mut between = tied(nets, &|p| of_top.get(&p).copied());
             // (a part on two grounds stands on the gap between its two domains: they are on one board)
             for p in (0..parts.len()).filter(|&p| found.stands[p].len() > 1) {
                 let on: Vec<usize> = top
@@ -553,8 +203,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     }
                     let fill: Vec<f64> = (0..boards.len())
                         .map(|b| {
-                            (0..top.len()).filter(|&z| way[z] == b).map(|z| need(&top[z])).sum::<f64>()
-                                / room(boards[b])
+                            (0..top.len()).filter(|&z| way[z] == b).map(|z| cx.need(&top[z])).sum::<f64>()
+                                / cx.room(boards[b])
                         })
                         .collect();
                     if fill.iter().any(|&f| f > most || f == 0.0) {
@@ -611,7 +261,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
      -> Laid {
         let mut on = Ground {
             board,
-            nets: &nets,
+            nets,
             rails: &rail_parts,
             at: at.clone(),
             roads: Vec::new(),
@@ -621,7 +271,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             crossed,
             sided,
             asked,
-            mates: &mate_of,
+            mates: mate_of,
             fine: false,
             kin: &kin,
         };
@@ -658,7 +308,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         for (domain, work) in laid.iter().enumerate() {
             smallest(work, domain, &mut leaves);
         }
-        let mut travel = travelled(&mut roads, &leaves, &nets);
+        let mut travel = travelled(&mut roads, &leaves, nets);
         let rects: Vec<[f64; 4]> = leaves.iter().map(|leaf| leaf.1).collect();
         travel.split = pieces(&rects).iter().map(|&n| n.saturating_sub(1)).sum();
         // (what disturbs is kept from what is disturbed: by the grounds of their zones, on one board)
@@ -786,7 +436,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut smallest_zones: Vec<&Work> = Vec::new();
         laid.iter().for_each(|work| named(work, &mut smallest_zones));
         for zone in smallest_zones {
-            let all = ground(zone.rect).max(1e-9);
+            let all = area(zone.rect).max(1e-9);
             for limit in &board.limits {
                 let under = overlap(zone.rect, limit.rect) / all;
                 let mut too: Vec<String> = zone
@@ -947,40 +597,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // A part on a gap has a body like any other, and it is the first to have its ground: turned so that its
     // pads lie on the side of the gap their nets belong to, and along the gap clear of the others there. No
     // other part may stand on it.
-    let size_of = |p: usize| {
-        let side = parts[p].area.sqrt();
-        parts[p].size.unwrap_or([side, side])
-    };
-    let lying = |p: usize, quarters: u8| {
-        let [w, h] = size_of(p);
-        if quarters % 2 == 1 {
-            [h, w]
-        } else {
-            [w, h]
-        }
-    };
     let domain_named = |name: &str| top.iter().position(|work| work.name == name);
-    // (the domain a net is of: its own if it is a ground, its ground's if a supply, else that of most of its parts)
-    let net_domain = |net: usize| -> Option<usize> {
-        if let Some(&domain) = domain_at.get(&net) {
-            return Some(domain);
-        }
-        if let Some(ground) = found.rails.get(&net).and_then(|rail| rail.0) {
-            return domain_at.get(&ground).copied();
-        }
-        let mut count: BTreeMap<usize, usize> = BTreeMap::new();
-        for domain in reach[net].iter().filter_map(|&q| found.home[q]).filter_map(|ground| domain_at.get(&ground)) {
-            *count.entry(*domain).or_insert(0) += 1;
-        }
-        count.into_iter().max_by_key(|&(domain, n)| (n, usize::MAX - domain)).map(|best| best.0)
-    };
-    let off_rect = |at: Pt, r: [f64; 4]| dist(at, [at[0].clamp(r[0], r[2]), at[1].clamp(r[1], r[3])]);
     let mut gap_quarter: BTreeMap<usize, u8> = BTreeMap::new();
     let mut gap_rects: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
-    let body_at = |p: usize, at: Pt, quarters: u8| {
-        let [w, h] = lying(p, quarters);
-        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
-    };
     {
         type Strip = (bool, [f64; 4], Vec<(usize, usize, f64, f64)>); // (bridge, part, want along, size)
         let mut strips: BTreeMap<[i64; 4], Strip> = BTreeMap::new();
@@ -993,7 +612,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 let mut far = 0.0;
                 for (i, net) in parts[p].pads.iter().enumerate() {
                     let (Some(net), Some(&offset)) = (net, parts[p].offsets.get(i)) else { continue };
-                    let Some(domain) = net_domain(*net).filter(|&domain| to[domain] == to[home]) else { continue };
+                    let Some(domain) = cx.net_domain(*net).filter(|&domain| to[domain] == to[home]) else { continue };
                     let from = quartered(quarters, offset);
                     far += off_rect([here[0] + from[0], here[1] + from[1]], top[domain].rect);
                 }
@@ -1011,7 +630,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 let along = usize::from(up);
                 let key = strip.map(|v| (v * 1000.0).round() as i64);
                 let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
-                entry.2.push((b, p, here[along], lying(p, quarters)[along] + BESIDE));
+                entry.2.push((b, p, here[along], cx.lying(p, quarters)[along] + BESIDE));
             }
         }
         for (up, strip, on_it) in strips.into_values() {
@@ -1033,14 +652,14 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             bridges.iter().map(|bridge| parts.iter().position(|part| part.name == bridge.part)).collect();
         let part_of = |b: usize| their_parts[b];
         order.sort_by(|&a, &b| {
-            let takes = |b: usize| part_of(b).map_or(0.0, |p| size_of(p)[0] * size_of(p)[1]);
+            let takes = |b: usize| part_of(b).map_or(0.0, |p| cx.body(p)[0] * cx.body(p)[1]);
             takes(b).total_cmp(&takes(a)).then(a.cmp(&b))
         });
         for b in order {
             let Some(p) = part_of(b) else { continue };
             let Some(home) = domain_named(&bridges[b].grounds[0]) else { continue };
             let (quarters, region) = (gap_quarter.get(&p).copied().unwrap_or(0), boards[to[home]]);
-            let [w, h] = lying(p, quarters);
+            let [w, h] = cx.lying(p, quarters);
             let hold = |v: f64, low: f64, high: f64, size: f64| {
                 if high - low >= size {
                     v.clamp(low + size / 2.0, high - size / 2.0)
@@ -1053,7 +672,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let shut: Vec<[f64; 4]> = board.keepouts.iter().chain(gap_rects.values()).copied().collect();
             let band = match gap_along.get(&p) {
                 Some(&along) => {
-                    let mut band = body_at(p, at, quarters);
+                    let mut band = cx.body_at(p, at, quarters);
                     (band[along], band[along + 2]) = (region[along], region[along + 2]);
                     band
                 }
@@ -1065,7 +684,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             bridges[b].at = at.map(|v| (v * 100.0).round() / 100.0);
             bridges[b].off = parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0);
             on_gap.insert(p, at);
-            gap_rects.insert(p, body_at(p, at, quarters));
+            gap_rects.insert(p, cx.body_at(p, at, quarters));
         }
     }
     // (the ground that is shut to every part: what the board shuts, and the bodies on the gaps)
@@ -1104,7 +723,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     among
                         .iter()
                         .copied()
-                        .filter(|&q| is_chip(q) && parts[q].pads.contains(&Some(rail)))
+                        .filter(|&q| cx.is_chip(q) && parts[q].pads.contains(&Some(rail)))
                         .min_by_key(|&q| (taken.get(&(rail, q)).copied().unwrap_or(0), q))
                 };
                 let chip = of(own).or_else(|| of(&top[*domain].parts));
@@ -1129,13 +748,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // (of two nets from one chip to one inductor, the one with the fewer parts is the node: the other is
     // where the chip senses what the inductor gives)
     let mut nodes: Vec<usize> =
-        (0..all_nets.len()).filter(|&net| is_signal(net) && reach[net].len() <= SWITCHED).collect();
+        (0..all_nets.len()).filter(|&net| cx.is_signal(net) && reach[net].len() <= SWITCHED).collect();
     nodes.sort_by_key(|&net| (reach[net].len(), net));
     let mut switched: BTreeSet<(usize, usize)> = BTreeSet::new();
     for node in nodes {
         let on: Vec<usize> = reach[node].iter().copied().collect();
         let (chips, coils): (Vec<usize>, Vec<usize>) = (
-            on.iter().copied().filter(|&q| is_chip(q)).collect(),
+            on.iter().copied().filter(|&q| cx.is_chip(q)).collect(),
             on.iter().copied().filter(|&q| parts[q].inductor).collect(),
         );
         let ([chip], [coil]) = (&chips[..], &coils[..]) else { continue };
@@ -1152,7 +771,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut closing: Vec<usize> = reach[far]
                 .iter()
                 .copied()
-                .filter(|&c| parts[c].capacitor && parts[c].pads.len() == 2 && sheet(c) == sheet(*chip))
+                .filter(|&c| parts[c].capacitor && parts[c].pads.len() == 2 && cx.sheet(c) == cx.sheet(*chip))
                 .filter(|&c| parts[c].pads.iter().flatten().any(|net| found.grounds.contains(net)))
                 .collect();
             closing.sort_by(|&a, &b| {
@@ -1176,7 +795,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     for switcher in switchers.iter_mut() {
         let (chip, node) = (switcher.0, switcher.1);
         let own: BTreeSet<usize> = parts[chip].pads.iter().flatten().copied().collect();
-        for net in own.into_iter().filter(|&net| net != node && is_signal(net) && reach[net].len() <= SWITCHED) {
+        for net in own.into_iter().filter(|&net| net != node && cx.is_signal(net) && reach[net].len() <= SWITCHED) {
             let small = |m: &usize| parts[*m].pads.len() == 2 && !parts[*m].inductor;
             for m in reach[net].iter().copied().filter(small).collect::<Vec<usize>>() {
                 if of_loops.iter().all(|of| of.0 != m) {
@@ -1198,18 +817,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // across to another net of that chip, filters what the chip takes in there and stands by its pad; a
     // diode from it to a ground or a supply clamps it and stands there too; and at a connector what is in
     // series with its pin comes first (a fuse, a resistor, a bead).
-    let is_head = |q: usize| is_chip(q) || parts[q].edge;
     let mut serving: Vec<(usize, usize, usize)> = Vec::new();
     let mut across_chip: Vec<(usize, usize, usize)> = Vec::new();
-    let only_head = |net: usize| -> Option<usize> {
-        let mut heads = reach[net].iter().copied().filter(|&q| is_head(q));
-        heads.next().filter(|_| heads.next().is_none())
-    };
-    // (what the schematic says a part's pad on a net is, where it says)
-    let pin_on = |q: usize, net: usize| -> Pin {
-        let at = parts[q].pads.iter().position(|&of| of == Some(net));
-        at.and_then(|i| parts[q].pins.get(i).copied()).unwrap_or_default()
-    };
     // (the nets a chip takes a signal in on come first, those it drives last: a part that could stand for
     // either of two chips, the resistor between a driver and a filtered input, is the receiver's, with its
     // capacitor. An analog input is often drawn as a passive pin: so it is the drivers that are told apart)
@@ -1219,8 +828,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         _ => 1,
     };
     let mut headed: Vec<(u8, usize, usize)> = (0..all_nets.len())
-        .filter(|&net| is_signal(net))
-        .filter_map(|net| only_head(net).map(|head| (rank(pin_on(head, net)), net, head)))
+        .filter(|&net| cx.is_signal(net))
+        .filter_map(|net| cx.only_head(net).map(|head| (rank(cx.pin_on(head, net)), net, head)))
         .collect();
     headed.sort_unstable();
     for (_, net, head) in headed {
@@ -1233,10 +842,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             let Some(other) = parts[m].pads.iter().flatten().copied().find(|&other| other != net) else { continue };
             let to_power = found.grounds.contains(&other) || found.rails.contains_key(&other);
-            let across = is_signal(other) && reach[other].contains(&head);
+            let across = cx.is_signal(other) && reach[other].contains(&head);
             // (what is across two pads of one chip and of nothing else is its own: its feedback, its
             // compensation, whatever the size of the nets)
-            let its_own = is_signal(other) && only_head(other) == Some(head);
+            let its_own = cx.is_signal(other) && cx.only_head(other) == Some(head);
             let shunt = small && ((parts[m].capacitor && (to_power || across)) || (parts[m].diode && to_power));
             let first = small && parts[head].edge && !to_power && !parts[m].capacitor;
             filtered |= shunt && parts[m].capacitor;
@@ -1245,7 +854,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 across_chip.push((m, head, net));
             } else if (shunt || first) && new {
                 serving.push((m, head, net));
-            } else if small && is_signal(other) && !parts[m].capacitor && !parts[m].diode {
+            } else if small && cx.is_signal(other) && !parts[m].capacitor && !parts[m].diode {
                 in_series.push(m);
             }
         }
@@ -1274,7 +883,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut each: Vec<Work> = own
                 .iter()
                 .filter(|p| !on_gap.contains_key(p))
-                .map(|&p| Work { name: name(p), parts: vec![p], inside: Vec::new(), rect: [0.0; 4], more: 0.0 })
+                .map(|&p| Work { name: cx.name(p), parts: vec![p], inside: Vec::new(), rect: [0.0; 4], more: 0.0 })
                 .collect();
             let mut on = Ground {
                 board,
@@ -1288,7 +897,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 crossed: &none,
                 sided: &no_sides,
                 asked: &no_asks,
-                mates: &mate_of,
+                mates: mate_of,
                 fine: true,
                 kin: &no_kin,
             };
@@ -1299,49 +908,16 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
     // Then the bodies themselves are settled on the ground of each zone, each as near the middle of the ground
     // that came to it as the others allow, the largest first; no part on ground that is shut.
-    let round2 = |v: f64| (v * 100.0).round() / 100.0;
     let mut places: Vec<Place> = Vec::new();
     let mut spot: Vec<Option<Pt>> = vec![None; parts.len()];
-    let body = |p: usize| {
-        let side = parts[p].area.sqrt();
-        parts[p].size.unwrap_or([side, side])
-    };
     // (where each came to stand: its middle and whether it is turned; None where there was no room. A domain's
     // bodies are settled together, off its roads and what is shut: a large part may reach over the ground of
     // its zone, which was cut by what its parts take and not by their shapes)
     let mut stood: BTreeMap<usize, Option<(Pt, bool)>> = BTreeMap::new();
-    let taken = |p: usize, (at, turn): (Pt, bool)| {
-        let [w, h] = body(p);
-        let (w, h) = if turn { (h, w) } else { (w, h) };
-        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
-    };
     // First the parts with holes and the large ones, over the whole ground of their domain: they are the
     // hardest to find room for. No track runs under a part with holes: it stands off the gaps and the roads
     // that part much of the board (a lesser road, a track or two, goes round it); the others may stand over
     // a road, whose tracks run on the layers beneath.
-    let goes_first = |p: usize| parts[p].through || aggressor[p] || body(p)[0] * body(p)[1] >= LARGE;
-    // (the sides of the board a part takes ground on: 1 the front, 2 the back, 3 both, for a part with holes.
-    // Two parts are in each other's way only if they have a side in common)
-    let side_of = |p: usize| {
-        if parts[p].through {
-            3u8
-        } else if parts[p].back {
-            2
-        } else {
-            1
-        }
-    };
-    // (the ground a part takes where it stands: its box, or its pieces where it is given in pieces)
-    let stands_on = |p: usize, (at, turn): (Pt, bool)| -> Vec<[f64; 4]> {
-        if parts[p].pieces.is_empty() {
-            return vec![taken(p, (at, turn))];
-        }
-        let piece = |r: &[f64; 4]| {
-            let (a, b) = (quartered(u8::from(turn), [r[0], r[1]]), quartered(u8::from(turn), [r[2], r[3]]));
-            [at[0] + a[0].min(b[0]), at[1] + a[1].min(b[1]), at[0] + a[0].max(b[0]), at[1] + a[1].max(b[1])]
-        };
-        parts[p].pieces.iter().map(piece).collect()
-    };
     // A chip (or a connector) and the parts that stand by its pads are a block: laid out once, by themselves
     // on empty ground (the chip in the middle, each part beside the pad it is for, in the order they are
     // taken), and then placed as one body. Where each is taken after its neighbours, the ground by a chip's
@@ -1380,36 +956,20 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         /// For each part that stands by a pad: (the part, (its pad, the part it stands by, that one's pad)).
         pins: Vec<(usize, (usize, usize, usize))>,
     }
-    // (a block is laid out with each part as its footprint is drawn, not as it happens to stand in the file
-    // today: two blocks of one make-up are then laid out by the same steps, and come out the same)
-    let stands_turned = |p: usize| ((parts[p].angle / 90.0).round() as i64).rem_euclid(4) as u8;
-    let drawn_pad = |p: usize, i: usize| quartered((4 - stands_turned(p)) % 4, parts[p].offsets[i]);
-    let drawn_body = |p: usize, quarters: u8| {
-        let [w, h] = body(p);
-        if (stands_turned(p) + quarters) % 2 == 1 {
-            [h, w]
-        } else {
-            [w, h]
-        }
-    };
-    let drawn_rect = |p: usize, at: Pt, quarters: u8| {
-        let [w, h] = drawn_body(p, quarters);
-        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
-    };
     let lay_block = |head: usize, list: &[(usize, usize, usize)]| -> Block {
         // (where each part is from the chip, and how many quarters it is turned from how it is drawn)
         let mut pos: BTreeMap<usize, (Pt, u8)> = [(head, ([0.0, 0.0], 0u8))].into_iter().collect();
-        let [hw, hh] = body(head);
+        let [hw, hh] = cx.body(head);
         let reach = hw.max(hh) / 2.0 + BLOCK_REACH;
         let ground = [-reach, -reach, reach, reach];
         // (what lies already, with the sides of the board it takes ground on)
-        let mut shut: Vec<([f64; 4], u8)> = vec![(drawn_rect(head, [0.0, 0.0], 0), side_of(head))];
+        let mut shut: Vec<([f64; 4], u8)> = vec![(cx.drawn_rect(head, [0.0, 0.0], 0), cx.side_of(head))];
         let mut at_pad: BTreeMap<(usize, usize), usize> = BTreeMap::new();
         let mut pins: Vec<(usize, (usize, usize, usize))> = Vec::new();
         for &(c, by, net) in list {
             let Some(&(by_at, by_q)) = pos.get(&by) else { continue };
             let pad_of = |i: usize| {
-                let from = quartered(by_q, drawn_pad(by, i));
+                let from = quartered(by_q, cx.drawn_pad(by, i));
                 [by_at[0] + from[0], by_at[1] + from[1]]
             };
             let on_net = (0..parts[by].pads.len()).filter(|&i| parts[by].pads[i] == Some(net));
@@ -1419,7 +979,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 .pads
                 .iter()
                 .flatten()
-                .filter(|&&other| other != net && is_signal(other))
+                .filter(|&&other| other != net && cx.is_signal(other))
                 .flat_map(|&other| (0..parts[by].pads.len()).filter(move |&i| parts[by].pads[i] == Some(other)))
                 .map(pad_of)
                 .collect();
@@ -1439,8 +999,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             };
             // (just off the body of what it stands by, on the side the pad is nearest, lying away from it)
             let pad = pad_of(pin);
-            let by_body = drawn_rect(by, by_at, by_q);
-            let [cw, ch] = drawn_body(c, 0);
+            let by_body = cx.drawn_rect(by, by_at, by_q);
+            let [cw, ch] = cx.drawn_body(c, 0);
             let (long, short) = (cw.max(ch), cw.min(ch));
             let half = long / 2.0;
             let sides = [
@@ -1453,12 +1013,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 sides.iter().fold(sides[0], |best, side| if side.0 < best.0 { *side } else { best });
             // (a part on the other side of the board from what it stands by stands under the pad itself, as
             // its footprint is drawn or a quarter from that: there is nothing of the other in its way)
-            let under = side_of(c) & side_of(by) == 0;
+            let under = cx.side_of(c) & cx.side_of(by) == 0;
             let (want, lying) =
                 if under { (pad, [cw, ch]) } else { (want, if along_x { [long, short] } else { [short, long] }) };
             let quarter_more = (lying[0] - cw).abs() > 1e-9;
             let in_its_way: Vec<[f64; 4]> =
-                shut.iter().filter(|lies| lies.1 & side_of(c) != 0).map(|lies| lies.0).collect();
+                shut.iter().filter(|lies| lies.1 & cx.side_of(c) != 0).map(|lies| lies.0).collect();
             let Some((at, turn)) = settled(ground, &[(lying, want)], &in_its_way)[0] else { continue };
             if dist(at, pad) > BLOCK_REACH {
                 continue;
@@ -1468,7 +1028,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             if let Some(mine) = parts[c].pads.iter().position(|&of| of == Some(net)) {
                 if mine < parts[c].offsets.len() {
                     let far = |q: u8| {
-                        let from = quartered(q, drawn_pad(c, mine));
+                        let from = quartered(q, cx.drawn_pad(c, mine));
                         dist([at[0] + from[0], at[1] + from[1]], pad)
                     };
                     if far(q + 2) < far(q) - 1e-9 {
@@ -1479,7 +1039,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             *at_pad.entry((by, pin)).or_insert(0) += 1;
             pos.insert(c, (at, q));
-            shut.push((drawn_rect(c, at, q), side_of(c)));
+            shut.push((cx.drawn_rect(c, at, q), cx.side_of(c)));
         }
         let low = |k: usize| shut.iter().map(|lies| lies.0[k]).fold(f64::INFINITY, f64::min);
         let high = |k: usize| shut.iter().map(|lies| lies.0[k + 2]).fold(f64::NEG_INFINITY, f64::max);
@@ -1489,7 +1049,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             // less what it stands turned already)
             at: pos
                 .iter()
-                .map(|(&p, &(at, q))| (p, [at[0] - mid[0], at[1] - mid[1]], (q + 4 - stands_turned(p)) % 4))
+                .map(|(&p, &(at, q))| (p, [at[0] - mid[0], at[1] - mid[1]], (q + 4 - cx.stands_turned(p)) % 4))
                 .collect(),
             drawn: pos.iter().map(|(&p, &(at, q))| (p, at, q)).collect(),
             through: pos.keys().any(|&p| parts[p].through),
@@ -1504,7 +1064,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // The blocks of one make-up, and whether they are laid out alike. A make-up is the kind of the chip (its
     // footprint and its value) and, for each part by it, its kind and the pads it stands between; a layout is
     // where each such part lies from the chip and how it is turned.
-    let kind = |p: usize| format!("{}|{}", parts[p].footprint, parts[p].value);
     // (the block a part stands in, by its chip)
     let in_blocks = |p: usize, blocks: &BTreeMap<usize, Block>| -> Option<usize> {
         blocks.iter().find(|(_, block)| block.at.iter().any(|placed| placed.0 == p)).map(|(&head, _)| head)
@@ -1516,13 +1075,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut make: Vec<String> = Vec::new();
         let mut lies: Vec<String> = Vec::new();
         for &(m, at, q) in block.drawn.iter().filter(|placed| placed.0 != head) {
-            let pads = by_pad.get(&m).map_or(String::new(), |&(mine, by, pin)| format!("{mine}>{}:{pin}", kind(by)));
-            make.push(format!("{} {pads}", kind(m)));
-            lies.push(format!("{} {pads} {:.2} {:.2} {q}", kind(m), at[0] + 0.0, at[1] + 0.0));
+            let pads = by_pad.get(&m).map_or(String::new(), |&(mine, by, pin)| format!("{mine}>{}:{pin}", cx.kind(by)));
+            make.push(format!("{} {pads}", cx.kind(m)));
+            lies.push(format!("{} {pads} {:.2} {:.2} {q}", cx.kind(m), at[0] + 0.0, at[1] + 0.0));
         }
         make.sort();
         lies.sort();
-        made.entry((kind(head), make)).or_default().push((head, lies));
+        made.entry((cx.kind(head), make)).or_default().push((head, lies));
     }
     let mut alike: Vec<(usize, usize, usize, Vec<String>)> = made
         .values()
@@ -1531,7 +1090,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut count: BTreeMap<&Vec<String>, usize> = BTreeMap::new();
             group.iter().for_each(|(_, lies)| *count.entry(lies).or_insert(0) += 1);
             let most = count.values().copied().max().unwrap_or(0);
-            (group.len(), most, group[0].1.len() + 1, names(&group.iter().map(|of| of.0).collect::<Vec<_>>()))
+            (group.len(), most, group[0].1.len() + 1, cx.names(&group.iter().map(|of| of.0).collect::<Vec<_>>()))
         })
         .collect();
     alike.sort_by(|a, b| (b.0 * b.2).cmp(&(a.0 * a.2)).then(a.3.cmp(&b.3)));
@@ -1551,12 +1110,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let mut in_rows: BTreeMap<usize, usize> = BTreeMap::new(); // a body of copies, by its first part -> the copies side by side
     {
         let mut of_sheet: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for p in (0..parts.len()).filter(|&p| !stays(&parts[p])) {
-            of_sheet.entry(sheet(p)).or_default().push(p);
+        for p in (0..parts.len()).filter(|&p| !cx.stays[p]) {
+            of_sheet.entry(cx.sheet(p)).or_default().push(p);
         }
         let mut by_make: BTreeMap<Vec<String>, Vec<&String>> = BTreeMap::new();
         for (name, own) in of_sheet.iter().filter(|(_, own)| own.len() >= REPEAT_LEAST) {
-            let mut kinds: Vec<String> = own.iter().map(|&p| kind(p)).collect();
+            let mut kinds: Vec<String> = own.iter().map(|&p| cx.kind(p)).collect();
             kinds.sort();
             by_make.entry(kinds).or_default().push(name);
         }
@@ -1567,7 +1126,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             for &name in sheets {
                 for &p in &of_sheet[name] {
                     let next = seen.len();
-                    colour.insert(p, *seen.entry(format!("{} {}", kind(p), parts[p].pads.len())).or_insert(next));
+                    colour.insert(p, *seen.entry(format!("{} {}", cx.kind(p), parts[p].pads.len())).or_insert(next));
                 }
             }
             for _ in 0..COLOURINGS {
@@ -1592,7 +1151,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                                 "S".to_string()
                             };
                             let mut on: Vec<(usize, usize)> = Vec::new();
-                            if is_signal(net) {
+                            if cx.is_signal(net) {
                                 for &q in reach[net].iter().filter(|q| own.contains(q) && **q != p) {
                                     let pads = (0..parts[q].pads.len()).filter(|&i| parts[q].pads[i] == Some(net));
                                     on.extend(pads.map(|i| (colour[&q], i)));
@@ -1663,7 +1222,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     }
                 }
                 let takes = |item: &Vec<(usize, Pt, u8)>| -> f64 {
-                    item.iter().map(|&(p, _, _)| body(p)[0] * body(p)[1]).sum()
+                    item.iter().map(|&(p, _, _)| cx.body(p)[0] * cx.body(p)[1]).sum()
                 };
                 let tied = |item: &Vec<(usize, Pt, u8)>, lies: &BTreeMap<usize, (Pt, u8)>| -> usize {
                     let mine: BTreeSet<usize> = item.iter().map(|placed| placed.0).collect();
@@ -1689,14 +1248,14 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     let mine: BTreeSet<usize> = item.iter().map(|placed| placed.0).collect();
                     // (the pads of what lies already that this is joined to)
                     let pad_of = |p: usize, i: usize, at: Pt, q: u8| {
-                        let from = quartered(q, drawn_pad(p, i));
+                        let from = quartered(q, cx.drawn_pad(p, i));
                         [at[0] + from[0], at[1] + from[1]]
                     };
                     let mut theirs: BTreeMap<usize, Vec<Pt>> = BTreeMap::new();
                     for (&q, &(at, turn)) in &lies {
                         for (i, net) in parts[q].pads.iter().enumerate() {
                             if let Some(net) =
-                                net.filter(|&net| is_signal(net) && reach[net].iter().any(|p| mine.contains(p)))
+                                net.filter(|&net| cx.is_signal(net) && reach[net].iter().any(|p| mine.contains(p)))
                             {
                                 theirs.entry(net).or_default().push(pad_of(q, i, at, turn));
                             }
@@ -1706,7 +1265,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     let want = median(&all).unwrap_or([0.0, 0.0]);
                     let ways: Vec<Vec<[f64; 4]>> = (0..4u8)
                         .map(|way| {
-                            item.iter().map(|&(p, at, q)| drawn_rect(p, quartered(way, at), (q + way) % 4)).collect()
+                            item.iter().map(|&(p, at, q)| cx.drawn_rect(p, quartered(way, at), (q + way) % 4)).collect()
                         })
                         .collect();
                     let tried = settled_shape(ground, &ways, want, &shut, UNIT_REACH);
@@ -1742,7 +1301,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         let from = quartered(way, at);
                         let (to, turn) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
                         lies.insert(p, (to, turn));
-                        shut.push(drawn_rect(p, to, turn));
+                        shut.push(cx.drawn_rect(p, to, turn));
                     }
                 }
                 if !fits || shut.is_empty() {
@@ -1767,7 +1326,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     for &j in &whole {
                         let (p, (to, turn)) = (own[j], lies[&model[j]]);
                         let from = [to[0] - mid[0], to[1] - mid[1]];
-                        at.push((p, from, (turn + 4 - stands_turned(p)) % 4));
+                        at.push((p, from, (turn + 4 - cx.stands_turned(p)) % 4));
                         drawn.push((p, from, turn));
                     }
                     let mine: BTreeSet<usize> = at.iter().map(|placed| placed.0).collect();
@@ -1835,7 +1394,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             .copied()
             .filter(|&p| {
                 grounds.contains_key(&p)
-                    && (laid_blocks.contains_key(&p) || (goes_first(p) && !in_block.contains_key(&p)))
+                    && (laid_blocks.contains_key(&p) || (cx.goes_first(p) && !in_block.contains_key(&p)))
             })
             .collect();
         let mut sides: [Vec<[f64; 4]>; 2] = [Vec::new(), Vec::new()]; // what stands on the front, and on the back
@@ -1850,8 +1409,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 // (copies side by side take their turn as one of them would: by what one copy takes)
                 let copies =
                     alternatives.get(&p).and_then(|options| options.last()).map_or(1, |singles| singles.len().max(1));
-                laid_blocks.get(&p).map_or(body(p)[0] * body(p)[1], |block| {
-                    block.at.iter().map(|&(m, _, _)| body(m)[0] * body(m)[1]).sum::<f64>() / copies as f64
+                laid_blocks.get(&p).map_or(cx.body(p)[0] * cx.body(p)[1], |block| {
+                    block.at.iter().map(|&(m, _, _)| cx.body(m)[0] * cx.body(m)[1]).sum::<f64>() / copies as f64
                 })
             };
             let mut lot = lot;
@@ -1861,7 +1420,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 // (what is in its way: what is shut, and what stands on the sides it takes ground on)
                 let on = laid_blocks
                     .get(&p)
-                    .map_or(side_of(p), |block| block.at.iter().fold(0, |on, placed| on | side_of(placed.0)));
+                    .map_or(cx.side_of(p), |block| block.at.iter().fold(0, |on, placed| on | cx.side_of(placed.0)));
                 let mut shut: Vec<[f64; 4]> = base.clone();
                 (0..2).filter(|k| on & (1 << k) != 0).for_each(|k| shut.extend(sides[k].iter().copied()));
                 // (and the same with the roads open: a part with holes stands off the main roads if it can, but
@@ -1871,15 +1430,17 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 (0..2).filter(|k| on & (1 << k) != 0).for_each(|k| over_roads.extend(sides[k].iter().copied()));
                 let Some(first) = laid_blocks.get(&p) else {
                     let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
-                    let away = if victim[p] { settled(work.rect, &[(body(p), want)], &kept)[0] } else { None };
+                    let away = if victim[p] { settled(work.rect, &[(cx.body(p), want)], &kept)[0] } else { None };
                     let at = away
-                        .or_else(|| settled(work.rect, &[(body(p), want)], &shut)[0])
-                        .or_else(|| settled(work.rect, &[(body(p), want)], &over_roads)[0]);
+                        .or_else(|| settled(work.rect, &[(cx.body(p), want)], &shut)[0])
+                        .or_else(|| settled(work.rect, &[(cx.body(p), want)], &over_roads)[0]);
                     if aggressor[p] {
-                        halos.extend(at.map(|at| round_it(taken(p, at))));
+                        halos.extend(at.map(|at| round_it(cx.taken(p, at))));
                     }
                     if let Some(at) = at {
-                        (0..2).filter(|k| side_of(p) & (1 << k) != 0).for_each(|k| sides[k].extend(stands_on(p, at)));
+                        (0..2)
+                            .filter(|k| cx.side_of(p) & (1 << k) != 0)
+                            .for_each(|k| sides[k].extend(cx.stands_on(p, at)));
                     }
                     stood.insert(p, at);
                     continue;
@@ -1904,7 +1465,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         block
                             .at
                             .iter()
-                            .map(|&(m, from, q)| taken(m, (quartered(way, from), (q + way) % 2 == 1)))
+                            .map(|&(m, from, q)| cx.taken(m, (quartered(way, from), (q + way) % 2 == 1)))
                             .collect()
                     };
                     let ways: Vec<Vec<[f64; 4]>> = (0..4).map(pieces).collect();
@@ -1913,7 +1474,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         for &(m, from, q) in &block.at {
                             for (i, net) in parts[m].pads.iter().enumerate() {
                                 let (Some(net), Some(&offset)) =
-                                    (net.filter(|&net| is_signal(net)), parts[m].offsets.get(i))
+                                    (net.filter(|&net| cx.is_signal(net)), parts[m].offsets.get(i))
                                 else {
                                     continue;
                                 };
@@ -1938,7 +1499,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                         let (mut sum, mut all) = ([0.0, 0.0], 0.0);
                         for &(m, _, _) in &block.at {
                             if let Some(&ground) = grounds.get(&m) {
-                                let (mid, weight) = (middle(ground), body(m)[0] * body(m)[1]);
+                                let (mid, weight) = (middle(ground), cx.body(m)[0] * cx.body(m)[1]);
                                 sum = [sum[0] + weight * mid[0], sum[1] + weight * mid[1]];
                                 all += weight;
                             }
@@ -1996,16 +1557,16 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                                 // (no room for it as a block: its parts are placed with the rest, each by
                                 // itself; but those that go first have their place now, before the small ones)
                                 for &(m, _, _) in &block.at {
-                                    let alone = if goes_first(m) {
-                                        settled(work.rect, &[(body(m), middle(grounds[&m]))], &shut)[0]
+                                    let alone = if cx.goes_first(m) {
+                                        settled(work.rect, &[(cx.body(m), middle(grounds[&m]))], &shut)[0]
                                     } else {
                                         None
                                     };
                                     if let Some(at) = alone {
-                                        shut.extend(stands_on(m, at));
+                                        shut.extend(cx.stands_on(m, at));
                                         (0..2)
-                                            .filter(|k| side_of(m) & (1 << k) != 0)
-                                            .for_each(|k| sides[k].extend(stands_on(m, at)));
+                                            .filter(|k| cx.side_of(m) & (1 << k) != 0)
+                                            .for_each(|k| sides[k].extend(cx.stands_on(m, at)));
                                     }
                                     stood.insert(m, alone);
                                 }
@@ -2018,12 +1579,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                             let (to, quarters) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
                             stood.insert(m, Some((to, quarters % 2 == 1)));
                             block_quarter.insert(m, quarters);
-                            shut.push(taken(m, (to, quarters % 2 == 1)));
+                            shut.push(cx.taken(m, (to, quarters % 2 == 1)));
                             (0..2)
-                                .filter(|k| side_of(m) & (1 << k) != 0)
-                                .for_each(|k| sides[k].extend(stands_on(m, (to, quarters % 2 == 1))));
+                                .filter(|k| cx.side_of(m) & (1 << k) != 0)
+                                .for_each(|k| sides[k].extend(cx.stands_on(m, (to, quarters % 2 == 1))));
                             if aggressor[m] {
-                                halos.push(round_it(taken(m, (to, quarters % 2 == 1))));
+                                halos.push(round_it(cx.taken(m, (to, quarters % 2 == 1))));
                             }
                         }
                     }
@@ -2042,29 +1603,31 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let settled_first: Vec<([f64; 4], u8)> = stood
         .iter()
         .filter_map(|(&p, at)| at.map(|at| (p, at)))
-        .flat_map(|(p, at)| stands_on(p, at).into_iter().map(move |r| (r, side_of(p))))
+        .flat_map(|(p, at)| cx.stands_on(p, at).into_iter().map(move |r| (r, cx.side_of(p))))
         .collect();
     for (side, (_, rect, own)) in [1u8, 2].into_iter().flat_map(|side| fine_leaves.iter().map(move |leaf| (side, leaf)))
     {
         let mine: Vec<usize> = own
             .iter()
             .copied()
-            .filter(|&p| grounds.contains_key(&p) && !goes_first(p) && !in_block.contains_key(&p) && side_of(p) == side)
+            .filter(|&p| {
+                grounds.contains_key(&p) && !cx.goes_first(p) && !in_block.contains_key(&p) && cx.side_of(p) == side
+            })
             .collect();
         let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
         shut.extend(settled_first.iter().filter(|first| first.1 & side != 0).map(|first| first.0));
         // (what is disturbed first, off the ground near what disturbs; what of it finds no room so, with the rest)
         let hushed: Vec<usize> = mine.iter().copied().filter(|&p| victim[p]).collect();
         let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
-        let bodies: Vec<([f64; 2], Pt)> = hushed.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+        let bodies: Vec<([f64; 2], Pt)> = hushed.iter().map(|&p| (cx.body(p), middle(grounds[&p]))).collect();
         for (&p, at) in hushed.iter().zip(settled(*rect, &bodies, &kept)) {
             if let Some(at) = at {
                 stood.insert(p, Some(at));
-                shut.extend(stands_on(p, at));
+                shut.extend(cx.stands_on(p, at));
             }
         }
         let mine: Vec<usize> = mine.into_iter().filter(|p| !stood.get(p).is_some_and(|at| at.is_some())).collect();
-        let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+        let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (cx.body(p), middle(grounds[&p]))).collect();
         stood.extend(mine.iter().copied().zip(settled(*rect, &bodies, &shut)));
     }
     // What found no room in its zone (a zone cut by what its parts take, not by their shapes) is settled on
@@ -2077,7 +1640,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 .parts
                 .iter()
                 .copied()
-                .filter(|&p| stood.get(&p) == Some(&None) && parts[p].through == with_holes && side_of(p) == side)
+                .filter(|&p| stood.get(&p) == Some(&None) && parts[p].through == with_holes && cx.side_of(p) == side)
                 .collect();
             if left.is_empty() {
                 continue;
@@ -2086,13 +1649,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             shut.extend(
                 roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
             );
-            let in_the_way = work.parts.iter().filter(|&&p| side_of(p) & side != 0);
+            let in_the_way = work.parts.iter().filter(|&&p| cx.side_of(p) & side != 0);
             shut.extend(
                 in_the_way
                     .filter_map(|&p| stood.get(&p).copied().flatten().map(|at| (p, at)))
-                    .flat_map(|(p, at)| stands_on(p, at)),
+                    .flat_map(|(p, at)| cx.stands_on(p, at)),
             );
-            let bodies: Vec<([f64; 2], Pt)> = left.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+            let bodies: Vec<([f64; 2], Pt)> = left.iter().map(|&p| (cx.body(p), middle(grounds[&p]))).collect();
             stood.extend(left.iter().copied().zip(settled(work.rect, &bodies, &shut)));
             // (a part with holes that found no room off the main roads may stand on one: one by one)
             if with_holes {
@@ -2106,9 +1669,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     open.extend(
                         others
                             .filter_map(|&q| stood.get(&q).copied().flatten().map(|at| (q, at)))
-                            .flat_map(|(q, at)| stands_on(q, at)),
+                            .flat_map(|(q, at)| cx.stands_on(q, at)),
                     );
-                    stood.insert(p, settled(work.rect, &[(body(p), middle(grounds[&p]))], &open)[0]);
+                    stood.insert(p, settled(work.rect, &[(cx.body(p), middle(grounds[&p]))], &open)[0]);
                 }
             }
         }
@@ -2117,14 +1680,14 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // has its place is in its way there: its designer found that room for it.
     let homeless: Vec<usize> = (0..parts.len()).filter(|p| stood.get(p) == Some(&None) && parts[*p].placed).collect();
     for p in homeless {
-        let here = taken(p, (parts[p].at, false));
+        let here = cx.taken(p, (parts[p].at, false));
         let over =
             |r: [f64; 4]| r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6;
         let in_its_way = stood
             .iter()
-            .filter(|(&q, _)| q != p && side_of(q) & side_of(p) != 0)
+            .filter(|(&q, _)| q != p && cx.side_of(q) & cx.side_of(p) != 0)
             .filter_map(|(&q, at)| at.map(|at| (q, at)))
-            .flat_map(|(q, at)| stands_on(q, at))
+            .flat_map(|(q, at)| cx.stands_on(q, at))
             .any(over);
         if !in_its_way && !board.keepouts.iter().any(|&shut| over(shut)) {
             stood.insert(p, Some((parts[p].at, false)));
@@ -2158,7 +1721,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let mut pads_on: Vec<Vec<(usize, usize)>> = vec![Vec::new(); all_nets.len()];
     for (p, part) in parts.iter().enumerate() {
         for (i, net) in part.pads.iter().enumerate() {
-            if let Some(net) = net.filter(|&net| is_signal(net)) {
+            if let Some(net) = net.filter(|&net| cx.is_signal(net)) {
                 pads_on[net].push((p, i));
             }
         }
@@ -2202,7 +1765,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 if centre[p].is_none()
                     || on_gap.contains_key(&p)
                     || parts[p].offsets.is_empty()
-                    || stays(&parts[p])
+                    || cx.stays[p]
                     || block_quarter.contains_key(&p)
                 {
                     continue;
@@ -2211,7 +1774,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 if !parts[p].pieces.is_empty() {
                     continue;
                 }
-                let [w, h] = body(p);
+                let [w, h] = cx.body(p);
                 let any = on_gap.contains_key(&p) || (w - h).abs() < SETTLE;
                 let ways: Vec<u8> = if any { vec![0, 1, 2, 3] } else { vec![quarter[p] % 2, quarter[p] % 2 + 2] };
                 let mut best = (reach_of(p, quarter[p], centre, quarter, pins), quarter[p]);
@@ -2262,7 +1825,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             .pads
             .iter()
             .flatten()
-            .filter(|&&other| other != rail && is_signal(other))
+            .filter(|&&other| other != rail && cx.is_signal(other))
             .flat_map(|&other| (0..parts[chip].pads.len()).filter(move |&i| parts[chip].pads[i] == Some(other)))
             .map(pad_of)
             .collect();
@@ -2289,11 +1852,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             pins.insert(c, (mine, chip, pin));
         }
         // (just off the chip's body, on the side its pad is nearest)
-        let (pad, [w, h]) = (pad_of(pin), body(chip));
+        let (pad, [w, h]) = (pad_of(pin), cx.body(chip));
         let (w, h) = if quarter[chip] % 2 == 1 { (h, w) } else { (w, h) };
         let chip_body = [chip_at[0] - w / 2.0, chip_at[1] - h / 2.0, chip_at[0] + w / 2.0, chip_at[1] + h / 2.0];
         // (lying away from the chip, its own pad on the supply toward the chip's: so the track between is short)
-        let [cw, ch] = body(c);
+        let [cw, ch] = cx.body(c);
         let (long, short) = (cw.max(ch), cw.min(ch));
         let half = long / 2.0;
         let sides = [
@@ -2312,14 +1875,14 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let domain = domain_of_part[c];
         let (ground, mine) = (top[domain].rect, &top[domain].parts);
         let stands = |q: usize| !on_gap.contains_key(&q) && stood.get(&q).is_some_and(|at| at.is_some());
-        let hard = |q: usize| goes_first(q) || with_capacitors.contains(&q) || by_its_pad.contains(&q);
+        let hard = |q: usize| cx.goes_first(q) || with_capacitors.contains(&q) || by_its_pad.contains(&q);
         let rect_of = |q: usize, centre: &[Option<Pt>], quarter: &[u8]| {
-            centre[q].filter(|_| stands(q)).map(|at| taken(q, (at, quarter[q] % 2 == 1)))
+            centre[q].filter(|_| stands(q)).map(|at| cx.taken(q, (at, quarter[q] % 2 == 1)))
         };
         let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
         shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
         let open = shut.clone();
-        let meets = |a: usize, b: usize| side_of(a) & side_of(b) != 0;
+        let meets = |a: usize, b: usize| cx.side_of(a) & cx.side_of(b) != 0;
         shut.extend(
             mine.iter().filter(|&&q| q != c && hard(q) && meets(q, c)).filter_map(|&q| rect_of(q, &centre, &quarter)),
         );
@@ -2335,7 +1898,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let turn = turn != quarter_more;
         let (mut new_centre, mut new_quarter) = (centre.clone(), quarter.clone());
         (new_centre[c], new_quarter[c]) = (Some(at), u8::from(turn));
-        let here = taken(c, (at, turn));
+        let here = cx.taken(c, (at, turn));
         let over =
             |r: [f64; 4]| r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6;
         let mut moved: Vec<usize> = mine
@@ -2349,9 +1912,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut shut = open.clone();
             let others = mine.iter().filter(|&&other| other != q && meets(other, q) && (other == c || stands(other)));
             shut.extend(
-                others.filter_map(|&other| new_centre[other].map(|at| taken(other, (at, new_quarter[other] % 2 == 1)))),
+                others.filter_map(|&other| {
+                    new_centre[other].map(|at| cx.taken(other, (at, new_quarter[other] % 2 == 1)))
+                }),
             );
-            match (centre[q], settled(ground, &[(body(q), centre[q].unwrap_or(at))], &shut)[0]) {
+            match (centre[q], settled(ground, &[(cx.body(q), centre[q].unwrap_or(at))], &shut)[0]) {
                 (Some(_), Some((to, turn))) => (new_centre[q], new_quarter[q]) = (Some(to), u8::from(turn)),
                 _ => done = false,
             }
@@ -2394,7 +1959,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let key = strip.map(|v| (v * 1000.0).round() as i64);
             let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
             let quarters = gap_quarter.get(&p).copied().unwrap_or(0);
-            entry.2.push((b, p, want[usize::from(up)], lying(p, quarters)[usize::from(up)] + BESIDE));
+            entry.2.push((b, p, want[usize::from(up)], cx.lying(p, quarters)[usize::from(up)] + BESIDE));
         }
         for (up, strip, on_it) in strips.into_values() {
             let along = usize::from(up);
@@ -2404,15 +1969,15 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 let mut at = was;
                 at[along] = place;
                 // (it goes there if nothing that has its place is in its way there: no body, no other gap's part)
-                let here = body_at(p, at, quarters);
+                let here = cx.body_at(p, at, quarters);
                 let over = |r: [f64; 4]| {
                     r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6
                 };
                 let bodies = stood
                     .iter()
-                    .filter(|(&q, _)| q != p && side_of(q) & side_of(p) != 0 && shift_of[q] == shift_of[p])
+                    .filter(|(&q, _)| q != p && cx.side_of(q) & cx.side_of(p) != 0 && shift_of[q] == shift_of[p])
                     .filter_map(|(&q, at)| {
-                        at.map(|_| centre[q]).flatten().map(|at| taken(q, (at, quarter[q] % 2 == 1)))
+                        at.map(|_| centre[q]).flatten().map(|at| cx.taken(q, (at, quarter[q] % 2 == 1)))
                     });
                 let others = gap_rects.iter().filter(|(&q, _)| q != p).map(|(_, &r)| r);
                 if bodies.chain(others).chain(board.keepouts.iter().copied()).any(over) {
@@ -2450,7 +2015,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut better = false;
         for p in 0..parts.len() {
             let settled_here = !on_gap.contains_key(&p) && stood.get(&p).is_some_and(|at| at.is_some());
-            let free = settled_here && !goes_first(p) && !by_its_pad.contains(&p) && !with_capacitors.contains(&p);
+            let free = settled_here && !cx.goes_first(p) && !by_its_pad.contains(&p) && !with_capacitors.contains(&p);
             let Some(was) = centre[p].filter(|_| free) else { continue };
             let shift = shift_of[p];
             let mates: Vec<Pt> = nets_of[p]
@@ -2511,17 +2076,17 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let ground = top[domain].rect;
             let mut shut: Vec<[f64; 4]> = closed(&gap_rects);
             shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
-            let in_the_way = |q: &&usize| **q != p && !on_gap.contains_key(q) && side_of(**q) & side_of(p) != 0;
+            let in_the_way = |q: &&usize| **q != p && !on_gap.contains_key(q) && cx.side_of(**q) & cx.side_of(p) != 0;
             for &q in top[domain].parts.iter().filter(in_the_way) {
                 if let Some(at) = centre[q].filter(|_| stood.get(&q).is_some_and(|at| at.is_some())) {
-                    shut.push(taken(q, (at, quarter[q] % 2 == 1)));
+                    shut.push(cx.taken(q, (at, quarter[q] % 2 == 1)));
                 }
             }
             // (what is disturbed is not moved onto the ground near what disturbs)
             if victim[p] {
                 shut.extend(halos.iter().copied());
             }
-            let [w, h] = body(p);
+            let [w, h] = cx.body(p);
             let lying = if quarter[p] % 2 == 1 { [h, w] } else { [w, h] };
             let stack = |at: Pt| [at[0] + shift[0], at[1] + shift[1]];
             let now = boxes(p, stack(was), &centre);
@@ -2580,7 +2145,6 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let high = |k: usize| spots.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max);
         high(0) - low(0) + high(1) - low(1)
     };
-    let round1 = |v: f64| (v * 10.0).round() / 10.0;
     let mut repeats: Vec<Repeat> = unit_groups
         .iter()
         .map(|(names, count, keys, copies)| {
@@ -2593,13 +2157,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let mut worst: (f64, String) = (0.0, String::new());
             for (j, &p) in copies[0].iter().enumerate() {
                 for (i, net) in parts[p].pads.iter().enumerate() {
-                    let Some(net) = net.filter(|&net| is_signal(net) && seen.insert(net)) else { continue };
+                    let Some(net) = net.filter(|&net| cx.is_signal(net) && seen.insert(net)) else { continue };
                     let theirs: Vec<Option<usize>> = copies
                         .iter()
                         .map(|own| {
                             own.get(j)
                                 .and_then(|&q| parts[q].pads.get(i).copied().flatten())
-                                .filter(|&of| is_signal(of))
+                                .filter(|&of| cx.is_signal(of))
                         })
                         .collect();
                     if theirs.iter().any(|of| of.is_none()) {
@@ -2620,7 +2184,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     spread += most - least;
                     longest = longest.max(most);
                     if most - least > worst.0 {
-                        worst = (most - least, net_name(net));
+                        worst = (most - least, cx.net_name(net));
                     }
                 }
             }
@@ -2643,8 +2207,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // What disturbs and stands near what is disturbed, part by part: by how far their bodies are apart, as the
     // boards stack (on one board: another board is another matter).
     let stands_at = |p: usize| -> Option<[f64; 4]> {
-        let at = centre[p].filter(|_| !stays(&parts[p]))?;
-        let [w, h] = body(p);
+        let at = centre[p].filter(|_| !cx.stays[p])?;
+        let [w, h] = cx.body(p);
         let (w, h) = if quarter[p] % 2 == 1 { (h, w) } else { (w, h) };
         Some([at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0])
     };
@@ -2656,7 +2220,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let apart = [0, 1].map(|k| (loud[k].max(hushed[k]) - loud[k + 2].min(hushed[k + 2])).max(0.0));
             let far = dist([0.0, 0.0], apart);
             if far < QUIET_MM {
-                close.push((name(a), name(v), round1(far)));
+                close.push((cx.name(a), cx.name(v), round1(far)));
             }
         }
     }
@@ -2664,12 +2228,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let disturbing = [aggressor.iter().filter(|&&is| is).count(), victim.iter().filter(|&&is| is).count()];
     // (the sensitive nets: how many, how long in all, and the longest)
     let mut sensitive: (usize, f64, f64, String) = (0, 0.0, 0.0, String::new());
-    for net in (0..all_nets.len()).filter(|&net| all_nets[net].sensitive && is_signal(net)) {
+    for net in (0..all_nets.len()).filter(|&net| all_nets[net].sensitive && cx.is_signal(net)) {
         let far = span_of(net);
         sensitive.0 += 1;
         sensitive.1 += far;
         if far > sensitive.2 {
-            (sensitive.2, sensitive.3) = (far, net_name(net));
+            (sensitive.2, sensitive.3) = (far, cx.net_name(net));
         }
     }
     let sensitive = (sensitive.0, sensitive.1.round(), round1(sensitive.2), sensitive.3);
@@ -2677,7 +2241,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let pads_mm = all_reach(&centre, &quarter);
     // (a capacitor is by its pad within BESIDE_PIN; a large one within its own length and a millimetre: its
     // pad cannot be nearer than its body allows)
-    let by_pad = |c: usize| BESIDE_PIN.max(body(c)[0].max(body(c)[1]) + 1.0);
+    let by_pad = |c: usize| BESIDE_PIN.max(cx.body(c)[0].max(cx.body(c)[1]) + 1.0);
     let of_supplies =
         |c: &usize| parts[*c].capacitor && parts[*c].pads.iter().flatten().any(|net| found.rails.contains_key(net));
     let beside = pins
@@ -2711,9 +2275,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 }
             }
             let closing: BTreeSet<usize> = nearest.values().map(|best| best.1).collect();
-            let mut bodies = body(*chip)[0] * body(*chip)[1];
+            let mut bodies = cx.body(*chip)[0] * cx.body(*chip)[1];
             for &m in by_it.iter().filter(|&&m| !parts[m].capacitor || closing.contains(&m)) {
-                bodies += body(m)[0] * body(m)[1];
+                bodies += cx.body(m)[0] * cx.body(m)[1];
                 of_loop.extend(parts[m].pads.iter().flatten().filter(|net| !found.grounds.contains(net)));
                 spots.extend((0..parts[m].pads.len()).filter_map(|i| pad_at(m, i, quarter[m], &centre)));
             }
@@ -2726,10 +2290,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let high = |k: usize| spots.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max);
             let span = if spots.is_empty() { [0.0, 0.0] } else { [high(0) - low(0), high(1) - low(1)] };
             Loop {
-                chip: name(*chip),
-                node: net_name(*node),
-                parts: names(by_it),
-                beside: names(at_pads),
+                chip: cx.name(*chip),
+                node: cx.net_name(*node),
+                parts: cx.names(by_it),
+                beside: cx.names(at_pads),
                 span: span.map(|v| (v * 10.0).round() / 10.0),
                 mm2: (span[0] * span[1]).round(),
                 bodies: bodies.round(),
@@ -2757,10 +2321,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         reach[net]
             .iter()
             .copied()
-            .filter(|&m| m != from && parts[m].pads.len() == 2 && !is_head(m))
+            .filter(|&m| m != from && parts[m].pads.len() == 2 && !cx.is_head(m))
             .filter_map(|m| {
                 let other = parts[m].pads.iter().flatten().copied().find(|&other| other != net)?;
-                is_signal(other).then_some((m, other))
+                cx.is_signal(other).then_some((m, other))
             })
             .collect()
     };
@@ -2770,15 +2334,15 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     };
     let mut chains = 0;
     let mut back: Vec<(String, String, Vec<String>, f64, f64)> = Vec::new();
-    for start in (0..all_nets.len()).filter(|&net| is_signal(net)) {
-        let heads: Vec<usize> = reach[start].iter().copied().filter(|&q| is_head(q)).collect();
+    for start in (0..all_nets.len()).filter(|&net| cx.is_signal(net)) {
+        let heads: Vec<usize> = reach[start].iter().copied().filter(|&q| cx.is_head(q)).collect();
         let [from] = heads[..] else { continue };
         for (first, mut net) in series_on(start, from) {
             let (mut through, mut last) = (vec![first], first);
             let mut joints: Vec<usize> = vec![start, net]; // the nets along the chain, from its start
             let mut to: Option<(usize, usize)> = None;
             for _ in 0..CHAIN_MOST {
-                let heads: Vec<usize> = reach[net].iter().copied().filter(|&q| is_head(q)).collect();
+                let heads: Vec<usize> = reach[net].iter().copied().filter(|&q| cx.is_head(q)).collect();
                 match (&heads[..], &series_on(net, last)[..]) {
                     ([head], _) => {
                         to = Some((*head, net));
@@ -2813,9 +2377,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             if along > BACK * direct + room {
                 let round = |v: f64| (v * 10.0).round() / 10.0;
                 back.push((
-                    name(from),
-                    name(to),
-                    through.iter().map(|&m| name(m)).collect(),
+                    cx.name(from),
+                    cx.name(to),
+                    through.iter().map(|&m| cx.name(m)).collect(),
                     round(direct),
                     round(along),
                 ));
@@ -2829,7 +2393,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .filter_map(|(&c, &(mine, chip, pin))| {
             let (here, there) = (pad_at(c, mine, quarter[c], &centre)?, pad_at(chip, pin, quarter[chip], &centre)?);
             let shared = at_pad.get(&(chip, pin)).copied().unwrap_or(1);
-            Some((name(c), name(chip), (dist(here, there) * 10.0).round() / 10.0, shared))
+            Some((cx.name(c), cx.name(chip), (dist(here, there) * 10.0).round() / 10.0, shared))
         })
         .collect();
     capacitors.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
@@ -2839,12 +2403,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let settled_here = stood.get(&p).is_some_and(|at| at.is_some());
             let (rect, fits) = match (on_gap.contains_key(&p), settled_here) {
                 (true, _) => (gap_rects.get(&p).copied(), true),
-                (false, true) => (Some(taken(p, (at, quarter[p] % 2 == 1))), true),
+                (false, true) => (Some(cx.taken(p, (at, quarter[p] % 2 == 1))), true),
                 (false, false) => (grounds.get(&p).copied(), false),
             };
             spot[p] = Some([at[0] + shift_of[p][0], at[1] + shift_of[p][1]]);
             places.push(Place {
-                part: name(p),
+                part: cx.name(p),
                 at: at.map(round2),
                 rect: rect.map(|r| r.map(round2)),
                 turn: 90 * u16::from(quarter[p] % 4),
@@ -2852,7 +2416,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 pieces: if parts[p].pieces.is_empty() || rect.is_none() {
                     Vec::new()
                 } else {
-                    stands_on(p, (at, quarter[p] % 2 == 1)).into_iter().map(|r| r.map(round2)).collect()
+                    cx.stands_on(p, (at, quarter[p] % 2 == 1)).into_iter().map(|r| r.map(round2)).collect()
                 },
                 fits,
                 off: parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0),
@@ -2860,7 +2424,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
     }
     // (what is the board's own stays where it stands)
-    for part in parts.iter().filter(|part| stays(part)) {
+    for part in parts.iter().zip(&cx.stays).filter(|(_, &stays)| stays).map(|(part, _)| part) {
         places.push(Place {
             part: part.name.clone(),
             at: part.at.map(round2),
@@ -2905,7 +2469,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         kinds.iter().map(|kind| (kind.to_string(), 0, 0.0, 0.0)).collect();
     let part_shift: BTreeMap<usize, Pt> =
         fine_leaves.iter().flat_map(|(domain, _, own)| own.iter().map(|&p| (p, shifts[to[*domain]]))).collect();
-    for net in &nets {
+    for net in nets {
         if !net.iter().all(|&p| parts[p].placed && spot[p].is_some()) {
             continue;
         }
@@ -2955,13 +2519,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 (0..rects.len()).filter(|&l| on_plane[l].contains(&r)).map(|l| rects[l]).collect();
             let fed = |p: &&usize| leaf_at.get(p).is_some_and(|&l| on_plane[l].contains(&r));
             Pour {
-                net: net_name(rail_nets[r]),
-                ground: found.rails[&rail_nets[r]].0.map(net_name).unwrap_or_default(),
+                net: cx.net_name(rail_nets[r]),
+                ground: found.rails[&rail_nets[r]].0.map(|net| cx.net_name(net)).unwrap_or_default(),
                 layers: power_layers.clone(),
                 area: under.iter().map(|r| (r[2] - r[0]) * (r[3] - r[1])).sum::<f64>().round(),
                 rects: under.into_iter().map(|r| r.map(|v| (v * 100.0).round() / 100.0)).collect(),
                 parts: reach[rail_nets[r]].iter().filter(fed).count(),
-                by_track: names(&rail_parts[r].1),
+                by_track: cx.names(&rail_parts[r].1),
                 pieces: in_pieces[r],
             }
         })
@@ -2982,8 +2546,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .zip(&held)
         .map(|(&rect, names)| Region {
             rect,
-            room: room(rect).round(),
-            needed: top.iter().filter(|work| names.contains(&work.name)).map(need).sum::<f64>().round(),
+            room: cx.room(rect).round(),
+            needed: top.iter().filter(|work| names.contains(&work.name)).map(|work| cx.need(work)).sum::<f64>().round(),
             roads: roads.iter().map(|road| overlap(road.rect, rect)).sum::<f64>().round(),
             zones: names.clone(),
         })
@@ -3065,9 +2629,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             off: median(&stands).map(|m| (dist(m, middle(r)) * 10.0).round() / 10.0),
         }
     }
-    let zones: Vec<Zone> = top.iter().map(|work| told(work, board, &nets, &mut leaf_of, &mut leaves)).collect();
+    let zones: Vec<Zone> = top.iter().map(|work| told(work, board, nets, &mut leaf_of, &mut leaves)).collect();
     let (mut now_mm, mut then_mm) = (0.0, 0.0);
-    for net in &nets {
+    for net in nets {
         let reached: BTreeSet<usize> =
             net.iter().filter_map(|p| leaf_of.get(p).copied()).filter(|&l| leaves[l].0.is_some()).collect();
         if reached.len() < 2 {
@@ -3089,7 +2653,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         now_mm: now_mm.round(),
         then_mm: then_mm.round(),
         regions,
-        stranded: travel.left.iter().map(|&k| net_name(signal[k])).collect(),
+        stranded: travel.left.iter().map(|&k| cx.net_name(signal[k])).collect(),
         tall,
         travel,
         first,

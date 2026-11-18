@@ -1,6 +1,7 @@
 //! Places for bodies: along a line, on a ground, turned by quarters.
 
 use super::constants::SETTLE;
+use crate::geom::dist;
 use crate::model::Pt;
 
 pub(super) fn middle(rect: [f64; 4]) -> Pt {
@@ -274,4 +275,29 @@ pub(super) fn settled_shape(
             best.map(|b| b.1)
         })
         .collect()
+}
+
+/// The ground two rectangles share, in mm2.
+pub(super) fn overlap(a: [f64; 4], b: [f64; 4]) -> f64 {
+    (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0)
+}
+
+/// The ground of a rectangle, in mm2.
+pub(super) fn area(r: [f64; 4]) -> f64 {
+    (r[2] - r[0]) * (r[3] - r[1])
+}
+
+/// How far a place is from a rectangle: nothing if it is on it.
+pub(super) fn off_rect(at: Pt, r: [f64; 4]) -> f64 {
+    dist(at, [at[0].clamp(r[0], r[2]), at[1].clamp(r[1], r[3])])
+}
+
+/// A length told to a tenth of a mm.
+pub(super) fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// A length told to a hundredth of a mm.
+pub(super) fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
 }

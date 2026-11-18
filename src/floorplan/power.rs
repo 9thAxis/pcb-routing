@@ -1,7 +1,8 @@
 //! The grounds and the supplies of a board, and the ground each part is on.
 
 use super::constants::BYPASSED;
-use super::types::Board;
+use super::known::Known;
+use super::types::{Board, Domain, Power, Rail};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Whether a net is a ground by its name: GND, VSS, 0V or GROUND as a word of it (VIB_GND, FIELD_0V, AGND1).
@@ -116,4 +117,67 @@ pub(super) fn powered(board: &Board) -> Powered {
     let mut grounds: Vec<usize> = (0..nets.len()).filter(|&net| ground[net]).collect();
     grounds.sort_by(|&a, &b| nets[a].name.cmp(&nets[b].name));
     Powered { home, stands, rails, grounds }
+}
+
+/// The power, as it is told: the domains with their supplies, the parts between two grounds, the parts that
+/// link two supplies, and the parts on no ground.
+pub(super) fn power_told(cx: &Known) -> Power {
+    let (parts, found, reach) = (cx.parts, &cx.found, &cx.reach);
+    let (domains, adrift) = (&cx.domains, &cx.adrift);
+    let rails_of = |g: usize| -> Vec<Rail> {
+        let mut rails: Vec<Rail> = found
+            .rails
+            .iter()
+            .filter(|(_, rail)| rail.0 == Some(g))
+            .map(|(&net, rail)| Rail {
+                net: cx.net_name(net),
+                parts: cx.names(&reach[net].iter().copied().collect::<Vec<_>>()),
+                capacitors: rail.1,
+            })
+            .collect();
+        rails.sort_by(|a, b| b.parts.len().cmp(&a.parts.len()).then(a.net.cmp(&b.net)));
+        rails
+    };
+    let mut links: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for (p, part) in parts.iter().enumerate().filter(|(_, part)| !part.capacitor) {
+        let on: BTreeSet<String> = part
+            .pads
+            .iter()
+            .flatten()
+            .filter(|net| found.rails.contains_key(net))
+            .map(|&net| cx.net_name(net))
+            .collect();
+        let on: Vec<String> = on.into_iter().collect();
+        for (i, a) in on.iter().enumerate() {
+            for b in &on[i + 1..] {
+                links.entry((a.clone(), b.clone())).or_default().push(cx.name(p));
+            }
+        }
+    }
+    let mut between: Vec<(String, Vec<String>)> = (0..parts.len())
+        .filter(|&p| found.stands[p].len() > 1)
+        .map(|p| {
+            let mut on: Vec<String> = found.stands[p].iter().map(|&g| cx.net_name(g)).collect();
+            on.sort();
+            (cx.name(p), on)
+        })
+        .collect();
+    between.sort();
+    Power {
+        domains: domains
+            .iter()
+            .map(|(g, own)| Domain { ground: cx.net_name(*g), parts: cx.names(own), rails: rails_of(*g) })
+            .collect(),
+        between,
+        links: links
+            .into_iter()
+            .map(|((a, b), mut by)| {
+                (a, b, {
+                    by.sort();
+                    by
+                })
+            })
+            .collect(),
+        adrift: cx.names(adrift),
+    }
 }
