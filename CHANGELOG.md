@@ -94,6 +94,13 @@
   its pins are (KiCad writes it on the pads when a board is updated from its schematic), a part that could
   stand for either of two chips is the receiver's and not the driver's, and a part in series with a net of
   its own at each end goes to the pad that drives.
+  A chip or a connector and the parts that stand by its pads are a block (`blocks`, `alike`): laid out
+  once by themselves on empty ground, each part as its footprint is drawn, then placed as one body by the
+  true outline of its parts (blocks lie into each other's corners), turned the way that leaves its pads
+  nearest what they join outside it; a block with no room is taken apart and its parts placed singly.
+  Blocks of one make-up (the same chip, the same parts by the same pads) are laid out by the same steps
+  and come out alike, however their parts stand in the file; the plan names them. Chains are measured from
+  pad to pad.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

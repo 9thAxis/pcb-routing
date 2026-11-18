@@ -568,6 +568,13 @@ pub struct Floorplan {
     /// first. A chain doubles back if that is more than BACK times the straight way and BESIDE_PIN for each
     /// of its hops.
     pub back: Vec<(String, String, Vec<String>, f64, f64)>,
+    /// The blocks: a chip or a connector with the parts that stand by its pads, laid out by themselves and
+    /// placed as one. How many there are, and how many parts they hold in all.
+    pub blocks: [usize; 2],
+    /// The blocks of one make-up (the same chip, the same parts by the same pads): (how many there are, how
+    /// many of them came out laid out alike, the parts in each, the chips), the most numerous first. Those
+    /// of one make-up are laid out by the same steps, and so alike.
+    pub alike: Vec<(usize, usize, usize, Vec<String>)>,
     /// The switching regulators, each with its loop: the largest loop first.
     pub loops: Vec<Loop>,
     /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
@@ -1061,6 +1068,12 @@ const REFINES: usize = 4;
 const REFINE_MM: f64 = 8.0;
 /// What the nets of a part may grow by, in mm, when it is moved to the one pad it is there for.
 const OWN_PAD_MM: f64 = 1.0;
+/// A block is first looked for room no further than this from where it is wanted, in mm; and of the ways it
+/// may be turned, those that come within AS_NEAR of the nearest are weighed by what its pads join.
+const BLOCK_NEAR: f64 = 25.0;
+const AS_NEAR: f64 = 2.0;
+/// How far round a chip its block may reach, in mm; and how far from its pad a part of the block may stand.
+const BLOCK_REACH: f64 = 8.0;
 /// A body of this many mm2 or more is settled before the others, over the whole ground of its domain.
 const LARGE: f64 = 64.0;
 /// A part with holes stands on no road down to this level (see [`Road::level`]).
@@ -1139,6 +1152,80 @@ fn settled(rect: [f64; 4], bodies: &[([f64; 2], Pt)], shut: &[[f64; 4]]) -> Vec<
         }
     }
     found
+}
+
+/// A place on a ground for a body of several pieces (each [x0, y0, x1, y1] from its middle), given in each of
+/// the ways it may be turned: for each way, the place for its middle nearest `want` at which every piece is
+/// on the ground and off what is `shut`, no further from `want` than `within`; None where there is none.
+fn settled_shape(rect: [f64; 4], ways: &[Vec<[f64; 4]>], want: Pt, shut: &[[f64; 4]], within: f64) -> Vec<Option<Pt>> {
+    let cells = |mm: f64| (mm / SETTLE - 1e-6).ceil().max(1.0) as i64;
+    let (wide, high) = (cells(rect[2] - rect[0]), cells(rect[3] - rect[1]));
+    let mut sums = vec![0u32; ((wide + 1) * (high + 1)) as usize];
+    {
+        let mut taken = vec![false; (wide * high) as usize];
+        let low = |v: f64, from: f64, most: i64| (((v - from) / SETTLE + 1e-6).floor() as i64).clamp(0, most);
+        let top = |v: f64, from: f64, most: i64| (((v - from) / SETTLE - 1e-6).ceil() as i64).clamp(0, most);
+        for r in shut {
+            for y in low(r[1], rect[1], high)..top(r[3], rect[1], high) {
+                for x in low(r[0], rect[0], wide)..top(r[2], rect[0], wide) {
+                    taken[(y * wide + x) as usize] = true;
+                }
+            }
+        }
+        for y in 0..high {
+            let mut row = 0u32;
+            for x in 0..wide {
+                row += u32::from(taken[(y * wide + x) as usize]);
+                sums[((y + 1) * (wide + 1) + x + 1) as usize] = sums[(y * (wide + 1) + x + 1) as usize] + row;
+            }
+        }
+    }
+    let at = |x: i64, y: i64| sums[(y * (wide + 1) + x) as usize];
+    // (the middles tried: the points of the grid no further from what is wanted than `within`)
+    let span = |want: f64, from: f64, most: i64| {
+        let low = (((want - within - from) / SETTLE).floor() as i64).clamp(0, most);
+        let top = (((want + within - from) / SETTLE).ceil() as i64).clamp(0, most);
+        (low, top)
+    };
+    let ((x_low, x_top), (y_low, y_top)) = (span(want[0], rect[0], wide), span(want[1], rect[1], high));
+    ways.iter()
+        .map(|pieces| {
+            // (each piece as cells from the middle's)
+            let pieces: Vec<[i64; 4]> = pieces
+                .iter()
+                .map(|r| {
+                    [
+                        (r[0] / SETTLE + 1e-6).floor() as i64,
+                        (r[1] / SETTLE + 1e-6).floor() as i64,
+                        (r[2] / SETTLE - 1e-6).ceil() as i64,
+                        (r[3] / SETTLE - 1e-6).ceil() as i64,
+                    ]
+                })
+                .collect();
+            let mut best: Option<(f64, Pt)> = None;
+            for y in y_low..=y_top {
+                for x in x_low..=x_top {
+                    let mid = [rect[0] + x as f64 * SETTLE, rect[1] + y as f64 * SETTLE];
+                    let far = (mid[0] - want[0]).powi(2) + (mid[1] - want[1]).powi(2);
+                    if best.is_some_and(|b| far >= b.0) {
+                        continue;
+                    }
+                    let free = pieces.iter().all(|r| {
+                        let (x0, y0, x1, y1) = (x + r[0], y + r[1], x + r[2], y + r[3]);
+                        x0 >= 0
+                            && y0 >= 0
+                            && x1 <= wide
+                            && y1 <= high
+                            && at(x1, y1) + at(x0, y0) == at(x1, y0) + at(x0, y1)
+                    });
+                    if free {
+                        best = Some((far, mid));
+                    }
+                }
+            }
+            best.map(|b| b.1)
+        })
+        .collect()
 }
 
 /// What a cut is known by from one laying out to the next: the zones it parts, by name.
@@ -2785,28 +2872,317 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // that part much of the board (a lesser road, a track or two, goes round it); the others may stand over
     // a road, whose tracks run on the layers beneath.
     let goes_first = |p: usize| parts[p].through || body(p)[0] * body(p)[1] >= LARGE;
+    // A chip (or a connector) and the parts that stand by its pads are a block: laid out once, by themselves
+    // on empty ground (the chip in the middle, each part beside the pad it is for, in the order they are
+    // taken), and then placed as one body. Where each is taken after its neighbours, the ground by a chip's
+    // pads is gone before its own parts come to it. Two blocks of the same make-up come out alike: the
+    // steps that lay them out are the same.
+    let mut order = bypasses.clone();
+    // (the parts of the loops first, as they were found: each inductor before the capacitors by it)
+    order[placed_first..].sort_by(|a, b| {
+        let held = |c: usize| farads(&parts[c].value).unwrap_or(f64::INFINITY);
+        held(a.0).total_cmp(&held(b.0)).then(parts[a.0].name.cmp(&parts[b.0].name))
+    });
+    let part_domain: BTreeMap<usize, usize> =
+        fine_leaves.iter().flat_map(|(domain, _, own)| own.iter().map(move |&p| (p, *domain))).collect();
+    let mut block_head: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut members_of: BTreeMap<usize, Vec<(usize, usize, usize)>> = BTreeMap::new();
+    for &(c, by, net) in &order {
+        let head = block_head.get(&by).copied().unwrap_or(by);
+        let free = c != head && !block_head.contains_key(&c) && !members_of.contains_key(&c);
+        let together =
+            grounds.contains_key(&head) && grounds.contains_key(&c) && part_domain.get(&c) == part_domain.get(&head);
+        if free && together && !parts[by].offsets.is_empty() && !parts[head].offsets.is_empty() {
+            block_head.insert(c, head);
+            members_of.entry(head).or_default().push((c, by, net));
+        }
+    }
+    struct Block {
+        /// Each of its parts: where its middle is from the block's, and how many quarters it is turned.
+        at: Vec<(usize, Pt, u8)>,
+        /// The same as the chip is drawn: where each is from the chip, and its quarters from its own drawing.
+        drawn: Vec<(usize, Pt, u8)>,
+        through: bool,
+        /// For each part that stands by a pad: (the part, (its pad, the part it stands by, that one's pad)).
+        pins: Vec<(usize, (usize, usize, usize))>,
+    }
+    // (a block is laid out with each part as its footprint is drawn, not as it happens to stand in the file
+    // today: two blocks of one make-up are then laid out by the same steps, and come out the same)
+    let stands_turned = |p: usize| ((parts[p].angle / 90.0).round() as i64).rem_euclid(4) as u8;
+    let drawn_pad = |p: usize, i: usize| quartered((4 - stands_turned(p)) % 4, parts[p].offsets[i]);
+    let drawn_body = |p: usize, quarters: u8| {
+        let [w, h] = body(p);
+        if (stands_turned(p) + quarters) % 2 == 1 {
+            [h, w]
+        } else {
+            [w, h]
+        }
+    };
+    let drawn_rect = |p: usize, at: Pt, quarters: u8| {
+        let [w, h] = drawn_body(p, quarters);
+        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
+    };
+    let lay_block = |head: usize, list: &[(usize, usize, usize)]| -> Block {
+        // (where each part is from the chip, and how many quarters it is turned from how it is drawn)
+        let mut pos: BTreeMap<usize, (Pt, u8)> = [(head, ([0.0, 0.0], 0u8))].into_iter().collect();
+        let [hw, hh] = body(head);
+        let reach = hw.max(hh) / 2.0 + BLOCK_REACH;
+        let ground = [-reach, -reach, reach, reach];
+        let mut shut: Vec<[f64; 4]> = vec![drawn_rect(head, [0.0, 0.0], 0)];
+        let mut at_pad: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+        let mut pins: Vec<(usize, (usize, usize, usize))> = Vec::new();
+        for &(c, by, net) in list {
+            let Some(&(by_at, by_q)) = pos.get(&by) else { continue };
+            let pad_of = |i: usize| {
+                let from = quartered(by_q, drawn_pad(by, i));
+                [by_at[0] + from[0], by_at[1] + from[1]]
+            };
+            let on_net = (0..parts[by].pads.len()).filter(|&i| parts[by].pads[i] == Some(net));
+            // (a part whose other pad is on a net of the same part stands between the two pads: of the pads
+            // on this net, the one nearest a pad on that other net; else the pads in turn)
+            let partners: Vec<Pt> = parts[c]
+                .pads
+                .iter()
+                .flatten()
+                .filter(|&&other| other != net && is_signal(other))
+                .flat_map(|&other| (0..parts[by].pads.len()).filter(move |&i| parts[by].pads[i] == Some(other)))
+                .map(pad_of)
+                .collect();
+            let across = |i: usize| {
+                let nearest = partners.iter().map(|&there| dist(pad_of(i), there)).fold(f64::INFINITY, f64::min);
+                if nearest.is_finite() {
+                    (nearest / SETTLE).round() as i64
+                } else {
+                    0
+                }
+            };
+            let Some(pin) = on_net.min_by(|&a, &b| {
+                let has = |i: usize| at_pad.get(&(by, i)).copied().unwrap_or(0);
+                across(a).cmp(&across(b)).then(has(a).cmp(&has(b))).then(a.cmp(&b))
+            }) else {
+                continue;
+            };
+            // (just off the body of what it stands by, on the side the pad is nearest, lying away from it)
+            let pad = pad_of(pin);
+            let by_body = drawn_rect(by, by_at, by_q);
+            let [cw, ch] = drawn_body(c, 0);
+            let (long, short) = (cw.max(ch), cw.min(ch));
+            let half = long / 2.0;
+            let sides = [
+                (pad[0] - by_body[0], [by_body[0] - half, pad[1]], true),
+                (by_body[2] - pad[0], [by_body[2] + half, pad[1]], true),
+                (pad[1] - by_body[1], [pad[0], by_body[1] - half], false),
+                (by_body[3] - pad[1], [pad[0], by_body[3] + half], false),
+            ];
+            let (_, want, along_x) =
+                sides.iter().fold(sides[0], |best, side| if side.0 < best.0 { *side } else { best });
+            let lying = if along_x { [long, short] } else { [short, long] };
+            let quarter_more = (lying[0] - cw).abs() > 1e-9;
+            let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
+            if dist(at, pad) > BLOCK_REACH {
+                continue;
+            }
+            // (of the two ways it may lie there, the one with its own pad on the net toward the pad)
+            let mut q = u8::from(turn != quarter_more);
+            if let Some(mine) = parts[c].pads.iter().position(|&of| of == Some(net)) {
+                if mine < parts[c].offsets.len() {
+                    let far = |q: u8| {
+                        let from = quartered(q, drawn_pad(c, mine));
+                        dist([at[0] + from[0], at[1] + from[1]], pad)
+                    };
+                    if far(q + 2) < far(q) - 1e-9 {
+                        q += 2;
+                    }
+                }
+                pins.push((c, (mine, by, pin)));
+            }
+            *at_pad.entry((by, pin)).or_insert(0) += 1;
+            pos.insert(c, (at, q));
+            shut.push(drawn_rect(c, at, q));
+        }
+        let low = |k: usize| shut.iter().map(|r| r[k]).fold(f64::INFINITY, f64::min);
+        let high = |k: usize| shut.iter().map(|r| r[k + 2]).fold(f64::NEG_INFINITY, f64::max);
+        let mid = [(low(0) + high(0)) / 2.0, (low(1) + high(1)) / 2.0];
+        Block {
+            // (told as each part stands in the file: turned from that by what it is turned from its drawing,
+            // less what it stands turned already)
+            at: pos
+                .iter()
+                .map(|(&p, &(at, q))| (p, [at[0] - mid[0], at[1] - mid[1]], (q + 4 - stands_turned(p)) % 4))
+                .collect(),
+            drawn: pos.iter().map(|(&p, &(at, q))| (p, at, q)).collect(),
+            through: pos.keys().any(|&p| parts[p].through),
+            pins,
+        }
+    };
+    let laid_blocks: BTreeMap<usize, Block> = members_of
+        .iter()
+        .map(|(&head, list)| (head, lay_block(head, list)))
+        .filter(|(_, block)| block.at.len() > 1)
+        .collect();
+    // The blocks of one make-up, and whether they are laid out alike. A make-up is the kind of the chip (its
+    // footprint and its value) and, for each part by it, its kind and the pads it stands between; a layout is
+    // where each such part lies from the chip and how it is turned.
+    let kind = |p: usize| format!("{}|{}", parts[p].footprint, parts[p].value);
+    type Made = BTreeMap<(String, Vec<String>), Vec<(usize, Vec<String>)>>; // make-up -> [(chip, layout)]
+    let mut made: Made = BTreeMap::new();
+    for (&head, block) in &laid_blocks {
+        let by_pad: BTreeMap<usize, (usize, usize, usize)> = block.pins.iter().copied().collect();
+        let mut make: Vec<String> = Vec::new();
+        let mut lies: Vec<String> = Vec::new();
+        for &(m, at, q) in block.drawn.iter().filter(|placed| placed.0 != head) {
+            let pads = by_pad.get(&m).map_or(String::new(), |&(mine, by, pin)| format!("{mine}>{}:{pin}", kind(by)));
+            make.push(format!("{} {pads}", kind(m)));
+            lies.push(format!("{} {pads} {:.2} {:.2} {q}", kind(m), at[0] + 0.0, at[1] + 0.0));
+        }
+        make.sort();
+        lies.sort();
+        made.entry((kind(head), make)).or_default().push((head, lies));
+    }
+    let mut alike: Vec<(usize, usize, usize, Vec<String>)> = made
+        .values()
+        .filter(|group| group.len() > 1)
+        .map(|group| {
+            let mut count: BTreeMap<&Vec<String>, usize> = BTreeMap::new();
+            group.iter().for_each(|(_, lies)| *count.entry(lies).or_insert(0) += 1);
+            let most = count.values().copied().max().unwrap_or(0);
+            (group.len(), most, group[0].1.len() + 1, names(&group.iter().map(|of| of.0).collect::<Vec<_>>()))
+        })
+        .collect();
+    alike.sort_by(|a, b| (b.0 * b.2).cmp(&(a.0 * a.2)).then(a.3.cmp(&b.3)));
+    let blocks = [laid_blocks.len(), laid_blocks.values().map(|block| block.at.len()).sum()];
+    // (what of a block's parts found no room in it is no part of it, and is placed with the rest)
+    let in_block: BTreeMap<usize, usize> =
+        laid_blocks.iter().flat_map(|(&head, block)| block.at.iter().map(move |&(p, _, _)| (p, head))).collect();
+    let holed = |p: usize| laid_blocks.get(&p).map_or(parts[p].through, |block| block.through);
+    let mut block_quarter: BTreeMap<usize, u8> = BTreeMap::new();
+    // (where a part that is not yet settled is taken to come: the middle of the ground that came to it)
+    let wanted = |q: usize| on_gap.get(&q).copied().or_else(|| grounds.get(&q).map(|&r| middle(r)));
     for work in top.iter() {
-        let mine: Vec<usize> =
-            work.parts.iter().copied().filter(|&p| grounds.contains_key(&p) && goes_first(p)).collect();
+        let mine: Vec<usize> = work
+            .parts
+            .iter()
+            .copied()
+            .filter(|&p| {
+                grounds.contains_key(&p)
+                    && (laid_blocks.contains_key(&p) || (goes_first(p) && !in_block.contains_key(&p)))
+            })
+            .collect();
         let mut found: Vec<[f64; 4]> = Vec::new();
         for with_holes in [true, false] {
-            let lot: Vec<usize> = mine.iter().copied().filter(|&p| parts[p].through == with_holes).collect();
+            let lot: Vec<usize> = mine.iter().copied().filter(|&p| holed(p) == with_holes).collect();
             let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
             shut.extend(
                 roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
             );
             shut.extend(found.iter().copied());
-            let bodies: Vec<([f64; 2], Pt)> = lot.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
-            for (&p, at) in lot.iter().zip(settled(work.rect, &bodies, &shut)) {
-                found.extend(at.map(|at| taken(p, at)));
-                stood.insert(p, at);
+            // (the largest first, a block by what its parts take; each one by one, on what the others left)
+            let takes = |p: usize| -> f64 {
+                laid_blocks.get(&p).map_or(body(p)[0] * body(p)[1], |block| {
+                    block.at.iter().map(|&(m, _, _)| body(m)[0] * body(m)[1]).sum()
+                })
+            };
+            let mut lot = lot;
+            lot.sort_by(|&a, &b| takes(b).total_cmp(&takes(a)).then(a.cmp(&b)));
+            for p in lot {
+                let want = middle(grounds[&p]);
+                let Some(block) = laid_blocks.get(&p) else {
+                    let at = settled(work.rect, &[(body(p), want)], &shut)[0];
+                    shut.extend(at.map(|at| taken(p, at)));
+                    found.extend(at.map(|at| taken(p, at)));
+                    stood.insert(p, at);
+                    continue;
+                };
+                // A block is placed by the bodies of its parts, not by a box round them (blocks then lie
+                // into each other's corners), in any of the four ways it may be turned: of the ways that
+                // come about as near where it is wanted as the nearest, the one that leaves its pads nearest
+                // what they join outside the block. First near where it is wanted; then anywhere.
+                let pieces = |way: u8| -> Vec<[f64; 4]> {
+                    block.at.iter().map(|&(m, from, q)| taken(m, (quartered(way, from), (q + way) % 2 == 1))).collect()
+                };
+                let ways: Vec<Vec<[f64; 4]>> = (0..4).map(pieces).collect();
+                let outside = |way: u8, here: Pt| -> f64 {
+                    let mut all = 0.0;
+                    for &(m, from, q) in &block.at {
+                        for (i, net) in parts[m].pads.iter().enumerate() {
+                            let (Some(net), Some(&offset)) =
+                                (net.filter(|&net| is_signal(net)), parts[m].offsets.get(i))
+                            else {
+                                continue;
+                            };
+                            let own = quartered(q, offset);
+                            let pad = quartered(way, [from[0] + own[0], from[1] + own[1]]);
+                            let pad = [here[0] + pad[0], here[1] + pad[1]];
+                            let nearest = reach[net]
+                                .iter()
+                                .filter(|other| in_block.get(other) != Some(&p))
+                                .filter_map(|&other| wanted(other))
+                                .map(|there| (there[0] - pad[0]).abs() + (there[1] - pad[1]).abs())
+                                .fold(f64::INFINITY, f64::min);
+                            if nearest.is_finite() {
+                                all += nearest;
+                            }
+                        }
+                    }
+                    all
+                };
+                // (a block is wanted where the grounds that came to its parts are, taken together)
+                let want = {
+                    let (mut sum, mut all) = ([0.0, 0.0], 0.0);
+                    for &(m, _, _) in &block.at {
+                        if let Some(&ground) = grounds.get(&m) {
+                            let (mid, weight) = (middle(ground), body(m)[0] * body(m)[1]);
+                            sum = [sum[0] + weight * mid[0], sum[1] + weight * mid[1]];
+                            all += weight;
+                        }
+                    }
+                    if all > 0.0 {
+                        [sum[0] / all, sum[1] / all]
+                    } else {
+                        want
+                    }
+                };
+                let mut tried = settled_shape(work.rect, &ways, want, &shut, BLOCK_NEAR);
+                if tried.iter().all(|at| at.is_none()) {
+                    tried = settled_shape(work.rect, &ways, want, &shut, f64::INFINITY);
+                }
+                let nearest = tried.iter().flatten().map(|&at| dist(at, want)).fold(f64::INFINITY, f64::min);
+                let chosen = tried
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(way, at)| at.map(|at| (way as u8, at)))
+                    .filter(|&(_, at)| dist(at, want) <= nearest + AS_NEAR)
+                    .map(|(way, at)| (outside(way, at), way, at))
+                    .fold(
+                        None::<(f64, u8, Pt)>,
+                        |best, now| if best.is_some_and(|b| b.0 <= now.0) { best } else { Some(now) },
+                    );
+                let Some((_, way, here)) = chosen else {
+                    // (no room for it as a block: its parts are placed with the rest, each by itself)
+                    block.at.iter().for_each(|&(m, _, _)| {
+                        stood.insert(m, None);
+                    });
+                    continue;
+                };
+                for &(m, from, q) in &block.at {
+                    let from = quartered(way, from);
+                    let (to, quarters) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
+                    stood.insert(m, Some((to, quarters % 2 == 1)));
+                    block_quarter.insert(m, quarters);
+                    shut.push(taken(m, (to, quarters % 2 == 1)));
+                    found.push(taken(m, (to, quarters % 2 == 1)));
+                }
             }
         }
     }
     // Then the others, zone by zone, each on the ground of its own.
     let settled_first: Vec<[f64; 4]> = stood.iter().filter_map(|(&p, at)| at.map(|at| taken(p, at))).collect();
     for (_, rect, own) in &fine_leaves {
-        let mine: Vec<usize> = own.iter().copied().filter(|&p| grounds.contains_key(&p) && !goes_first(p)).collect();
+        let mine: Vec<usize> = own
+            .iter()
+            .copied()
+            .filter(|&p| grounds.contains_key(&p) && !goes_first(p) && !in_block.contains_key(&p))
+            .collect();
         let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
         shut.extend(settled_first.iter().copied());
         let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
@@ -2850,6 +3226,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 (None, Some(&Some((at, turn)))) => (centre[p], quarter[p]) = (Some(at), u8::from(turn)),
                 (None, Some(None)) => centre[p] = Some(middle(grounds[&p])),
                 _ => {}
+            }
+            if let Some(&quarters) = block_quarter.get(&p).filter(|_| stood.get(&p).is_some_and(|at| at.is_some())) {
+                quarter[p] = quarters;
             }
         }
     }
@@ -2901,7 +3280,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let face = |centre: &[Option<Pt>], quarter: &mut Vec<u8>, pins: &Pins| {
         for _ in 0..2 {
             for p in 0..parts.len() {
-                if centre[p].is_none() || parts[p].offsets.is_empty() || stays(&parts[p]) {
+                if centre[p].is_none()
+                    || parts[p].offsets.is_empty()
+                    || stays(&parts[p])
+                    || block_quarter.contains_key(&p)
+                {
                     continue;
                 }
                 let [w, h] = body(p);
@@ -2931,13 +3314,15 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let mut at_pad: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     let with_capacitors: BTreeSet<usize> = bypasses.iter().map(|bypass| bypass.1).collect();
     let mut by_its_pad: BTreeSet<usize> = BTreeSet::new();
-    let mut order = bypasses.clone();
-    // (the parts of the loops first, as they were found: each inductor before the capacitors by it)
-    order[placed_first..].sort_by(|a, b| {
-        let held = |c: usize| farads(&parts[c].value).unwrap_or(f64::INFINITY);
-        held(a.0).total_cmp(&held(b.0)).then(parts[a.0].name.cmp(&parts[b.0].name))
-    });
+    // (what stands in a block has its place and its pad from the block; the rest is taken one by one)
+    for (&head, block) in laid_blocks.iter().filter(|(head, _)| block_quarter.contains_key(head)) {
+        pins.extend(block.pins.iter().copied());
+        by_its_pad.extend(block.at.iter().map(|placed| placed.0).filter(|&m| m != head));
+    }
     for (c, chip, rail) in order {
+        if block_quarter.contains_key(&c) {
+            continue;
+        }
         let (Some(was), Some(chip_at)) = (centre[c], centre[chip]) else { continue };
         if parts[chip].offsets.is_empty() || on_gap.contains_key(&c) {
             continue;
@@ -3560,6 +3945,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         travel,
         first,
         bridges,
+        blocks,
+        alike,
         served,
         chains,
         back,
@@ -3855,6 +4242,81 @@ mod tests {
         board.parts.push(across);
         let found = floorplan(&board).unwrap();
         assert!(found.capacitors.iter().any(|c| c.0 == "R7" && c.1 == "U1"), "{:?}", found.capacitors);
+    }
+
+    #[test]
+    fn a_chip_and_the_parts_by_its_pads_are_a_block_and_two_of_one_make_up_are_laid_out_alike() {
+        // two amplifiers of one kind, each with a capacitor on its supply and a resistor across two of its
+        // pads; the second stands a quarter turned in the file
+        let names = ["GND", "VCC", "A1", "B1", "A2", "B2"];
+        let net = |name: &str| names.iter().position(|n| *n == name);
+        let part = |name: &str, kind: &str, at: Pt, size: [f64; 2], pads: &[&str], offsets: &[Pt], turned: u8| Part {
+            name: name.to_string(),
+            sheet: "amplifiers".to_string(),
+            at,
+            placed: true,
+            fixed: false,
+            edge: false,
+            capacitor: name.starts_with('C'),
+            inductor: false,
+            diode: false,
+            area: size[0] * size[1],
+            pads: pads.iter().map(|n| net(n)).collect(),
+            height: None,
+            near: None,
+            mate: None,
+            size: Some(if turned % 2 == 1 { [size[1], size[0]] } else { size }),
+            offsets: offsets.iter().map(|&offset| quartered(turned, offset)).collect(),
+            pins: Vec::new(),
+            through: false,
+            anchor: [0.0, 0.0],
+            angle: 90.0 * f64::from(turned),
+            value: kind.to_string(),
+            footprint: kind.to_string(),
+        };
+        let chip = [[-2.0, -1.0], [-2.0, 1.0], [2.0, -1.0], [2.0, 1.0]];
+        let small = [[-0.5, 0.0], [0.5, 0.0]];
+        let board = Board {
+            outline: [0.0, 0.0, 60.0, 30.0],
+            regions: Vec::new(),
+            shifts: Vec::new(),
+            limits: Vec::new(),
+            keepouts: Vec::new(),
+            pitch: 0.4,
+            layers: 2,
+            stack: Vec::new(),
+            gap: 4.0,
+            via: 1.0,
+            nets: names.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false }).collect(),
+            parts: vec![
+                part("U1", "amp", [10.0, 10.0], [5.0, 4.0], &["VCC", "GND", "A1", "B1"], &chip, 0),
+                part("U2", "amp", [40.0, 10.0], [5.0, 4.0], &["VCC", "GND", "A2", "B2"], &chip, 1),
+                part("C1", "100n", [12.0, 20.0], [2.0, 1.0], &["VCC", "GND"], &small, 0),
+                part("C2", "100n", [42.0, 20.0], [2.0, 1.0], &["VCC", "GND"], &small, 0),
+                part("R1", "10k", [15.0, 20.0], [2.0, 1.0], &["A1", "B1"], &small, 0),
+                part("R2", "10k", [45.0, 20.0], [2.0, 1.0], &["A2", "B2"], &small, 1),
+            ],
+        };
+        let found = floorplan(&board).unwrap();
+        // two blocks of three parts each, of one make-up, laid out alike
+        assert_eq!(found.blocks, [2, 6]);
+        assert_eq!(found.alike, [(2, 2, 3, vec!["U1".to_string(), "U2".to_string()])]);
+        // every part has its place, none over another, and each chip's parts are by it
+        assert!(found.places.iter().all(|place| place.fits), "{:?}", found.places);
+        let rects: Vec<[f64; 4]> = found.places.iter().filter_map(|place| place.rect).collect();
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                assert!(
+                    a[2].min(b[2]) - a[0].max(b[0]) < 1e-6 || a[3].min(b[3]) - a[1].max(b[1]) < 1e-6,
+                    "{a:?} {b:?}"
+                );
+            }
+        }
+        let at = |name: &str| found.places.iter().find(|place| place.part == name).unwrap().at;
+        for (chip, cap, resistor) in [("U1", "C1", "R1"), ("U2", "C2", "R2")] {
+            assert!(dist(at(chip), at(cap)) < 6.0 && dist(at(chip), at(resistor)) < 6.0, "{:?}", found.places);
+        }
+        assert_eq!(found.bypass, [2, 2]);
     }
 
     #[test]

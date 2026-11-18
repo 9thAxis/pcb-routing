@@ -291,6 +291,14 @@ def floorplan_told(found, depth=2, every=False):
                   f"  each then turned so that its pads face what they are joined to: from pad to the nearest other pad of "
                   f"its net, {found['pads_first_mm']:.0f} mm in all before and {found['pads_mm']:.0f} mm after; "
                   f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad by the pad they are for (within 3 mm; a large one within its length)"]
+    if found.get("blocks", [0])[0]:
+        alike = found.get("alike", [])
+        lines.append(f"  blocks (a chip or a connector with the parts that stand by its pads, laid out by themselves and placed "
+                     f"as one): {found['blocks'][0]} blocks of {found['blocks'][1]} parts; {sum(a[0] for a in alike)} of them "
+                     f"in {len(alike)} make-ups that repeat")
+        for count, same, size, chips in alike[:None if every else 10]:
+            lines.append(f"    {count} blocks of {size} parts ({', '.join(chips[:8])}{' ...' if len(chips) > 8 else ''}): "
+                         + ("all laid out alike" if same == count else f"{same} laid out alike, {count - same} NOT"))
     if found.get("served"):
         lines.append(f"  filter and protection parts that stand for one pad (a capacitor from a chip's input to ground or across "
                      f"two of its inputs, a diode or a part in series at a connector): {found['served'][1]} of "
