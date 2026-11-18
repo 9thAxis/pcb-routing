@@ -61,6 +61,48 @@ pub struct Part {
     /// How wide and how high its body is on the board, in mm, as it stands; none given: a square of its area.
     #[serde(default)]
     pub size: Option<[f64; 2]>,
+    /// Where each of its pads is from `at`, as it stands, in the order of `pads`; none given: none is known.
+    #[serde(default)]
+    pub offsets: Vec<Pt>,
+    /// What the schematic says each of its pads is, in the order of `pads`; none given: none is known.
+    #[serde(default)]
+    pub pins: Vec<Pin>,
+    /// Whether it has a pad with a hole: it takes its ground on every layer, and stands on no road.
+    #[serde(default)]
+    pub through: bool,
+    /// Where its own origin is from `at` (the middle of its body), as it stands: what its file places it by.
+    #[serde(default)]
+    pub anchor: Pt,
+    /// How it is turned as it stands, in degrees.
+    #[serde(default)]
+    pub angle: f64,
+    /// Its value, and the name of its footprint: two parts with both alike are of one kind.
+    #[serde(default)]
+    pub value: String,
+    /// See `value`.
+    #[serde(default)]
+    pub footprint: String,
+}
+
+/// What the schematic says a pad is.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Pin {
+    /// It takes a signal in.
+    Input,
+    /// It drives one.
+    Output,
+    /// Either, as it is used.
+    Both,
+    /// Neither: the end of a resistor, a capacitor, a connector.
+    Passive,
+    /// It is fed a supply.
+    PowerIn,
+    /// It feeds one.
+    PowerOut,
+    /// The schematic does not say.
+    #[default]
+    Unknown,
 }
 
 /// A net of the board.
@@ -896,6 +938,10 @@ fn spread(want: &[f64], size: &[f64], low: f64, high: f64) -> Vec<f64> {
     at
 }
 
+/// A body of this many mm2 or more is settled before the others, over the whole ground of its domain.
+const LARGE: f64 = 64.0;
+/// A part with holes stands on no road down to this level (see [`Road::level`]).
+const MAIN: usize = 3;
 /// How fine the ground of a zone is looked at when its parts are settled on it, in mm.
 const SETTLE: f64 = 0.25;
 
@@ -1483,6 +1529,27 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
 /// The floorplan of a board (see the module). An error if a pad names a net that is not there, or the board
 /// has no size.
 pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
+    // A part on the board with no pad on any net is the board's own (a mounting hole, a mark): it stays where
+    // it stands, and no other part may stand on its body.
+    let stays = |part: &Part| part.placed && part.pads.iter().all(|net| net.is_none());
+    let held: Board;
+    let board = if board.parts.iter().any(stays) {
+        let mut with = board.clone();
+        for part in board.parts.iter().filter(|part| stays(part)) {
+            let side = part.area.sqrt();
+            let [w, h] = part.size.unwrap_or([side, side]);
+            with.keepouts.push([
+                part.at[0] - w / 2.0,
+                part.at[1] - h / 2.0,
+                part.at[0] + w / 2.0,
+                part.at[1] + h / 2.0,
+            ]);
+        }
+        held = with;
+        &held
+    } else {
+        board
+    };
     let (parts, all_nets) = (&board.parts, &board.nets);
     let [x0, y0, x1, y1] = board.outline;
     if !(x1 > x0 && y1 > y0) {
@@ -1491,6 +1558,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     for (p, part) in parts.iter().enumerate() {
         if part.pads.iter().flatten().any(|&net| net >= all_nets.len()) {
             return Err(invalid(format!("parts[{p}].pads"), format!("names a net of {}", all_nets.len())));
+        }
+        for (what, count) in [("offsets", part.offsets.len()), ("pins", part.pins.len())] {
+            if count != 0 && count != part.pads.len() {
+                return Err(invalid(format!("parts[{p}].{what}"), format!("{count} for {} pads", part.pads.len())));
+            }
         }
     }
     let mut mate_of: Vec<Option<usize>> = vec![None; parts.len()];
@@ -1531,7 +1603,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .filter(|(_, own)| !own.is_empty())
         .collect();
     domains.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(net_name(a.0).cmp(&net_name(b.0))));
-    let adrift: Vec<usize> = (0..parts.len()).filter(|&p| found.home[p].is_none()).collect();
+    let adrift: Vec<usize> = (0..parts.len()).filter(|&p| found.home[p].is_none() && !stays(&parts[p])).collect();
     let rails_of = |g: usize| -> Vec<Rail> {
         let mut rails: Vec<Rail> = found
             .rails
@@ -2369,18 +2441,67 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // bodies are settled together, off its roads and what is shut: a large part may reach over the ground of
     // its zone, which was cut by what its parts take and not by their shapes)
     let mut stood: BTreeMap<usize, Option<(Pt, bool)>> = BTreeMap::new();
-    for work in top.iter() {
-        let mine: Vec<usize> = work.parts.iter().copied().filter(|p| grounds.contains_key(p)).collect();
-        let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
-        shut.extend(roads.iter().map(|road| road.rect));
-        let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
-        stood.extend(mine.iter().copied().zip(settled(work.rect, &bodies, &shut)));
-    }
     let taken = |p: usize, (at, turn): (Pt, bool)| {
         let [w, h] = body(p);
         let (w, h) = if turn { (h, w) } else { (w, h) };
         [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
     };
+    // First the parts with holes and the large ones, over the whole ground of their domain: they are the
+    // hardest to find room for. No track runs under a part with holes: it stands off the gaps and the roads
+    // that part much of the board (a lesser road, a track or two, goes round it); the others may stand over
+    // a road, whose tracks run on the layers beneath.
+    let goes_first = |p: usize| parts[p].through || body(p)[0] * body(p)[1] >= LARGE;
+    for work in top.iter() {
+        let mine: Vec<usize> =
+            work.parts.iter().copied().filter(|&p| grounds.contains_key(&p) && goes_first(p)).collect();
+        let mut found: Vec<[f64; 4]> = Vec::new();
+        for with_holes in [true, false] {
+            let lot: Vec<usize> = mine.iter().copied().filter(|&p| parts[p].through == with_holes).collect();
+            let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+            shut.extend(
+                roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
+            );
+            shut.extend(found.iter().copied());
+            let bodies: Vec<([f64; 2], Pt)> = lot.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+            for (&p, at) in lot.iter().zip(settled(work.rect, &bodies, &shut)) {
+                found.extend(at.map(|at| taken(p, at)));
+                stood.insert(p, at);
+            }
+        }
+    }
+    // Then the others, zone by zone, each on the ground of its own.
+    let settled_first: Vec<[f64; 4]> = stood.iter().filter_map(|(&p, at)| at.map(|at| taken(p, at))).collect();
+    for (_, rect, own) in &fine_leaves {
+        let mine: Vec<usize> = own.iter().copied().filter(|&p| grounds.contains_key(&p) && !goes_first(p)).collect();
+        let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+        shut.extend(settled_first.iter().copied());
+        let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+        stood.extend(mine.iter().copied().zip(settled(*rect, &bodies, &shut)));
+    }
+    // What found no room in its zone (a zone cut by what its parts take, not by their shapes) is settled on
+    // what is left of the ground of its domain, off every body that has its place: first the parts with
+    // holes, off the roads and gaps too; then the others, which may stand over a road (its tracks run on
+    // the layers beneath them) but over no gap.
+    for work in top.iter() {
+        for with_holes in [true, false] {
+            let left: Vec<usize> = work
+                .parts
+                .iter()
+                .copied()
+                .filter(|&p| stood.get(&p) == Some(&None) && parts[p].through == with_holes)
+                .collect();
+            if left.is_empty() {
+                continue;
+            }
+            let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+            shut.extend(
+                roads.iter().filter(|road| road.gap || (with_holes && road.level <= MAIN)).map(|road| road.rect),
+            );
+            shut.extend(work.parts.iter().filter_map(|&p| stood.get(&p).copied().flatten().map(|at| taken(p, at))));
+            let bodies: Vec<([f64; 2], Pt)> = left.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+            stood.extend(left.iter().copied().zip(settled(work.rect, &bodies, &shut)));
+        }
+    }
     for (domain, _, own) in &fine_leaves {
         let shift = shifts[to[*domain]];
         for &p in own {
@@ -2400,6 +2521,17 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 off: parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0),
             });
         }
+    }
+    // (what is the board's own stays where it stands)
+    for part in parts.iter().filter(|part| stays(part)) {
+        places.push(Place {
+            part: part.name.clone(),
+            at: part.at.map(round2),
+            rect: None,
+            turn: false,
+            fits: true,
+            off: Some(0.0),
+        });
     }
     places.sort_by(|a, b| a.part.cmp(&b.part));
     // (how long the signal nets are with the parts as they stand, and with each at its place: nets all of
@@ -2744,6 +2876,13 @@ mod tests {
             near: None,
             mate: None,
             size: None,
+            offsets: Vec::new(),
+            pins: Vec::new(),
+            anchor: [0.0, 0.0],
+            through: false,
+            angle: 0.0,
+            value: String::new(),
+            footprint: String::new(),
         };
         Board {
             outline: [0.0, 0.0, 40.0, 10.0],
@@ -2889,6 +3028,13 @@ mod tests {
             near: None,
             mate: None,
             size: None,
+            offsets: Vec::new(),
+            pins: Vec::new(),
+            anchor: [0.0, 0.0],
+            through: false,
+            angle: 0.0,
+            value: String::new(),
+            footprint: String::new(),
         };
         Board {
             outline: [0.0, 0.0, 40.0, 40.0],
@@ -3003,6 +3149,13 @@ mod tests {
         assert!(after.travel.mate_mm < before.travel.mate_mm || before.travel.mate_mm == 0.0, "{:?}", after.travel);
         board.parts[0].mate = Some("U99".to_string());
         assert!(floorplan(&board).is_err());
+        // (and what is said of a part's pads is said of each)
+        let mut board = two_grounds();
+        board.parts[0].offsets = vec![[0.0, 0.0]];
+        assert!(floorplan(&board).is_err());
+        board.parts[0].offsets = vec![[0.0, 0.0]; 4];
+        board.parts[0].pins = vec![Pin::Input, Pin::PowerIn, Pin::Unknown, Pin::Passive];
+        assert!(floorplan(&board).is_ok());
     }
 
     #[test]

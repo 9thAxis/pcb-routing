@@ -59,7 +59,12 @@
   then the bodies of each domain are settled, none over another and none on a road or on ground that is
   shut, the largest first, each as near where it was pulled as the others allow, turned a quarter where
   that is nearer. The plan says how long the signal nets are with the parts as they stand today and with
-  each at its place.
+  each at its place. The bridge now tells the engine each part by the middle of its body (its courtyard;
+  the box of its pads where it draws none), with where each pad and its own origin are from there, what
+  the schematic says each pin is, its angle, value and footprint, and whether it has holes. A part with no
+  pad on a net (a mounting hole) stays where it stands and no part is put on it. Parts with holes and
+  large parts are settled first, over the ground of their domain; a part without holes may stand over a
+  road when its zone is full (the road's tracks run beneath), a part with holes on none of the main ones.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

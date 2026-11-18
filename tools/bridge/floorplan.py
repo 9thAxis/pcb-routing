@@ -7,15 +7,35 @@ from .names import CAPACITOR_PART, FACING_PART, is_supply
 from .steps import habits, planes
 
 
-def _ground(picture):
-    """What each part takes on the board, [wide, high] in mm: the box of its pads, grown by a millimetre on every side."""
+def _pad_boxes(picture):
     boxes = {}
     for pad in picture.pads:
         if pad.part:
             x, y = pad.at
             box = boxes.setdefault(pad.part, [x, y, x, y])
             box[:] = [min(box[0], x), min(box[1], y), max(box[2], x), max(box[3], y)]
-    return {part: [box[2] - box[0] + 2.0, box[3] - box[1] + 2.0] for part, box in boxes.items()}
+    return boxes
+
+
+def bodies(picture):
+    """Each part's body as it stands, [x0, y0, x1, y1]: its courtyard; where its footprint draws none, the box of
+    its pads and BODY round it; a part with neither is a point."""
+    pads = _pad_boxes(picture)
+    found = {}
+    for reference, part in picture.parts.items():
+        if part.box:
+            found[reference] = list(part.box)
+        elif reference in pads:
+            x0, y0, x1, y1 = pads[reference]
+            found[reference] = [x0 - BODY, y0 - BODY, x1 + BODY, y1 + BODY]
+        else:
+            found[reference] = [part.at[0], part.at[1], part.at[0], part.at[1]]
+    return found
+
+
+# What the schematic calls a pin, as the engine knows it (see `Pin` in src/floorplan.rs).
+PINS = dict(input="input", output="output", bidirectional="both", tri_state="output", passive="passive",
+            power_in="power_in", power_out="power_out", open_collector="output", open_emitter="output")
 
 
 BODY = 0.5  # what a part's body is taken to reach beyond the box of its pads, in mm
@@ -49,18 +69,29 @@ def floorplan(picture, rules, ask):
     x0, y0, x1, y1 = picture.box
     nets = sorted(picture.groups)
     index = {net: n for n, net in enumerate(nets)}
-    pads = {}
+    pads, offsets, pins, drilled = {}, {}, {}, set()
+    body = bodies(picture)
+    mid = {reference: [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] for reference, box in body.items()}
     for pad in picture.pads:
         if pad.part:
             pads.setdefault(pad.part, []).append(index.get(pad.net))
-    sizes = _ground(picture)
-    area = {part: size[0] * size[1] for part, size in sizes.items()}
+            at = mid.get(pad.part, pad.at)
+            offsets.setdefault(pad.part, []).append([round(pad.at[0] - at[0], 4), round(pad.at[1] - at[1], 4)])
+            pins.setdefault(pad.part, []).append(PINS.get(pad.kind, "unknown"))
+            if pad.drill is not None:
+                drilled.add(pad.part)
+    # (what a part takes of the board: its body; the room for tracks is what the zones are given beyond that)
+    area = {part: max((box[2] - box[0]) * (box[3] - box[1]), 0.01) for part, box in bodies(picture).items()}
     placed = lambda part: x0 <= part.at[0] <= x1 and y0 <= part.at[1] <= y1
     guesses = rules.settings.guesses
-    parts = [dict(name=reference, sheet=part.sheet or "", at=part.at, placed=placed(part),
+    # (a part is said by the middle of its body, which is what is placed and turned; its own origin, that the
+    # file places it by, is told as far from that: `anchor`; and each pad likewise: `offsets`)
+    parts = [dict(name=reference, sheet=part.sheet or "", at=[round(v, 4) for v in mid[reference]], placed=placed(part),
                   edge=bool(guesses and FACING_PART.match(reference)),
                   capacitor=bool(CAPACITOR_PART.match(reference)), area=round(area.get(reference, 1.0), 2),
-                  pads=pads.get(reference, []))
+                  pads=pads.get(reference, []), offsets=offsets.get(reference, []), pins=pins.get(reference, []),
+                  anchor=[round(part.at[k] - mid[reference][k], 4) for k in (0, 1)], through=reference in drilled,
+                  value=part.value or "", footprint=(part.footprint or "").split(":")[-1], angle=part.angle)
              for reference, part in sorted(picture.parts.items())]
     asked = [dict(name=net, supply=rules.intent(net).role == "supply" or is_supply(net) and rules.intent(net).role != "ground",
                   pair=isinstance(rules.intent(net).pair, str)) for net in nets]
@@ -103,10 +134,11 @@ def floorplan(picture, rules, ask):
                 if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
         mate = [what["mate"] for pattern, what in (hints.parts if hints else [])
                 if "mate" in what and fnmatch.fnmatchcase(part["name"], pattern)]
-        if part["name"] in sizes:
-            # (its body, to be settled: the box of its pads and half a millimetre round it; what it takes of
-            # the board, above, is more: the tracks to it want room too)
-            part["size"] = [round(v - 2.0 + 2 * BODY, 3) for v in sizes[part["name"]]]
+        # (its body, to be settled: see `bodies`; what it takes of the board, above, is by its pads and more:
+        # the tracks to it want room too)
+        box = body[part["name"]]
+        if box[2] > box[0] and box[3] > box[1]:
+            part["size"] = [round(box[2] - box[0], 3), round(box[3] - box[1], 3)]
         part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}),
                     **(dict(mate=mate[-1]) if mate else {}))
     # The height between two boards of a stack is not held to: it is what the standoffs are chosen for. The

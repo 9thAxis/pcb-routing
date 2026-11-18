@@ -39,6 +39,8 @@ class Pad:
     clearance: object = None  # its own clearance, where it or its footprint overrides the class
     smallest: object = None  # its smallest dimension on any copper layer
     part: object = None  # the reference of the part it belongs to
+    number: str = ""  # what its part calls it
+    kind: str = ""  # what the schematic says its pin is (input, output, passive, power_in ...); "" if it does not
 
 
 @dataclass
@@ -49,6 +51,8 @@ class Part:
     file: str = ""  # that sheet's file
     value: str = ""
     footprint: str = ""
+    angle: float = 0.0  # how it is turned, in degrees
+    box: object = None  # its courtyard as it stands, [x0, y0, x1, y1]; None if its footprint draws none
 
 
 @dataclass

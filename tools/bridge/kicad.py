@@ -337,12 +337,18 @@ def read_board(board, ignored, ask, pours=True):
                                 hole_at=xy(pad.GetPosition()) if drilled else None,
                                 drill=MM(max(drill.x, drill.y)) if drilled else None,
                                 clearance=local_clearance(pad), smallest=pad_smallest(pad, on),
-                                part=pad.GetParentFootprint().GetReference() if pad.GetParentFootprint() else None))
+                                part=pad.GetParentFootprint().GetReference() if pad.GetParentFootprint() else None,
+                                number=pad.GetNumber(), kind=pad.GetPinType() or ""))
 
     for footprint in board.GetFootprints():
+        footprint.BuildCourtyardCaches()
+        yard = footprint.GetCourtyard(pcbnew.B_CrtYd if footprint.IsFlipped() else pcbnew.F_CrtYd)
+        around = yard.BBox() if yard.OutlineCount() else None
         picture.parts[footprint.GetReference()] = Part(
             at=xy(footprint.GetPosition()), sheet=footprint.GetSheetname(), file=footprint.GetSheetfile(),
-            value=footprint.GetValue(), footprint=footprint.GetFPIDAsString())
+            value=footprint.GetValue(), footprint=footprint.GetFPIDAsString(),
+            angle=footprint.GetOrientationDegrees(),
+            box=[MM(around.GetLeft()), MM(around.GetTop()), MM(around.GetRight()), MM(around.GetBottom())] if around else None)
 
     for track in board.GetTracks():
         net = track.GetNetname() or None

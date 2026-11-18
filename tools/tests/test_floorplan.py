@@ -93,6 +93,11 @@ class Floorplan(unittest.TestCase):
         self.assertEqual((parts["U9"]["height"], parts["R10"]["height"], parts["J1"]["near"], "near" in parts["U1"]),
                          (10.5, 0.5, [3.0, 4.0], False))
         self.assertEqual((parts["U1"]["mate"], "mate" in parts["U9"]), ("U9", False))
+        # each part is said by the middle of its body, with where its pads and its own origin are from there
+        for part in q["parts"]:
+            self.assertEqual((len(part["offsets"]), len(part["pins"])), (len(part["pads"]), len(part["pads"])), part["name"])
+            self.assertEqual(len(part["anchor"]), 2)
+            self.assertIn("through", part)
         # but the plan says what the ground under it needs: the right board lies over x 9 to 14 of the left one
         found = k.floorplan(picture, k.Rules.of(picture, k.Settings(hints=hints)), support.ask)
         (under,) = found["clear"]
