@@ -157,6 +157,14 @@
   Two parts or two nets of one name, and a part told two mates, are refused (they were found by the first
   of the name). A part that disturbs keeps its distance from what is disturbed also when its block found no
   room as one.
+  The groups drawn on one sheet can be tied to each other when zones are gathered, and the board is laid
+  out three ways (tied by 0, 2 and 4 nets each): the plan with the fewest parts without room, and of those
+  the shortest nets pad to pad (`nets_mm`), is the one given, and `tried` tells what each came to. A plan
+  is sensitive to that weight (one board's nets went from 1.3 to 1.9 of its designers' between two values),
+  and which suits differs from board to board. On nine boards the plan's nets are now 1.07 of the
+  designers' at the geometric mean (1.19 before), the worst 1.42 (1.76); with their connectors held, 1.11
+  (1.17) and 1.34 (1.64). The second of two copies of a sheet that found room only on a road is no longer
+  set down over the first.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

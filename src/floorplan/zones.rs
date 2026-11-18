@@ -14,6 +14,7 @@ fn within(
     cx: &Known,
     between_parts: &BTreeMap<(usize, usize), f64>,
     lot: &[usize],
+    sheeted: f64,
     apart: &mut Vec<Apart>,
 ) -> Vec<Work> {
     let (parts, found, reach, nets, power_layers) = (cx.parts, &cx.found, &cx.reach, &cx.nets, &cx.power_layers);
@@ -128,6 +129,20 @@ fn within(
             }
         }
     }
+    // (and by the sheet they are drawn on: the groups of one sheet are tied to each other, `sheeted` nets for
+    // each. Its designer drew them as one thing; the few nets that lead from one stage of it to the next say
+    // less of that than the supplies and the control lines its stages share with the rest of the board)
+    let mut drawn: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (a, atom) in atoms.iter().enumerate().filter(|(_, atom)| !atom.1.is_empty() && !atom.0.is_empty()) {
+        drawn.entry(atom.0.as_str()).or_default().push(a);
+    }
+    for together in drawn.values().filter(|together| together.len() > 1 && sheeted > 0.0) {
+        for (i, &a) in together.iter().enumerate() {
+            for &b in &together[i + 1..] {
+                *ties.entry((a.min(b), a.max(b))).or_insert(0.0) += sheeted / (together.len() - 1) as f64;
+            }
+        }
+    }
     let ties = ties;
     let mut levels: Vec<Vec<Vec<usize>>> =
         vec![(0..atoms.len()).filter(|&a| !atoms[a].1.is_empty()).map(|a| vec![a]).collect()];
@@ -196,7 +211,7 @@ fn within(
 
 /// The zones of the board, a domain at the top of each tree (and one for the parts on no ground), with the
 /// sheets that are drawn as one and tied apart.
-pub(super) fn zone_tree(cx: &Known) -> (Vec<Work>, Vec<Apart>) {
+pub(super) fn zone_tree(cx: &Known, sheeted: f64) -> (Vec<Work>, Vec<Apart>) {
     let (parts, found, domains, adrift) = (cx.parts, &cx.found, &cx.domains, &cx.adrift);
     let between_parts = tied(&cx.nets, &Some);
     let mut apart: Vec<Apart> = Vec::new();
@@ -206,7 +221,7 @@ pub(super) fn zone_tree(cx: &Known) -> (Vec<Work>, Vec<Apart>) {
     let free = |lot: &Vec<usize>| -> Vec<usize> { lot.iter().copied().filter(|&p| !cx.held(p)).collect() };
     for (g, own) in domains {
         let own = &free(own);
-        let inside = within(cx, &between_parts, own, &mut apart);
+        let inside = within(cx, &between_parts, own, sheeted, &mut apart);
         // (a part counted with another domain that stands on this ground too takes half its ground here)
         let half = |p: usize| {
             if found.home[p] != Some(*g) && found.stands[p].contains(g) && !cx.held(p) {
@@ -220,7 +235,7 @@ pub(super) fn zone_tree(cx: &Known) -> (Vec<Work>, Vec<Apart>) {
     }
     if !adrift.is_empty() {
         let adrift = &free(adrift);
-        let inside = within(cx, &between_parts, adrift, &mut apart);
+        let inside = within(cx, &between_parts, adrift, sheeted, &mut apart);
         top.push(Work { name: "(on no ground)".to_string(), parts: adrift.clone(), inside, rect: [0.0; 4], more: 0.0 });
     }
     (top, apart)

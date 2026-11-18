@@ -399,6 +399,12 @@ def floorplan_told(found, depth=2, every=False):
                      f"the pads of its loop lie within {loop['box'][0]:.1f} x {loop['box'][1]:.1f} mm ({loop['mm2']:.0f} mm2, "
                      f"its parts take {loop['bodies']:.0f}: {'tight' if loop['tight'] else 'LOOSE'})"
                      + (f"; at its other pads: {', '.join(loop['beside'])}" if loop["beside"] else ""))
+    if len(found.get("tried") or []) > 1:
+        lines += ["", "the board was laid out " + str(len(found["tried"])) + " ways, the groups drawn on one sheet tied by "
+                  + ", ".join(f"{sheeted:g}" for sheeted, _, _ in found["tried"]) + " nets each: "
+                  + "; ".join(f"{nets:.0f} mm of nets" + (f" and {left} parts without room" if left else "")
+                              for _, left, nets in found["tried"])
+                  + f". This is the one with {found['nets_mm']:.0f} mm"]
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "

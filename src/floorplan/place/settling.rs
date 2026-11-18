@@ -335,6 +335,7 @@ pub(super) fn settled_first(
                                         None
                                     };
                                     if let Some(at) = alone {
+                                        over_roads.extend(cx.stands_on(m, at));
                                         // (one that disturbs keeps what is disturbed off as any other does)
                                         if aggressor[m] {
                                             halos.push(round_it(cx.taken(m, at)));
@@ -355,7 +356,9 @@ pub(super) fn settled_first(
                             let (to, quarters) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
                             stood.insert(m, Some((to, quarters % 2 == 1)));
                             block_quarter.insert(m, quarters);
+                            // (on the roads too: the next of the copies may come to stand on a road, not on this)
                             shut.push(cx.taken(m, (to, quarters % 2 == 1)));
+                            over_roads.push(cx.taken(m, (to, quarters % 2 == 1)));
                             (0..2)
                                 .filter(|k| cx.side_of(m) & (1 << k) != 0)
                                 .for_each(|k| sides[k].extend(cx.stands_on(m, (to, quarters % 2 == 1))));

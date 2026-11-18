@@ -617,6 +617,15 @@ pub struct Floorplan {
     pub pads_first_mm: f64,
     /// See `pads_first_mm`.
     pub pads_mm: f64,
+    /// How long the signal nets are in all with every part at its place, in mm: each by the box of its pads,
+    /// as the boards stack. What a plan is judged by against another of the same board.
+    #[serde(default)]
+    pub nets_mm: f64,
+    /// The ways the board was laid out, of which this plan is the best: for each, what tied the groups drawn
+    /// on one sheet when the zones were gathered (as so many nets), the parts it found no room for, and its
+    /// `nets_mm`. The best has the fewest parts without room, and of those the shortest nets.
+    #[serde(default)]
+    pub tried: Vec<(f64, usize, f64)>,
     /// The capacitors from a supply to the ground that stand for a chip of their zone, and how many of them
     /// have their pad on the supply by the pad of that chip they are for: within BESIDE_PIN, or for a large
     /// one within its own length and a millimetre.

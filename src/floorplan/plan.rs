@@ -1,6 +1,7 @@
 //! The floorplan of a board, from its power down to a place for every part.
 
 use super::boards::{on_boards, regions};
+use super::constants::SHEETED;
 use super::known::{standing, Known};
 use super::layout::laid_out;
 use super::place::{placed, Placed};
@@ -10,15 +11,41 @@ use super::report::{flows, gap_parts, junctions, zones_told};
 use super::types::{Board, Floorplan};
 use super::zones::zone_tree;
 use crate::error::Error;
+use rayon::prelude::*;
 
 /// The floorplan of a board (see the module). An error if a pad names a net that is not there, or the board
 /// has no size.
+///
+/// The board is laid out several ways (see SHEETED), and the plan with the fewest parts without room, and of
+/// those the shortest nets, is the one given; `tried` tells what each came to.
 pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let (stays, held) = standing(board);
     let board = held.as_ref().unwrap_or(board);
     let cx = &Known::of(board, stays)?;
+    let plans: Vec<Floorplan> = SHEETED.par_iter().map(|&sheeted| laid(cx, sheeted)).collect();
+    let judged = |plan: &Floorplan| (plan.places.iter().filter(|place| !place.fits).count(), plan.nets_mm);
+    let tried: Vec<(f64, usize, f64)> =
+        SHEETED.iter().zip(&plans).map(|(&sheeted, plan)| (sheeted, judged(plan).0, judged(plan).1)).collect();
+    let mut best = plans
+        .into_iter()
+        .reduce(|best, plan| {
+            let (a, b) = (judged(&best), judged(&plan));
+            if b.0 < a.0 || (b.0 == a.0 && b.1 < a.1) {
+                plan
+            } else {
+                best
+            }
+        })
+        .expect("SHEETED is not empty");
+    best.tried = tried;
+    Ok(best)
+}
+
+/// One laying out of the board, the groups drawn on one sheet tied by `sheeted` nets each.
+fn laid(cx: &Known, sheeted: f64) -> Floorplan {
+    let board = cx.board;
     let power = power_told(cx);
-    let (top, apart) = zone_tree(cx);
+    let (top, apart) = zone_tree(cx, sheeted);
     let planes = planes(cx, &top);
     let on = on_boards(cx, &top);
     let (best, first) = laid_out(cx, &top, &planes, &on);
@@ -42,6 +69,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         against,
         pads_first_mm,
         pads_mm,
+        nets_mm,
         bypass,
         capacitors,
     } = placed(cx, &top, &roads, &on, &mut bridges);
@@ -51,7 +79,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     roads.sort_by(|a, b| a.level.cmp(&b.level).then(b.width.total_cmp(&a.width)));
     let flows = flows(cx, &top);
     let (zones, now_mm, then_mm) = zones_told(cx, &top);
-    Ok(Floorplan {
+    Floorplan {
         power,
         zones,
         flows,
@@ -80,10 +108,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         against: against.into_iter().map(|(kind, count, now, then)| (kind, count, now.round(), then.round())).collect(),
         pads_first_mm: pads_first_mm.round(),
         pads_mm: pads_mm.round(),
+        nets_mm: nets_mm.round(),
+        tried: Vec::new(),
         bypass,
         capacitors,
         junctions,
         pours,
         roads,
-    })
+    }
 }

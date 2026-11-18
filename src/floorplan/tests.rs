@@ -918,3 +918,21 @@ fn two_parts_or_nets_of_one_name_and_a_part_with_two_mates_are_refused() {
     both.parts[j1].mate = Some("U1".to_string());
     assert!(floorplan(&both).is_ok());
 }
+
+#[test]
+fn the_plan_given_is_the_best_of_the_ways_the_board_was_laid_out() {
+    // one way for each weight of the sheets; the plan is the one with the fewest parts without room, and of
+    // those the shortest nets
+    let found = floorplan(&two_grounds()).unwrap();
+    assert_eq!(found.tried.iter().map(|way| way.0).collect::<Vec<f64>>(), SHEETED);
+    let left = found.places.iter().filter(|place| !place.fits).count();
+    assert!(found.tried.contains(&(
+        found.tried.iter().find(|way| way.2 == found.nets_mm).unwrap().0,
+        left,
+        found.nets_mm
+    )));
+    for &(_, without, nets) in &found.tried {
+        assert!((left, found.nets_mm) <= (without, nets), "{:?}", found.tried);
+    }
+    assert!(found.nets_mm > 0.0);
+}

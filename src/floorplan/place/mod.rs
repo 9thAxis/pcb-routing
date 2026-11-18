@@ -110,6 +110,7 @@ pub(super) struct Placed {
     pub(super) against: Vec<Against>,
     pub(super) pads_first_mm: f64,
     pub(super) pads_mm: f64,
+    pub(super) nets_mm: f64,
     pub(super) bypass: [usize; 2],
     pub(super) capacitors: Vec<ByPad>,
 }
@@ -160,6 +161,8 @@ pub(super) fn placed(cx: &Known, top: &[Work], roads: &[Road], on: &Boards, brid
     let disturbing = [aggressor.iter().filter(|&&is| is).count(), victim.iter().filter(|&&is| is).count()];
     let sensitive = sensitive(cx, &facing, centre, quarter);
     let pads_mm = facing.all_reach(centre, quarter);
+    let nets_mm =
+        (0..cx.all_nets.len()).filter(|&net| cx.is_signal(net)).map(|net| facing.span_of(net, centre, quarter)).sum();
     let loops = loops(cx, &facing, &beside.switchers, centre, quarter);
     let (chains, back) = chains(cx, &facing, centre, quarter);
     let (bypass, served, capacitors) = by_pads_told(cx, &facing, &by, &beside.served_parts, centre, quarter);
@@ -182,6 +185,7 @@ pub(super) fn placed(cx: &Known, top: &[Work], roads: &[Road], on: &Boards, brid
         against,
         pads_first_mm,
         pads_mm,
+        nets_mm,
         bypass,
         capacitors,
     }

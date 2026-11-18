@@ -37,6 +37,10 @@ pub(super) const STRANDED_MM: f64 = 200.0;
 pub(super) const POURED: f64 = 8.0;
 /// And what ties them when zones are gathered into larger ones.
 pub(super) const GATHERED: f64 = 4.0;
+/// What ties the groups drawn on one sheet to each other when zones are gathered, as so many nets for each:
+/// the board is laid out with each of these in turn, and the plan that comes out best is kept. How much the
+/// drawing says of what belongs together differs from board to board, and a plan is sensitive to it.
+pub(super) const SHEETED: [f64; 3] = [0.0, 2.0, 4.0];
 /// What ties a capacitor from a supply to a ground to a chip of its sheet on that supply when the sheet's
 /// parts are grouped, as so much of a net: enough that it is of the chip's group.
 pub(super) const BESIDE_CHIP: f64 = 0.25;
