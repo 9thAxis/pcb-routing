@@ -898,3 +898,23 @@ fn a_part_told_to_stay_stands_where_it_stood_and_what_it_is_joined_to_comes_to_i
         assert_eq!(found.places.len(), 14);
     }
 }
+
+#[test]
+fn two_parts_or_nets_of_one_name_and_a_part_with_two_mates_are_refused() {
+    let mut twice = two_grounds();
+    twice.parts[3].name = "C1".to_string();
+    assert!(floorplan(&twice).unwrap_err().to_string().contains("parts[3].name"));
+    let mut nets = two_grounds();
+    nets.nets[5].name = "RAW".to_string();
+    assert!(floorplan(&nets).unwrap_err().to_string().contains("nets[5].name"));
+    let mut mates = two_grounds();
+    mates.parts[0].mate = Some("J1".to_string());
+    mates.parts[1].mate = Some("J1".to_string());
+    assert!(floorplan(&mates).unwrap_err().to_string().contains("mates with"));
+    // (said of both halves, it is one mating)
+    let mut both = two_grounds();
+    let j1 = both.parts.len() - 1;
+    both.parts[0].mate = Some("J1".to_string());
+    both.parts[j1].mate = Some("U1".to_string());
+    assert!(floorplan(&both).is_ok());
+}

@@ -154,6 +154,9 @@
   board and no longer left over another body; a small part is no longer moved onto a body of another
   domain. With every connector of eight boards held where its designers put it, the plan's nets are 0.94
   to 1.64 of theirs (five boards within 1.13).
+  Two parts or two nets of one name, and a part told two mates, are refused (they were found by the first
+  of the name). A part that disturbs keeps its distance from what is disturbed also when its block found no
+  room as one.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

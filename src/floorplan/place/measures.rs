@@ -204,7 +204,9 @@ pub(super) fn loops(
 ///
 /// The chains: from the pad of a head on a net where it is the only head, through parts of two pads in
 /// series (each on to a net with no head and one such part more), to the next head. One doubles back if
-/// the way through the middles of its parts is more than BACK times as long as straight and LOCAL_MM more.
+/// the way from pad to pad through its parts is more than BACK times as long as straight, and more than that
+/// by what its parts may stand off the pads they are by: twice `by_pad` for each, less BESIDE_PIN for each
+/// joint between two of them.
 pub(super) fn chains(cx: &Known, facing: &Facing, centre: &[Option<Pt>], quarter: &[u8]) -> (usize, Vec<Back>) {
     let (parts, all_nets, reach) = (cx.parts, cx.all_nets, &cx.reach);
     let series_on = |net: usize, from: usize| -> Vec<(usize, usize)> {
@@ -448,7 +450,13 @@ pub(super) fn against(site: &Site, spot: &[Option<Pt>]) -> (f64, f64, Vec<Agains
         };
         // (today the parts stand as the file draws them: on the board they are drawn on)
         let today = |p: usize| {
-            let home = boards.iter().position(|b| parts[p].at[0] >= b[0] && parts[p].at[0] <= b[2]);
+            // (the board it stands within; one that stands off every board, the board it stands above or below)
+            let at = parts[p].at;
+            let across = |b: &[f64; 4]| at[0] >= b[0] && at[0] <= b[2];
+            let home = boards
+                .iter()
+                .position(|b| across(b) && at[1] >= b[1] && at[1] <= b[3])
+                .or_else(|| boards.iter().position(across));
             let shift = home.map_or(site.shift_of[p], |b| shifts[b]);
             [parts[p].at[0] + shift[0], parts[p].at[1] + shift[1]]
         };

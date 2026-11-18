@@ -60,7 +60,8 @@ pub(super) const BESIDE_PIN: f64 = 3.0;
 /// A net on which a part may stand for the one chip or connector there has no more parts than this.
 pub(super) const SERVED: usize = 6;
 /// A chain is followed through no more parts in series than this; and doubles back if the way from pad to
-/// pad through its parts is more than BACK times as long as straight (and BESIDE_PIN more for each hop).
+/// pad through its parts is more than BACK times as long as straight (and what its parts may stand off the
+/// pads they are by more: see `chains`).
 pub(super) const CHAIN_MOST: usize = 6;
 pub(super) const BACK: f64 = 1.5;
 /// A loop is tight if the box of its pads is no more than this many times the bodies of its parts.

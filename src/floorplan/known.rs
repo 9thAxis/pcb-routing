@@ -91,12 +91,38 @@ impl<'a> Known<'a> {
                 }
             }
         }
+        // (parts and nets are told by their names, and found by them: no two of one name)
+        let mut named: BTreeMap<&str, usize> = BTreeMap::new();
+        for (p, part) in parts.iter().enumerate() {
+            if let Some(first) = named.insert(part.name.as_str(), p) {
+                return Err(invalid(
+                    format!("parts[{p}].name"),
+                    format!("{} is the name of parts[{first}] too", part.name),
+                ));
+            }
+        }
+        let mut net_named: BTreeMap<&str, usize> = BTreeMap::new();
+        for (n, net) in all_nets.iter().enumerate() {
+            if let Some(first) = net_named.insert(net.name.as_str(), n) {
+                return Err(invalid(
+                    format!("nets[{n}].name"),
+                    format!("{} is the name of nets[{first}] too", net.name),
+                ));
+            }
+        }
         let mut mate_of: Vec<Option<usize>> = vec![None; parts.len()];
         for (p, part) in parts.iter().enumerate() {
             if let Some(mate) = &part.mate {
-                let Some(other) = parts.iter().position(|other| &other.name == mate).filter(|&other| other != p) else {
+                let Some(other) = named.get(mate.as_str()).copied().filter(|&other| other != p) else {
                     return Err(invalid(format!("parts[{p}].mate"), format!("names no other part: {mate}")));
                 };
+                // (a part mates with one other, and that one with it)
+                for (one, with) in [(p, other), (other, p)] {
+                    if let Some(has) = mate_of[one].filter(|&has| has != with) {
+                        let told = format!("{} mates with {} already", parts[one].name, parts[has].name);
+                        return Err(invalid(format!("parts[{p}].mate"), told));
+                    }
+                }
                 (mate_of[p], mate_of[other]) = (Some(other), Some(p));
             }
         }

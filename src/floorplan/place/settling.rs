@@ -335,6 +335,10 @@ pub(super) fn settled_first(
                                         None
                                     };
                                     if let Some(at) = alone {
+                                        // (one that disturbs keeps what is disturbed off as any other does)
+                                        if aggressor[m] {
+                                            halos.push(round_it(cx.taken(m, at)));
+                                        }
                                         shut.extend(cx.stands_on(m, at));
                                         (0..2)
                                             .filter(|k| cx.side_of(m) & (1 << k) != 0)
