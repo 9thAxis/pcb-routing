@@ -115,6 +115,13 @@ pub struct Board {
     /// stand on it, and the planes are parted there.
     #[serde(default = "usual_gap")]
     pub gap: f64,
+    /// What a via takes, in mm: its pad and the clearance round it.
+    #[serde(default = "usual_via")]
+    pub via: f64,
+}
+
+fn usual_via() -> f64 {
+    1.0
 }
 
 fn usual_gap() -> f64 {
@@ -234,6 +241,10 @@ pub struct Travel {
     pub mate_mm: f64,
     /// The parts on two grounds whose two domains are on one board and no neighbours.
     pub apart: usize,
+    /// Where ways turn from one road into another, each with the layer changes made there and what the two
+    /// roads have of ground where they meet, in mm2.
+    #[serde(skip)]
+    turns: Vec<(Pt, usize, f64)>,
     /// The pieces more than one that the supplies on the plane layers are in: each wants a way to the rest.
     pub split: usize,
     /// How much longer the parts that stand on the gaps are, side by side, than the gaps they stand on, in mm.
@@ -259,6 +270,22 @@ pub struct Pour {
     pub by_track: Vec<String>,
     /// The pieces it is in (zones that are neighbours, or joined by ground no supply is poured on, are one).
     pub pieces: usize,
+}
+
+/// Where roads meet and ways turn from one into the other: each turn is a layer change, and its via wants
+/// ground that is no track's.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Junction {
+    /// Where the two roads meet.
+    pub at: Pt,
+    /// The layer changes planned there.
+    pub changes: usize,
+    /// The ground their vias take, in mm2: each as much again as itself, for the tracks to reach it.
+    pub needs: f64,
+    /// What the two roads have of ground where they meet, in mm2.
+    pub has: f64,
+    /// The side of the square kept free of parts there, in mm: what the vias need, where the roads have less.
+    pub side: f64,
 }
 
 /// Where a part that stands on two grounds is given its place.
@@ -407,6 +434,9 @@ pub struct Floorplan {
     pub tall: Vec<(String, f64, Vec<String>, f64)>,
     /// The parts that stand on two grounds, each with the place it is given.
     pub bridges: Vec<Bridge>,
+    /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
+    /// is kept free of parts there.
+    pub junctions: Vec<Junction>,
     /// The supplies poured on the plane layers (every plane after the first, which is the ground's): under
     /// each of the smallest zones, the supply most of its parts are on, of those that reach several zones.
     /// A supply so poured takes no room in the roads but where a part of it stands under another's pour.
@@ -1217,6 +1247,8 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
     let mut fullest = vec![0usize; count];
     let mut used: BTreeMap<(usize, usize), usize> = BTreeMap::new(); // per stretch of road: the ways along it
     let mut travel = Travel::default();
+    let widths: Vec<f64> = roads.iter().map(|road| road.width).collect();
+    let mut turned_at: BTreeMap<usize, (usize, f64)> = BTreeMap::new();
     // (the way from any of `from` to the nearest of `to`: its nodes; a state is (node, the road come along))
     let way = |from: &BTreeSet<usize>,
                to: &BTreeSet<usize>,
@@ -1298,6 +1330,7 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
                 break;
             };
             let (mut along, mut turns, mut last) = (0.0, 0usize, None::<usize>);
+            let mut turned: Vec<(usize, f64)> = Vec::new();
             for pair in path.windows(2) {
                 let ((a, _), (b, road)) = (pair[0], pair[1]);
                 let far = (points[a][0] - points[b][0]).abs() + (points[a][1] - points[b][1]).abs();
@@ -1307,14 +1340,18 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
                     *used.entry((a.min(b), a.max(b))).or_insert(0) += 1;
                     let now = used[&(a.min(b), a.max(b))];
                     fullest[r] = fullest[r].max(now);
-                    if last.is_some_and(|before| about[before].0 != about[r].0) {
+                    if let Some(before) = last.filter(|&before| about[before].0 != about[r].0) {
                         turns += 1;
+                        turned.push((a, widths[before] * widths[r]));
                     }
                     last = Some(r);
                 }
             }
             if along > LOCAL_MM {
                 travel.vias += 2 + turns;
+                for (node, ground) in turned {
+                    turned_at.entry(node).or_insert((0, ground)).0 += 1;
+                }
             }
             let end = path[path.len() - 1].0;
             left.remove(&end);
@@ -1324,6 +1361,7 @@ fn travelled(roads: &mut [Road], leaves: &[(usize, [f64; 4], &Vec<usize>)], nets
     for (road, &most) in roads.iter_mut().zip(&fullest) {
         road.used = most;
     }
+    travel.turns = turned_at.into_iter().map(|(node, (changes, ground))| (points[node], changes, ground)).collect();
     travel.mm = travel.mm.round();
     travel.over = roads.iter().filter(|road| !road.gap && road.used > road.lanes).count();
     travel
@@ -2113,6 +2151,23 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
     let (laid, mut roads, travel, tall, bridges) = best;
     let top = laid;
+    // Ground for the vias where ways turn: each takes its own and as much again, in a square where the roads meet.
+    let mut junctions: Vec<Junction> = travel
+        .turns
+        .iter()
+        .map(|&(at, changes, has)| {
+            let needs = 2.0 * changes as f64 * board.via * board.via;
+            Junction {
+                at: at.map(|v| (v * 100.0).round() / 100.0),
+                changes,
+                needs: (needs * 10.0).round() / 10.0,
+                has: (has * 100.0).round() / 100.0,
+                side: if needs > has { (needs.sqrt() * 10.0).round() / 10.0 } else { 0.0 },
+            }
+        })
+        .collect();
+    junctions
+        .sort_by(|a, b| b.changes.cmp(&a.changes).then(a.at[0].total_cmp(&b.at[0])).then(a.at[1].total_cmp(&b.at[1])));
     // The pours, as they are told.
     let mut rects: Vec<[f64; 4]> = Vec::new();
     fn grounds_of(work: &Work, out: &mut Vec<[f64; 4]>) {
@@ -2269,6 +2324,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         travel,
         first,
         bridges,
+        junctions,
         pours,
         roads,
     })
@@ -2346,6 +2402,14 @@ mod tests {
         );
         assert_eq!((pour.rects.len(), pour.parts, pour.pieces, pour.by_track.len()), (2, 5, 1, 0));
         assert_eq!((within(&found), found.travel.split), (Some(0), 0));
+        // every layer change planned where roads meet is told with the ground its via wants
+        let square = floorplan(&square()).unwrap();
+        let changes: usize = square.junctions.iter().map(|junction| junction.changes).sum();
+        assert!(changes <= square.travel.vias, "{:?} {:?}", square.junctions, square.travel);
+        for junction in &square.junctions {
+            assert_eq!(junction.needs, 2.0 * junction.changes as f64);
+            assert_eq!(junction.side > 0.0, junction.needs > junction.has, "{junction:?}");
+        }
     }
 
     #[test]
@@ -2391,6 +2455,7 @@ mod tests {
             layers: 2,
             stack: Vec::new(),
             gap: 4.0,
+            via: 1.0,
             nets: nets.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false }).collect(),
             parts: vec![
                 part("U1", 2.0, &["A_3V3", "A_GND", "SIG", "FILT"]),
@@ -2538,6 +2603,7 @@ mod tests {
                 .map(|(name, way)| Layer { name: name.to_string(), way })
                 .collect(),
             gap: 4.0,
+            via: 1.0,
             nets,
             parts: vec![part(0, 10.0, 10.0), part(1, 30.0, 10.0), part(2, 30.0, 30.0), part(3, 10.0, 30.0)],
         }

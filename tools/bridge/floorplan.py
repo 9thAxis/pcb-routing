@@ -109,7 +109,8 @@ def floorplan(picture, rules, ask):
     found = ask(dict(ask="floorplan", box=picture.box, parts=parts, nets=asked, stack=stack_of(picture, rules),
                     regions=boards if len(boards) > 1 else [], keepouts=shut,
                     shifts=shifts if len(boards) > 1 else [],
-                    pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1)))
+                    pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1),
+                    via=round(sorted(rules.via(net)[0] + rules.clearance(net) for net in signal)[len(signal) // 2], 4)))
     if not isinstance(found, dict) or "zones" not in found:
         return found
     stands = {part["name"]: part.get("height") for part in parts}
@@ -229,6 +230,15 @@ def floorplan_told(found, depth=2, every=False):
                          f"{pour['parts']} parts on it, in {pour['pieces']} piece{'s' if pour['pieces'] > 1 else ''}{left}")
         if not every and len(pours) > 14:
             lines.append(f"  and {len(pours) - 14} more")
+    if found.get("junctions"):
+        meets = found["junctions"]
+        short = [j for j in meets if j["side"] > 0]
+        lines += ["", f"where ways turn from one road into another: {len(meets)} places, {sum(j['changes'] for j in meets)} layer "
+                      f"changes; at {len(short)} the vias need more ground than the roads have there, and a square is kept "
+                      f"free of parts ({sum(j['side'] ** 2 for j in short):.0f} mm2 in all):"]
+        for j in short[:None if every else 8]:
+            lines.append(f"  at ({j['at'][0]:.1f}, {j['at'][1]:.1f}): {j['changes']} layer changes, {j['needs']:.1f} mm2 for "
+                         f"their vias, the roads have {j['has']:.2f}: {j['side']:.1f} mm square")
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "
