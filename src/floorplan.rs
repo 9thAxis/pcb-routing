@@ -564,7 +564,9 @@ pub struct Floorplan {
     /// How many chains there are from one chip or connector through parts of two pads in series to another.
     pub chains: usize,
     /// Those that double back: (from, to, the parts between in their order, how far it is straight from the
-    /// pad of the one to the pad of the other in mm, how far through the parts), the worst first.
+    /// pad of the one to the pad of the other in mm, how far from pad to pad through the parts), the worst
+    /// first. A chain doubles back if that is more than BACK times the straight way and BESIDE_PIN for each
+    /// of its hops.
     pub back: Vec<(String, String, Vec<String>, f64, f64)>,
     /// The switching regulators, each with its loop: the largest loop first.
     pub loops: Vec<Loop>,
@@ -1045,8 +1047,8 @@ pub fn farads(value: &str) -> Option<f64> {
 
 /// A net on which a part may stand for the one chip or connector there has no more parts than this.
 const SERVED: usize = 6;
-/// A chain is followed through no more parts in series than this; and doubles back if the way through its
-/// parts is more than BACK times as long as straight.
+/// A chain is followed through no more parts in series than this; and doubles back if the way from pad to
+/// pad through its parts is more than BACK times as long as straight (and BESIDE_PIN more for each hop).
 const CHAIN_MOST: usize = 6;
 const BACK: f64 = 1.5;
 /// A loop is tight if the box of its pads is no more than this many times the bodies of its parts.
@@ -2663,6 +2665,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // series with its pin comes first (a fuse, a resistor, a bead).
     let is_head = |q: usize| is_chip(q) || parts[q].edge;
     let mut serving: Vec<(usize, usize, usize)> = Vec::new();
+    let mut across_chip: Vec<(usize, usize, usize)> = Vec::new();
     let only_head = |net: usize| -> Option<usize> {
         let mut heads = reach[net].iter().copied().filter(|&q| is_head(q));
         heads.next().filter(|_| heads.next().is_none())
@@ -2702,7 +2705,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let shunt = small && ((parts[m].capacitor && (to_power || across)) || (parts[m].diode && to_power));
             let first = small && parts[head].edge && !to_power && !parts[m].capacitor;
             filtered |= shunt && parts[m].capacitor;
-            if (shunt || first || its_own) && serving.iter().all(|of| of.0 != m) {
+            let new = serving.iter().chain(&across_chip).all(|of| of.0 != m);
+            if its_own && new {
+                across_chip.push((m, head, net));
+            } else if (shunt || first) && new {
                 serving.push((m, head, net));
             } else if small && is_signal(other) && !parts[m].capacitor && !parts[m].diode {
                 in_series.push(m);
@@ -2710,15 +2716,20 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
         // (and the resistor in series with a filter's capacitor is of the filter: it stands there with it)
         for m in in_series.into_iter().filter(|_| filtered) {
-            if serving.iter().all(|of| of.0 != m) {
+            if serving.iter().chain(&across_chip).all(|of| of.0 != m) {
                 serving.push((m, head, net));
             }
         }
     }
-    for &(m, head, _) in &serving {
+    for &(m, head, _) in serving.iter().chain(&across_chip) {
         fine_nets.extend(vec![vec![m, head]; BYPASS]);
     }
-    let served_parts: BTreeSet<usize> = serving.iter().map(|of| of.0).collect();
+    let served_parts: BTreeSet<usize> = serving.iter().chain(&across_chip).map(|of| of.0).collect();
+    // (what is across two pads of a chip has one place it can stand, between them: it has it before the
+    // capacitors, which may stand anywhere along a side)
+    bypasses.retain(|bypass| !served_parts.contains(&bypass.0));
+    let placed_first = loop_parts + across_chip.len();
+    bypasses.splice(loop_parts..loop_parts, across_chip);
     bypasses.extend(serving);
     let (none, no_sides, no_asks, no_kin) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new(), Vec::new());
     let no_rails: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
@@ -2922,7 +2933,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let mut by_its_pad: BTreeSet<usize> = BTreeSet::new();
     let mut order = bypasses.clone();
     // (the parts of the loops first, as they were found: each inductor before the capacitors by it)
-    order[loop_parts..].sort_by(|a, b| {
+    order[placed_first..].sort_by(|a, b| {
         let held = |c: usize| farads(&parts[c].value).unwrap_or(f64::INFINITY);
         held(a.0).total_cmp(&held(b.0)).then(parts[a.0].name.cmp(&parts[b.0].name))
     });
@@ -2936,9 +2947,31 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             [chip_at[0] + from[0], chip_at[1] + from[1]]
         };
         let on_rail = (0..parts[chip].pads.len()).filter(|&i| parts[chip].pads[i] == Some(rail));
+        // (a part whose other pad is on a net of the same chip stands between the two pads: of the chip's
+        // pads on this net, the one nearest a pad of the chip on that other net; else the pads in turn)
+        let partners: Vec<Pt> = parts[c]
+            .pads
+            .iter()
+            .flatten()
+            .filter(|&&other| other != rail && is_signal(other))
+            .flat_map(|&other| (0..parts[chip].pads.len()).filter(move |&i| parts[chip].pads[i] == Some(other)))
+            .map(pad_of)
+            .collect();
+        let across = |i: usize| {
+            let nearest = partners.iter().map(|&there| dist(pad_of(i), there)).fold(f64::INFINITY, f64::min);
+            if nearest.is_finite() {
+                (nearest / SETTLE).round() as i64
+            } else {
+                0
+            }
+        };
         let Some(pin) = on_rail.min_by(|&a, &b| {
             let taken = |i: usize| at_pad.get(&(chip, i)).copied().unwrap_or(0);
-            taken(a).cmp(&taken(b)).then(dist(pad_of(a), was).total_cmp(&dist(pad_of(b), was))).then(a.cmp(&b))
+            across(a)
+                .cmp(&across(b))
+                .then(taken(a).cmp(&taken(b)))
+                .then(dist(pad_of(a), was).total_cmp(&dist(pad_of(b), was)))
+                .then(a.cmp(&b))
         }) else {
             continue;
         };
@@ -3261,6 +3294,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let [from] = heads[..] else { continue };
         for (first, mut net) in series_on(start, from) {
             let (mut through, mut last) = (vec![first], first);
+            let mut joints: Vec<usize> = vec![start, net]; // the nets along the chain, from its start
             let mut to: Option<(usize, usize)> = None;
             for _ in 0..CHAIN_MOST {
                 let heads: Vec<usize> = reach[net].iter().copied().filter(|&q| is_head(q)).collect();
@@ -3272,6 +3306,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     ([], [(next, onward)]) => {
                         through.push(*next);
                         (last, net) = (*next, *onward);
+                        joints.push(net);
                     }
                     _ => break,
                 }
@@ -3280,12 +3315,18 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let Some((to, end)) = to.filter(|&(_, end)| start < end) else { continue };
             let (Some(a), Some(b)) = (pad_on(from, start), pad_on(to, end)) else { continue };
             chains += 1;
-            let mut spots: Vec<Pt> = vec![a];
-            spots.extend(through.iter().filter_map(|&m| in_stack(m, &centre)));
-            spots.push(b);
-            let along: f64 = spots.windows(2).map(|pair| dist(pair[0], pair[1])).sum();
+            // (the track there is to lay: from pad to pad, hop by hop; what is inside a part is no track.
+            // Each hop may be as long as a part stands from the pad it is by)
+            let mut along = 0.0;
+            let mut here = a;
+            for (k, &m) in through.iter().enumerate() {
+                let (Some(near), Some(far)) = (pad_on(m, joints[k]), pad_on(m, joints[k + 1])) else { continue };
+                along += dist(here, near);
+                here = far;
+            }
+            along += dist(here, b);
             let direct = dist(a, b);
-            if along > BACK * direct + LOCAL_MM {
+            if along > BACK * direct + (through.len() + 1) as f64 * BESIDE_PIN {
                 let round = |v: f64| (v * 10.0).round() / 10.0;
                 back.push((
                     name(from),

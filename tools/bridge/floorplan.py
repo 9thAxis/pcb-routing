@@ -298,7 +298,8 @@ def floorplan_told(found, depth=2, every=False):
     if "chains" in found:
         back = found.get("back", [])
         lines.append(f"  signal chains from one chip or connector through parts in series to another: {found['chains']}; "
-                     f"{len(back)} double back (their way through their parts is more than half as long again as straight)")
+                     f"{len(back)} double back (from pad to pad through their parts is more than half as long again as "
+                     f"straight, and 3 mm for each hop)")
         for a, b, through, direct, along in back[:None if every else 8]:
             lines.append(f"    {a} to {b} through {', '.join(through)}: {direct:.0f} mm straight, {along:.0f} mm through them")
     for loop in found.get("loops", []):
