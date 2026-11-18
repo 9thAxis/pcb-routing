@@ -3,7 +3,7 @@ answer as lines to read. Read only: nothing here moves a part."""
 
 import fnmatch
 
-from .names import CAPACITOR_PART, FACING_PART, is_supply
+from .names import CAPACITOR_PART, FACING_PART, INDUCTOR_PART, is_supply
 from .steps import habits, planes
 
 
@@ -88,7 +88,7 @@ def floorplan(picture, rules, ask):
     # file places it by, is told as far from that: `anchor`; and each pad likewise: `offsets`)
     parts = [dict(name=reference, sheet=part.sheet or "", at=[round(v, 4) for v in mid[reference]], placed=placed(part),
                   edge=bool(guesses and FACING_PART.match(reference)),
-                  capacitor=bool(CAPACITOR_PART.match(reference)), area=round(area.get(reference, 1.0), 2),
+                  capacitor=bool(CAPACITOR_PART.match(reference)), inductor=bool(INDUCTOR_PART.match(reference)), area=round(area.get(reference, 1.0), 2),
                   pads=pads.get(reference, []), offsets=offsets.get(reference, []), pins=pins.get(reference, []),
                   anchor=[round(part.at[k] - mid[reference][k], 4) for k in (0, 1)], through=reference in drilled,
                   value=part.value or "", footprint=(part.footprint or "").split(":")[-1], angle=part.angle)
@@ -290,6 +290,9 @@ def floorplan_told(found, depth=2, every=False):
                   f"  each then turned so that its pads face what they are joined to: from pad to the nearest other pad of "
                   f"its net, {found['pads_first_mm']:.0f} mm in all before and {found['pads_mm']:.0f} mm after; "
                   f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad within 3 mm of the pad they are for"]
+    for loop in found.get("loops", []):
+        lines.append(f"  switching regulator {loop['chip']} (switch node {loop['node']}): {', '.join(loop['parts'])} stand by it; "
+                     f"the pads of its loop lie within {loop['box'][0]:.1f} x {loop['box'][1]:.1f} mm ({loop['mm2']:.0f} mm2)")
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "

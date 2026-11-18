@@ -78,6 +78,10 @@
   to came to stand; then the small parts are gone over a few times, each tried at the middle of what its
   nets join it to and kept there if its nets are the shorter; a part of two pads with a net of its own to
   one pad of another part (a resistor at its driver, a protector at its connector) goes to that pad.
+  A chip with a pad on a net that goes to an inductor and to little else is a switching regulator
+  (`loops`): its inductor and what else of two pads is on that net (a diode) stand by the chip's pad on
+  it, the capacitors that close the loop by theirs, before any other capacitor is placed; the plan says
+  how large the box of each loop's pads came out.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;
