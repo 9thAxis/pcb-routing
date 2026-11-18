@@ -127,6 +127,9 @@ pub(super) fn by_pads(
         shut.extend(
             mine.iter().filter(|&&q| q != c && hard(q) && meets(q, c)).filter_map(|&q| rect_of(q, centre, quarter)),
         );
+        // (and what stands there of another domain, which found no room on its own ground, is not moved for it)
+        let foreign = |q: &usize| *q != c && domain_of_part[*q] != domain && meets(*q, c);
+        shut.extend((0..parts.len()).filter(foreign).filter_map(|q| rect_of(q, centre, quarter)));
         let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
         if dist(at, pad) >= dist(was, pad) - 1e-6 {
             // (it stands as near its pad already as there is room to: if that is by it, it is not moved from
@@ -152,6 +155,8 @@ pub(super) fn by_pads(
         for &q in &moved {
             let mut shut = open.clone();
             let others = mine.iter().filter(|&&other| other != q && meets(other, q) && (other == c || stands(other)));
+            let foreign = |other: &usize| domain_of_part[*other] != domain && meets(*other, q);
+            shut.extend((0..parts.len()).filter(foreign).filter_map(|other| rect_of(other, centre, quarter)));
             shut.extend(
                 others.filter_map(|&other| {
                     new_centre[other].map(|at| cx.taken(other, (at, new_quarter[other] % 2 == 1)))

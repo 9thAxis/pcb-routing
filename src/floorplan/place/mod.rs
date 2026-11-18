@@ -78,6 +78,11 @@ impl<'a> Site<'a> {
                 (shift_of[p], domain_of_part[p]) = (shifts[to[*domain]], *domain);
             }
         }
+        // (a part held where it stands is on the board it is drawn on, and counted with the domain of its ground)
+        for p in (0..parts.len()).filter(|&p| cx.held(p)) {
+            shift_of[p] = on.shift_at(parts[p].at);
+            domain_of_part[p] = cx.found.home[p].and_then(|g| cx.domain_at.get(&g).copied()).unwrap_or(0);
+        }
         Site { cx, top, roads, on, on_gap, gap_quarter, leaves: fine_leaves, part_domain, domain_of_part, shift_of }
     }
 

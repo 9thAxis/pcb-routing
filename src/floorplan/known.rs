@@ -26,12 +26,15 @@ pub(super) fn standing(board: &Board) -> (Vec<bool>, Option<Board>) {
         part.placed && part.pads.iter().flatten().all(|&net| joins.get(net).map_or(true, |on| on.len() < 2))
     };
     let stays: Vec<bool> = board.parts.iter().map(stays).collect();
-    if !stays.iter().any(|&stays| stays) {
+    // (and a part that is told to stay where it stands keeps what it is joined to, and its body is shut as theirs)
+    let held = |part: &Part| part.fixed && part.placed;
+    if !stays.iter().any(|&stays| stays) && !board.parts.iter().any(held) {
         return (stays, None);
     }
     let mut with = board.clone();
     // (but what has no pad at all is drawn on the board, not mounted on it: a mark, a logo. It is in no part's way)
-    for (part, _) in board.parts.iter().zip(&stays).filter(|(part, &stays)| stays && !part.pads.is_empty()) {
+    let shuts = |(part, &stays): &(&Part, &bool)| (stays || held(part)) && !part.pads.is_empty();
+    for (part, _) in board.parts.iter().zip(&stays).filter(shuts) {
         let side = part.area.sqrt();
         let [w, h] = part.size.unwrap_or([side, side]);
         with.keepouts.push([part.at[0] - w / 2.0, part.at[1] - h / 2.0, part.at[0] + w / 2.0, part.at[1] + h / 2.0]);
@@ -300,6 +303,13 @@ impl Known<'_> {
             [at[0] + a[0].min(b[0]), at[1] + a[1].min(b[1]), at[0] + a[0].max(b[0]), at[1] + a[1].max(b[1])]
         };
         parts[p].pieces.iter().map(piece).collect()
+    }
+
+    /// Whether a part is held where it stands: one told to stay there (a connector the enclosure places, a
+    /// part already laid out by hand) that stands on the board. It is given no other place, lies as it lies,
+    /// and its body is shut to every other part; its zone is pulled to it.
+    pub(super) fn held(&self, p: usize) -> bool {
+        self.parts[p].fixed && self.parts[p].placed && !self.stays[p]
     }
 
     /// Whether a part is settled before the others: one with holes, one that disturbs, a large one.

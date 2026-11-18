@@ -147,6 +147,13 @@
   the zone's ground as they fill by half, as near as that lies to what they are joined to outside it, and
   not spread over all of it (109 public boards: nets 0.76 of the designers' at the median, from 0.88).
   A body that is nearly square is no longer turned a quarter onto what stands against it.
+  A part told to stay where it stands (a connector the enclosure places) is held there as it lies: it is
+  of no zone, its body is ground the board shuts, and the zones, made of what may be moved, are pulled to it
+  by what joins them to it; the laying out counts how far each such part is from the zones of its nets
+  (`Travel::held_mm`). A part on two grounds that finds its gap taken is given the nearest room on its
+  board and no longer left over another body; a small part is no longer moved onto a body of another
+  domain. With every connector of eight boards held where its designers put it, the plan's nets are 0.94
+  to 1.64 of theirs (five boards within 1.13).
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

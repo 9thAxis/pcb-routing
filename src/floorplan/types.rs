@@ -309,6 +309,10 @@ pub struct Travel {
     pub near_mm: f64,
     /// How far apart the parts that mate are in all, in mm, as the boards stack: what a link has to span sideways.
     pub mate_mm: f64,
+    /// How far the parts that are held where they stand are in all from what they are joined to, in mm: for
+    /// each net of such a part, to the nearest zone with a part of that net (by its middle, as the boards stack).
+    #[serde(default)]
+    pub held_mm: f64,
     /// The parts on two grounds whose two domains are on one board and no neighbours.
     pub apart: usize,
     /// Where ways turn from one road into another, each with the layer changes made there and what the two

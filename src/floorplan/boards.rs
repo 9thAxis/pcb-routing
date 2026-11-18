@@ -21,6 +21,15 @@ pub(super) struct Boards {
     pub(super) held: Vec<Vec<String>>,
 }
 
+impl Boards {
+    /// What is added to a place to say where that is in the stack: by the board it is drawn on (the first, if
+    /// on none).
+    pub(super) fn shift_at(&self, at: Pt) -> Pt {
+        let on = |b: &&[f64; 4]| at[0] >= b[0] && at[0] <= b[2] && at[1] >= b[1] && at[1] <= b[3];
+        self.boards.iter().position(|b| on(&b)).map_or(self.shifts[0], |b| self.shifts[b])
+    }
+}
+
 /// Where the box holds several boards, the domains are parted between them first: in the order their ties
 /// give, each board with as many as its room is of all the room (a domain is on one board).
 pub(super) fn on_boards(cx: &Known, top: &[Work]) -> Boards {

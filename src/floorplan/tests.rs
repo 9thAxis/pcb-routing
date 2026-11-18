@@ -861,3 +861,40 @@ fn a_body_that_is_nearly_square_is_not_turned_a_quarter_onto_what_stands_against
         }
     }
 }
+
+#[test]
+fn a_part_told_to_stay_stands_where_it_stood_and_what_it_is_joined_to_comes_to_it() {
+    // the connector held at either end of the board: it is there as it lies, in no zone, no body over
+    // its own; and the domain it is joined to has the ground at that end
+    for (x, left) in [(2.0, true), (38.0, false)] {
+        let mut board = two_grounds();
+        let j1 = board.parts.iter().position(|part| part.name == "J1").unwrap();
+        (board.parts[j1].at, board.parts[j1].fixed) = ([x, 5.0], true);
+        board.parts[j1].size = Some([2.0, 4.0]);
+        let found = floorplan(&board).unwrap();
+        let place = |name: &str| found.places.iter().find(|place| place.part == name).unwrap();
+        let held = place("J1");
+        assert_eq!((held.at, held.turn, held.off, held.fits), ([x, 5.0], 0, Some(0.0), true));
+        assert_eq!(held.rect, Some([x - 1.0, 3.0, x + 1.0, 7.0]));
+        fn names(zone: &Zone, out: &mut Vec<String>) {
+            out.extend(zone.parts.iter().cloned());
+            zone.inside.iter().for_each(|inner| names(inner, out));
+        }
+        let mut zoned = Vec::new();
+        found.zones.iter().for_each(|zone| names(zone, &mut zoned));
+        assert!(!zoned.contains(&"J1".to_string()));
+        let mine = held.rect.unwrap();
+        for other in found.places.iter().filter(|place| place.part != "J1" && place.fits) {
+            let r = other.rect.unwrap();
+            assert!(
+                r[2].min(mine[2]) - r[0].max(mine[0]) < 1e-6 || r[3].min(mine[3]) - r[1].max(mine[1]) < 1e-6,
+                "{other:?}"
+            );
+        }
+        let field = found.zones.iter().find(|zone| zone.name == "FIELD_0V").unwrap().rect;
+        let other = found.zones.iter().find(|zone| zone.name == "A_GND").unwrap().rect;
+        assert_eq!(field[0] < other[0], left, "{field:?} {other:?}");
+        assert!((place("R2").at[0] - x).abs() < 20.0, "{:?}", place("R2"));
+        assert_eq!(found.places.len(), 14);
+    }
+}

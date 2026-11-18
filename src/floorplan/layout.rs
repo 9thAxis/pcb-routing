@@ -28,7 +28,7 @@ type Span = (usize, usize, Vec<usize>, Vec<usize>);
 fn spans(cx: &Known) -> Vec<Span> {
     let (parts, found, nets, domain_at) = (cx.parts, &cx.found, &cx.nets, &cx.domain_at);
     let mut spans: Vec<(usize, usize, Vec<usize>, Vec<usize>)> = Vec::new();
-    for p in (0..parts.len()).filter(|&p| found.stands[p].len() > 1) {
+    for p in (0..parts.len()).filter(|&p| found.stands[p].len() > 1 && !cx.held(p)) {
         let Some(home) = found.home[p].and_then(|g| domain_at.get(&g).copied()) else { continue };
         let pads_on = |g: usize| {
             let on = |net: &&usize| **net == g || found.rails.get(net).is_some_and(|rail| rail.0 == Some(g));
@@ -162,6 +162,10 @@ impl Laying<'_> {
             let (mid, shift) = (middle(rect), shifts[to[domain]]);
             spot_of.extend(own.iter().map(|&p| (p, [mid[0] + shift[0], mid[1] + shift[1]])));
         }
+        for p in (0..parts.len()).filter(|&p| cx.held(p)) {
+            let shift = self.on.shift_at(parts[p].at);
+            spot_of.insert(p, [parts[p].at[0] + shift[0], parts[p].at[1] + shift[1]]);
+        }
         let domain_of: BTreeMap<usize, usize> =
             leaves.iter().flat_map(|&(domain, _, own)| own.iter().map(move |&p| (p, domain))).collect();
         // What stands on two grounds is given its place: on the gap between its two domains where they are
@@ -255,6 +259,18 @@ impl Laying<'_> {
                 travel.near_mm += dist(near, spot);
             }
         }
+        // (and what is held where it stands is joined from there: each of its nets to the nearest zone of that net)
+        for net in nets.iter() {
+            let free: Vec<Pt> = net.iter().filter(|&&p| !cx.held(p)).filter_map(|p| spot_of.get(p).copied()).collect();
+            for at in net.iter().filter(|&&p| cx.held(p)).filter_map(|p| spot_of.get(p)) {
+                let near =
+                    free.iter().map(|to| (to[0] - at[0]).abs() + (to[1] - at[1]).abs()).fold(f64::INFINITY, f64::min);
+                if near.is_finite() {
+                    travel.held_mm += near;
+                }
+            }
+        }
+        travel.held_mm = travel.held_mm.round();
         (travel.through_mm, travel.near_mm) = (travel.through_mm.round(), travel.near_mm.round());
         bridges
     }
@@ -300,6 +316,7 @@ fn weight(laid: &Laid) -> f64 {
     travel.mm
         + travel.through_mm
         + NEAR * travel.near_mm
+        + travel.held_mm
         + NEAR * travel.mate_mm
         + CRAMPED_MM * travel.cramped
         + STRANDED_MM * travel.apart as f64

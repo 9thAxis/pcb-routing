@@ -365,6 +365,24 @@ pub(super) fn places(
             });
         }
     }
+    // (what is held where it stands: there, as it lies)
+    for p in (0..parts.len()).filter(|&p| cx.held(p)) {
+        spot[p] = Some([parts[p].at[0] + shift_of[p][0], parts[p].at[1] + shift_of[p][1]]);
+        places.push(Place {
+            part: cx.name(p),
+            at: parts[p].at.map(round2),
+            rect: Some(cx.body_at(p, parts[p].at, 0).map(round2)),
+            turn: 0,
+            back: parts[p].back,
+            pieces: if parts[p].pieces.is_empty() {
+                Vec::new()
+            } else {
+                cx.stands_on(p, (parts[p].at, false)).into_iter().map(|r| r.map(round2)).collect()
+            },
+            fits: true,
+            off: Some(0.0),
+        });
+    }
     // (what is the board's own stays where it stands)
     for part in parts.iter().zip(&cx.stays).filter(|(_, &stays)| stays).map(|(part, _)| part) {
         places.push(Place {
@@ -386,9 +404,9 @@ pub(super) fn places(
 /// parts stand on the board today; as the boards stack); and the same by how far apart in the plan the
 /// parts of a net are.
 pub(super) fn against(site: &Site, spot: &[Option<Pt>]) -> (f64, f64, Vec<Against>) {
-    let (cx, top, fine_leaves) = (site.cx, site.top, &site.leaves);
+    let (cx, top) = (site.cx, site.top);
     let (parts, nets) = (cx.parts, &cx.nets);
-    let (boards, shifts, to) = (&site.on.boards, &site.on.shifts, &site.on.to);
+    let (boards, shifts) = (&site.on.boards, &site.on.shifts);
     // (how long the signal nets are with the parts as they stand, and with each at its place: nets all of
     // whose parts stand on the board today; as the boards stack)
     let (mut parts_now_mm, mut parts_then_mm) = (0.0, 0.0);
@@ -419,8 +437,6 @@ pub(super) fn against(site: &Site, spot: &[Option<Pt>]) -> (f64, f64, Vec<Agains
     ];
     let mut against: Vec<(String, usize, f64, f64)> =
         kinds.iter().map(|kind| (kind.to_string(), 0, 0.0, 0.0)).collect();
-    let part_shift: BTreeMap<usize, Pt> =
-        fine_leaves.iter().flat_map(|(domain, _, own)| own.iter().map(|&p| (p, shifts[to[*domain]]))).collect();
     for net in nets {
         if !net.iter().all(|&p| parts[p].placed && spot[p].is_some()) {
             continue;
@@ -433,7 +449,7 @@ pub(super) fn against(site: &Site, spot: &[Option<Pt>]) -> (f64, f64, Vec<Agains
         // (today the parts stand as the file draws them: on the board they are drawn on)
         let today = |p: usize| {
             let home = boards.iter().position(|b| parts[p].at[0] >= b[0] && parts[p].at[0] <= b[2]);
-            let shift = home.map_or(part_shift[&p], |b| shifts[b]);
+            let shift = home.map_or(site.shift_of[p], |b| shifts[b]);
             [parts[p].at[0] + shift[0], parts[p].at[1] + shift[1]]
         };
         let (now, then) =

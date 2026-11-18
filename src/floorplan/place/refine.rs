@@ -110,7 +110,8 @@ pub(super) fn refined(
             let mut shut: Vec<[f64; 4]> = site.closed(gap_rects);
             shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
             let in_the_way = |q: &&usize| **q != p && !on_gap.contains_key(q) && cx.side_of(**q) & cx.side_of(p) != 0;
-            for &q in top[domain].parts.iter().filter(in_the_way) {
+            // (whatever domain it is of: a part that found no room on its own ground may stand on this one)
+            for q in (0..parts.len()).filter(|q| in_the_way(&q)) {
                 if let Some(at) = centre[q].filter(|_| stood.get(&q).is_some_and(|at| at.is_some())) {
                     shut.push(cx.taken(q, (at, quarter[q] % 2 == 1)));
                 }

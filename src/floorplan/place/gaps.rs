@@ -31,6 +31,12 @@ pub(super) fn on_gaps(cx: &Known, top: &[Work], on: &Boards, bridges: &mut [Brid
         .collect();
     let mut gap_quarter: BTreeMap<usize, u8> = BTreeMap::new();
     let mut gap_rects: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
+    // (a part that is held where it stands has its place before any other: there, as it lies; its body is
+    // ground the board shuts)
+    for p in (0..parts.len()).filter(|&p| cx.held(p)) {
+        on_gap.insert(p, parts[p].at);
+        gap_quarter.insert(p, 0);
+    }
     {
         type Strip = (bool, [f64; 4], Vec<(usize, usize, f64, f64)>); // (bridge, part, want along, size)
         let mut strips: BTreeMap<[i64; 4], Strip> = BTreeMap::new();
@@ -109,8 +115,14 @@ pub(super) fn on_gaps(cx: &Known, top: &[Work], on: &Boards, bridges: &mut [Brid
                 }
                 None => region,
             };
+            // (along its gap as it lies; and where there is no room for it so, anywhere on its board, turned if
+            // it must be: no body stands over another)
+            let mut quarters = quarters;
             if let Some((free, false)) = settled(band, &[([w, h], at)], &shut)[0] {
                 at = free;
+            } else if let Some((free, turn)) = settled(region, &[([w, h], at)], &shut)[0] {
+                (at, quarters) = (free, (quarters + u8::from(turn)) % 4);
+                gap_quarter.insert(p, quarters);
             }
             bridges[b].at = at.map(|v| (v * 100.0).round() / 100.0);
             bridges[b].off = parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0);

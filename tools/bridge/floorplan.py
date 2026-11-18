@@ -407,7 +407,9 @@ def floorplan_told(found, depth=2, every=False):
         each = travel["vias"] / travel["nets"] if travel["nets"] else 0.0
         lines += ["", f"between domains (through the parts on the gaps, and from board to board): {travel['through_mm']:.0f} mm "
                       f"of reach; the parts that are to stand near a point are {travel['near_mm']:.0f} mm from it in all"
-                      + (f"; the parts that mate are {travel['mate_mm']:.0f} mm apart as the boards stack" if travel.get("mate_mm") else "")]
+                      + (f"; the parts that mate are {travel['mate_mm']:.0f} mm apart as the boards stack" if travel.get("mate_mm") else "")
+                      + (f"; the parts held where they stand are {travel['held_mm']:.0f} mm from the zones they are joined to in all"
+                         if travel.get("held_mm") else "")]
         lines += [f"every net between zones of one domain given a way along the roads: {travel['nets']} nets, "
                       f"{travel['mm']:.0f} mm, {travel['vias']} layer changes ({each:.1f} a net); {travel['over']} roads asked "
                       f"for more than they hold; {travel['through']} nets go from domain to domain through the parts on "

@@ -29,6 +29,10 @@ pub(super) fn grounds(site: &Site, fine_nets: &[Vec<usize>]) -> BTreeMap<usize, 
             stand[p] = Some([at[0] + shift[0], at[1] + shift[1]]);
         }
     }
+    for p in (0..parts.len()).filter(|&p| cx.held(p)) {
+        let shift = site.shift_of[p];
+        stand[p] = Some([parts[p].at[0] + shift[0], parts[p].at[1] + shift[1]]);
+    }
     let (none, no_sides, no_asks, no_kin) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new(), Vec::new());
     let no_rails: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
     let mut grounds: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
@@ -394,7 +398,11 @@ pub(super) fn settled_rest(
             .iter()
             .copied()
             .filter(|&p| {
-                grounds.contains_key(&p) && !cx.goes_first(p) && !in_block.contains_key(&p) && cx.side_of(p) == side
+                grounds.contains_key(&p)
+                    && !cx.goes_first(p)
+                    && !in_block.contains_key(&p)
+                    && cx.side_of(p) == side
+                    && !stood.get(&p).is_some_and(|at| at.is_some())
             })
             .collect();
         let mut shut: Vec<[f64; 4]> = site.closed(gap_rects);
@@ -500,6 +508,10 @@ pub(super) fn lies(site: &Site, grounds: &BTreeMap<usize, [f64; 4]>, on: &Stood)
                 quarter[p] = quarters;
             }
         }
+    }
+    // (and what is held where it stands is there, as it lies)
+    for p in (0..parts.len()).filter(|&p| site.cx.held(p)) {
+        (centre[p], quarter[p]) = (Some(parts[p].at), 0);
     }
     (centre, quarter)
 }

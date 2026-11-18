@@ -201,15 +201,25 @@ pub(super) fn zone_tree(cx: &Known) -> (Vec<Work>, Vec<Apart>) {
     let between_parts = tied(&cx.nets, &Some);
     let mut apart: Vec<Apart> = Vec::new();
     let mut top: Vec<Work> = Vec::new();
+    // (a part that is held where it stands is of no zone: the zones are made of what may be moved, and are
+    // pulled to it by what joins them to it)
+    let free = |lot: &Vec<usize>| -> Vec<usize> { lot.iter().copied().filter(|&p| !cx.held(p)).collect() };
     for (g, own) in domains {
+        let own = &free(own);
         let inside = within(cx, &between_parts, own, &mut apart);
         // (a part counted with another domain that stands on this ground too takes half its ground here)
-        let half =
-            |p: usize| if found.home[p] != Some(*g) && found.stands[p].contains(g) { parts[p].area / 2.0 } else { 0.0 };
+        let half = |p: usize| {
+            if found.home[p] != Some(*g) && found.stands[p].contains(g) && !cx.held(p) {
+                parts[p].area / 2.0
+            } else {
+                0.0
+            }
+        };
         let more = (0..parts.len()).map(half).sum();
         top.push(Work { name: cx.net_name(*g), parts: own.clone(), inside, rect: [0.0; 4], more });
     }
     if !adrift.is_empty() {
+        let adrift = &free(adrift);
         let inside = within(cx, &between_parts, adrift, &mut apart);
         top.push(Work { name: "(on no ground)".to_string(), parts: adrift.clone(), inside, rect: [0.0; 4], more: 0.0 });
     }
