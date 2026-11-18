@@ -14,11 +14,15 @@
 //! that order allows, each with the share of the board its zones need; each half is cut again, down to the
 //! smallest zones.
 
+mod boards;
 mod constants;
 mod ground;
 mod known;
+mod layout;
 mod plan;
+mod planes;
 mod power;
+mod report;
 mod settle;
 mod ties;
 mod types;
