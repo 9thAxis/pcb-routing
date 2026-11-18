@@ -357,6 +357,13 @@ pub struct Loop {
     pub span: [f64; 2],
     /// And its ground, in mm2: what the loop encloses at the most.
     pub mm2: f64,
+    /// What the bodies of the chip and of the parts in that box take, in mm2: the loop cannot be smaller.
+    pub bodies: f64,
+    /// Whether the box is no more than LOOP_MOST times that: the parts stand against each other.
+    pub tight: bool,
+    /// The parts of two pads on the chip's other small nets, which stand by its pads there (its divider,
+    /// what sets its frequency, the capacitor it drives its switch from).
+    pub beside: Vec<String>,
 }
 
 /// Where roads meet and ways turn from one into the other: each turn is a layer change, and its via wants
@@ -539,7 +546,8 @@ pub struct Floorplan {
     /// See `pads_first_mm`.
     pub pads_mm: f64,
     /// The capacitors from a supply to the ground that stand for a chip of their zone, and how many of them
-    /// have their pad on the supply within BESIDE_PIN of the pad of that chip they are for.
+    /// have their pad on the supply by the pad of that chip they are for: within BESIDE_PIN, or for a large
+    /// one within its own length and a millimetre.
     pub bypass: [usize; 2],
     /// Each of those capacitors: (the capacitor, its chip, how far its pad on the supply is from the pad of
     /// the chip it is for in mm, how many capacitors that pad of the chip has in all).
@@ -1021,6 +1029,8 @@ pub fn farads(value: &str) -> Option<f64> {
     scale.map(|scale| number * scale)
 }
 
+/// A loop is tight if the box of its pads is no more than this many times the bodies of its parts.
+const LOOP_MOST: f64 = 2.0;
 /// A net with an inductor and a chip on it is a switch node if it has no more parts than this.
 const SWITCHED: usize = 5;
 /// How often the small parts are gone over to shorten their nets, and how far from where a part wants to be
@@ -2556,7 +2566,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // the inductor and what else of two pads is on the node (a diode) by the chip's pad on the node; and the
     // capacitors of the chip's sheet from the far side of each of those to a ground (two at the most, the
     // smallest first) by that part's pad there. These go before the other capacitors.
-    let mut switchers: Vec<(usize, usize, Vec<usize>)> = Vec::new(); // (the chip, its node, the parts by it)
+    type Switcher = (usize, usize, Vec<usize>, Vec<usize>); // (the chip, its node, its loop's parts, those at its other pads)
+    let mut switchers: Vec<Switcher> = Vec::new();
     let mut of_loops: Vec<(usize, usize, usize)> = Vec::new();
     // (of two nets from one chip to one inductor, the one with the fewer parts is the node: the other is
     // where the chip senses what the inductor gives)
@@ -2600,7 +2611,23 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         by_it.extend(bypasses.iter().filter(|bypass| bypass.1 == *chip).map(|bypass| bypass.0));
         by_it.sort_unstable();
         by_it.dedup();
-        switchers.push((*chip, node, by_it));
+        switchers.push((*chip, node, by_it, Vec::new()));
+    }
+    // And what of two pads is on another small net of such a chip stands by the chip's pad on that net: the
+    // divider it senses its output by, what sets its frequency or its limit, the capacitor it drives its
+    // switch from. A long track there picks up what the switch node sends.
+    for switcher in switchers.iter_mut() {
+        let (chip, node) = (switcher.0, switcher.1);
+        let own: BTreeSet<usize> = parts[chip].pads.iter().flatten().copied().collect();
+        for net in own.into_iter().filter(|&net| net != node && is_signal(net) && reach[net].len() <= SWITCHED) {
+            let small = |m: &usize| parts[*m].pads.len() == 2 && !parts[*m].inductor;
+            for m in reach[net].iter().copied().filter(small).collect::<Vec<usize>>() {
+                if of_loops.iter().all(|of| of.0 != m) {
+                    of_loops.push((m, chip, net));
+                    switcher.3.push(m);
+                }
+            }
+        }
     }
     let in_loops: BTreeSet<usize> = of_loops.iter().map(|of| of.0).collect();
     bypasses.retain(|bypass| !in_loops.contains(&bypass.0));
@@ -3042,11 +3069,17 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
     face(&centre, &mut quarter, &pins);
     let pads_mm = all_reach(&centre, &quarter);
+    // (a capacitor is by its pad within BESIDE_PIN; a large one within its own length and a millimetre: its
+    // pad cannot be nearer than its body allows)
+    let by_pad = |c: usize| BESIDE_PIN.max(body(c)[0].max(body(c)[1]) + 1.0);
+    let of_supplies =
+        |c: &usize| parts[*c].capacitor && parts[*c].pads.iter().flatten().any(|net| found.rails.contains_key(net));
     let beside = pins
         .iter()
+        .filter(|(c, _)| of_supplies(c))
         .filter(|(&c, &(mine, chip, pin))| {
             match (pad_at(c, mine, quarter[c], &centre), pad_at(chip, pin, quarter[chip], &centre)) {
-                (Some(here), Some(there)) => dist(here, there) <= BESIDE_PIN,
+                (Some(here), Some(there)) => dist(here, there) <= by_pad(c),
                 _ => false,
             }
         })
@@ -3054,7 +3087,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // The loops, as they came out: the box of the pads on the node and on the supplies of the loop.
     let mut loops: Vec<Loop> = switchers
         .iter()
-        .map(|(chip, node, by_it)| {
+        .map(|(chip, node, by_it, at_pads)| {
             let mut spots: Vec<Pt> = Vec::new();
             let mut of_loop: BTreeSet<usize> = [*node].into_iter().collect();
             // (of the capacitors on one supply, the one nearest the chip closes the loop: the others are behind it)
@@ -3072,7 +3105,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 }
             }
             let closing: BTreeSet<usize> = nearest.values().map(|best| best.1).collect();
+            let mut bodies = body(*chip)[0] * body(*chip)[1];
             for &m in by_it.iter().filter(|&&m| !parts[m].capacitor || closing.contains(&m)) {
+                bodies += body(m)[0] * body(m)[1];
                 of_loop.extend(parts[m].pads.iter().flatten().filter(|net| !found.grounds.contains(net)));
                 spots.extend((0..parts[m].pads.len()).filter_map(|i| pad_at(m, i, quarter[m], &centre)));
             }
@@ -3088,13 +3123,16 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 chip: name(*chip),
                 node: net_name(*node),
                 parts: names(by_it),
+                beside: names(at_pads),
                 span: span.map(|v| (v * 10.0).round() / 10.0),
                 mm2: (span[0] * span[1]).round(),
+                bodies: bodies.round(),
+                tight: span[0] * span[1] <= LOOP_MOST * bodies,
             }
         })
         .collect();
     loops.sort_by(|a, b| b.mm2.total_cmp(&a.mm2).then(a.chip.cmp(&b.chip)));
-    let bypass = [pins.len(), beside];
+    let bypass = [pins.keys().filter(|c| of_supplies(c)).count(), beside];
     let mut capacitors: Vec<(String, String, f64, usize)> = pins
         .iter()
         .filter_map(|(&c, &(mine, chip, pin))| {
@@ -3545,7 +3583,22 @@ mod tests {
         // the inductor stands against the chip, and the whole loop in a box not much larger than its parts
         let place = |name: &str| found.places.iter().find(|place| place.part == name).unwrap();
         assert!(dist(place("L1").at, place("U2").at) <= 6.5, "{:?} {:?}", place("L1"), place("U2"));
-        assert!(found_loop.mm2 <= 150.0, "{found_loop:?}");
+        assert!(found_loop.mm2 <= 150.0 && found_loop.bodies > 0.0, "{found_loop:?}");
+        // a divider on a small net of the chip is told with it, and stands by the chip
+        let mut board = board.clone();
+        board.nets.push(Net { name: "FB".to_string(), supply: false, pair: false });
+        let sense = board.nets.len() - 1;
+        board.parts.iter_mut().find(|part| part.name == "U2").unwrap().pads[3] = Some(sense);
+        for (name, other) in [("R8", out), ("R9", ground)] {
+            let mut divider = board.parts.iter().find(|part| part.name == "R1").unwrap().clone();
+            (divider.name, divider.pads, divider.at) = (name.to_string(), vec![Some(sense), other], [70.0, 35.0]);
+            (divider.offsets, divider.size, divider.area) = (vec![[-0.5, 0.0], [0.5, 0.0]], Some([2.0, 1.0]), 2.0);
+            board.parts.push(divider);
+        }
+        let found = floorplan(&board).unwrap();
+        assert_eq!(found.loops[0].beside, ["R8", "R9"]);
+        let place = |name: &str| found.places.iter().find(|place| place.part == name).unwrap();
+        assert!(dist(place("R8").at, place("U2").at) <= 6.0 && dist(place("R9").at, place("U2").at) <= 6.0);
     }
 
     #[test]

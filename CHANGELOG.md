@@ -81,7 +81,10 @@
   A chip with a pad on a net that goes to an inductor and to little else is a switching regulator
   (`loops`): its inductor and what else of two pads is on that net (a diode) stand by the chip's pad on
   it, the capacitors that close the loop by theirs, before any other capacitor is placed; the plan says
-  how large the box of each loop's pads came out.
+  how large the box of each loop's pads came out, beside what the bodies of its parts take, and whether
+  that is tight. What of two pads is on another small net of such a chip (its divider, what sets its
+  frequency, its bootstrap capacitor) stands by the chip's pad there. A large capacitor is by its pad
+  within its own length and a millimetre, a small one within 3 mm.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

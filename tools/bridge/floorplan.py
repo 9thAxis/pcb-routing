@@ -289,10 +289,12 @@ def floorplan_told(found, depth=2, every=False):
                   f"{'longer' if longer > 0 else 'shorter'})",
                   f"  each then turned so that its pads face what they are joined to: from pad to the nearest other pad of "
                   f"its net, {found['pads_first_mm']:.0f} mm in all before and {found['pads_mm']:.0f} mm after; "
-                  f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad within 3 mm of the pad they are for"]
+                  f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad by the pad they are for (within 3 mm; a large one within its length)"]
     for loop in found.get("loops", []):
         lines.append(f"  switching regulator {loop['chip']} (switch node {loop['node']}): {', '.join(loop['parts'])} stand by it; "
-                     f"the pads of its loop lie within {loop['box'][0]:.1f} x {loop['box'][1]:.1f} mm ({loop['mm2']:.0f} mm2)")
+                     f"the pads of its loop lie within {loop['box'][0]:.1f} x {loop['box'][1]:.1f} mm ({loop['mm2']:.0f} mm2, "
+                     f"its parts take {loop['bodies']:.0f}: {'tight' if loop['tight'] else 'LOOSE'})"
+                     + (f"; at its other pads: {', '.join(loop['beside'])}" if loop["beside"] else ""))
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "
