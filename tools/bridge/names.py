@@ -17,6 +17,7 @@ NAMED = [("crystal", _WORD("XTAL|XTALIN|XTALOUT|OSC|OSCIN|OSCOUT|XIN|XOUT|OSC32|
 CRYSTAL_PART = re.compile(r"^(Y|XTAL)\d")  # (not X: that is a connector as often)
 CAPACITOR_PART = re.compile(r"^C\d")
 INDUCTOR_PART = re.compile(r"^L\d")
+DIODE_PART = re.compile(r"^(D|TVS|ZD)\d")
 # a part that someone plugs into or presses: a connector, a switch (not JP, a jumper)
 FACING_PART = re.compile(r"^(J|P|CN|CON|X|USB|RJ|SW|S|BTN|PB)\d")
 CHIP_PART = re.compile(r"^(U|IC)\d")

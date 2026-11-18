@@ -46,6 +46,9 @@ pub struct Part {
     /// Whether it is an inductor: a chip with a pad on a net that goes to one switches it.
     #[serde(default)]
     pub inductor: bool,
+    /// Whether it is a diode: from a connector's net to a ground or a supply it protects, and stands there.
+    #[serde(default)]
+    pub diode: bool,
     /// The ground it takes on the board, in mm2.
     pub area: f64,
     /// The net of each of its pads, as an index into [`Board::nets`]; None for a pad on no net.
@@ -552,6 +555,17 @@ pub struct Floorplan {
     /// Each of those capacitors: (the capacitor, its chip, how far its pad on the supply is from the pad of
     /// the chip it is for in mm, how many capacitors that pad of the chip has in all).
     pub capacitors: Vec<(String, String, f64, usize)>,
+    /// The parts of two pads that stand for one pad of a chip or a connector, and how many of them are by it
+    /// (as a capacitor is by its pad): on a small net with one chip or connector, a capacitor from it to a
+    /// ground or a supply or across two nets of that chip (a filter at the input it is for) and the
+    /// resistor in series with it; a diode likewise; at a connector what is in series with its pin (its
+    /// protection comes first); and what is across two pads of one chip and of nothing else (its feedback).
+    pub served: [usize; 2],
+    /// How many chains there are from one chip or connector through parts of two pads in series to another.
+    pub chains: usize,
+    /// Those that double back: (from, to, the parts between in their order, how far it is straight from the
+    /// pad of the one to the pad of the other in mm, how far through the parts), the worst first.
+    pub back: Vec<(String, String, Vec<String>, f64, f64)>,
     /// The switching regulators, each with its loop: the largest loop first.
     pub loops: Vec<Loop>,
     /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
@@ -1029,6 +1043,12 @@ pub fn farads(value: &str) -> Option<f64> {
     scale.map(|scale| number * scale)
 }
 
+/// A net on which a part may stand for the one chip or connector there has no more parts than this.
+const SERVED: usize = 6;
+/// A chain is followed through no more parts in series than this; and doubles back if the way through its
+/// parts is more than BACK times as long as straight.
+const CHAIN_MOST: usize = 6;
+const BACK: f64 = 1.5;
 /// A loop is tight if the box of its pads is no more than this many times the bodies of its parts.
 const LOOP_MOST: f64 = 2.0;
 /// A net with an inductor and a chip on it is a switch node if it has no more parts than this.
@@ -2636,6 +2656,53 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
     let loop_parts = of_loops.len();
     bypasses.splice(0..0, of_loops);
+    // A signal is laid out in the order it flows, and what is there for one pad stands by it. On a small net
+    // with one chip or connector on it (its head): a capacitor from the net to a ground or a supply, or
+    // across to another net of that chip, filters what the chip takes in there and stands by its pad; a
+    // diode from it to a ground or a supply clamps it and stands there too; and at a connector what is in
+    // series with its pin comes first (a fuse, a resistor, a bead).
+    let is_head = |q: usize| is_chip(q) || parts[q].edge;
+    let mut serving: Vec<(usize, usize, usize)> = Vec::new();
+    let only_head = |net: usize| -> Option<usize> {
+        let mut heads = reach[net].iter().copied().filter(|&q| is_head(q));
+        heads.next().filter(|_| heads.next().is_none())
+    };
+    for net in (0..all_nets.len()).filter(|&net| is_signal(net)) {
+        let Some(head) = only_head(net) else { continue };
+        let small = reach[net].len() <= SERVED;
+        let mut filtered = false;
+        let mut in_series: Vec<usize> = Vec::new();
+        for &m in reach[net].iter().filter(|&&m| m != head && parts[m].pads.len() == 2) {
+            if parts[m].inductor || parts[m].edge || bypasses.iter().any(|bypass| bypass.0 == m) {
+                continue;
+            }
+            let Some(other) = parts[m].pads.iter().flatten().copied().find(|&other| other != net) else { continue };
+            let to_power = found.grounds.contains(&other) || found.rails.contains_key(&other);
+            let across = is_signal(other) && reach[other].contains(&head);
+            // (what is across two pads of one chip and of nothing else is its own: its feedback, its
+            // compensation, whatever the size of the nets)
+            let its_own = is_signal(other) && only_head(other) == Some(head);
+            let shunt = small && ((parts[m].capacitor && (to_power || across)) || (parts[m].diode && to_power));
+            let first = small && parts[head].edge && !to_power && !parts[m].capacitor;
+            filtered |= shunt && parts[m].capacitor;
+            if (shunt || first || its_own) && serving.iter().all(|of| of.0 != m) {
+                serving.push((m, head, net));
+            } else if small && is_signal(other) && !parts[m].capacitor && !parts[m].diode {
+                in_series.push(m);
+            }
+        }
+        // (and the resistor in series with a filter's capacitor is of the filter: it stands there with it)
+        for m in in_series.into_iter().filter(|_| filtered) {
+            if serving.iter().all(|of| of.0 != m) {
+                serving.push((m, head, net));
+            }
+        }
+    }
+    for &(m, head, _) in &serving {
+        fine_nets.extend(vec![vec![m, head]; BYPASS]);
+    }
+    let served_parts: BTreeSet<usize> = serving.iter().map(|of| of.0).collect();
+    bypasses.extend(serving);
     let (none, no_sides, no_asks, no_kin) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new(), Vec::new());
     let no_rails: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
     let mut grounds: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
@@ -3132,6 +3199,80 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         })
         .collect();
     loops.sort_by(|a, b| b.mm2.total_cmp(&a.mm2).then(a.chip.cmp(&b.chip)));
+    // (what stands for one pad, and how much of it is by that pad)
+    let served_by = pins
+        .iter()
+        .filter(|(c, _)| served_parts.contains(c))
+        .filter(|(&c, &(mine, head, pin))| {
+            match (pad_at(c, mine, quarter[c], &centre), pad_at(head, pin, quarter[head], &centre)) {
+                (Some(here), Some(there)) => dist(here, there) <= by_pad(c),
+                _ => false,
+            }
+        })
+        .count();
+    let served = [pins.keys().filter(|c| served_parts.contains(c)).count(), served_by];
+    // The chains: from the pad of a head on a net where it is the only head, through parts of two pads in
+    // series (each on to a net with no head and one such part more), to the next head. One doubles back if
+    // the way through the middles of its parts is more than BACK times as long as straight and LOCAL_MM more.
+    let series_on = |net: usize, from: usize| -> Vec<(usize, usize)> {
+        reach[net]
+            .iter()
+            .copied()
+            .filter(|&m| m != from && parts[m].pads.len() == 2 && !is_head(m))
+            .filter_map(|m| {
+                let other = parts[m].pads.iter().flatten().copied().find(|&other| other != net)?;
+                is_signal(other).then_some((m, other))
+            })
+            .collect()
+    };
+    let pad_on = |q: usize, net: usize| -> Option<Pt> {
+        let i = parts[q].pads.iter().position(|&of| of == Some(net))?;
+        pad_at(q, i, quarter[q], &centre)
+    };
+    let mut chains = 0;
+    let mut back: Vec<(String, String, Vec<String>, f64, f64)> = Vec::new();
+    for start in (0..all_nets.len()).filter(|&net| is_signal(net)) {
+        let heads: Vec<usize> = reach[start].iter().copied().filter(|&q| is_head(q)).collect();
+        let [from] = heads[..] else { continue };
+        for (first, mut net) in series_on(start, from) {
+            let (mut through, mut last) = (vec![first], first);
+            let mut to: Option<(usize, usize)> = None;
+            for _ in 0..CHAIN_MOST {
+                let heads: Vec<usize> = reach[net].iter().copied().filter(|&q| is_head(q)).collect();
+                match (&heads[..], &series_on(net, last)[..]) {
+                    ([head], _) => {
+                        to = Some((*head, net));
+                        break;
+                    }
+                    ([], [(next, onward)]) => {
+                        through.push(*next);
+                        (last, net) = (*next, *onward);
+                    }
+                    _ => break,
+                }
+            }
+            // (each chain once: from its end of the lesser net)
+            let Some((to, end)) = to.filter(|&(_, end)| start < end) else { continue };
+            let (Some(a), Some(b)) = (pad_on(from, start), pad_on(to, end)) else { continue };
+            chains += 1;
+            let mut spots: Vec<Pt> = vec![a];
+            spots.extend(through.iter().filter_map(|&m| in_stack(m, &centre)));
+            spots.push(b);
+            let along: f64 = spots.windows(2).map(|pair| dist(pair[0], pair[1])).sum();
+            let direct = dist(a, b);
+            if along > BACK * direct + LOCAL_MM {
+                let round = |v: f64| (v * 10.0).round() / 10.0;
+                back.push((
+                    name(from),
+                    name(to),
+                    through.iter().map(|&m| name(m)).collect(),
+                    round(direct),
+                    round(along),
+                ));
+            }
+        }
+    }
+    back.sort_by(|a, b| (b.4 - b.3).total_cmp(&(a.4 - a.3)).then(a.0.cmp(&b.0)).then(a.2.cmp(&b.2)));
     let bypass = [pins.keys().filter(|c| of_supplies(c)).count(), beside];
     let mut capacitors: Vec<(String, String, f64, usize)> = pins
         .iter()
@@ -3353,6 +3494,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         travel,
         first,
         bridges,
+        served,
+        chains,
+        back,
         loops,
         places,
         parts_now_mm: parts_now_mm.round(),
@@ -3602,6 +3746,52 @@ mod tests {
     }
 
     #[test]
+    fn what_stands_for_one_pad_is_found_by_how_the_signal_flows() {
+        // an input on the field side: connector, a diode to ground, a resistor in series, a capacitor to
+        // ground at the chip
+        let mut board = two_grounds();
+        for name in ["IN", "MID"] {
+            board.nets.push(Net { name: name.to_string(), supply: false, pair: false });
+        }
+        let net = |board: &Board, name: &str| board.nets.iter().position(|net| net.name == name);
+        let (input, mid, ground) = (net(&board, "IN"), net(&board, "MID"), net(&board, "FIELD_0V"));
+        // (the chip's and the connector's pads are known by where they are: so is which pad a part stands by)
+        let chip = board.parts.iter_mut().find(|part| part.name == "U4").unwrap();
+        chip.pads.push(mid);
+        chip.offsets = vec![[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
+        let like = board.parts.iter().find(|part| part.name == "R2").unwrap().clone();
+        for (name, pads) in
+            [("J2", [input, ground]), ("D1", [input, ground]), ("R5", [input, mid]), ("C9", [mid, ground])]
+        {
+            let mut part = like.clone();
+            (part.name, part.pads) = (name.to_string(), pads.to_vec());
+            (part.edge, part.diode, part.capacitor) = (name == "J2", name == "D1", name == "C9");
+            part.offsets = vec![[-0.5, 0.0], [0.5, 0.0]];
+            board.parts.push(part);
+        }
+        let found = floorplan(&board).unwrap();
+        let of: BTreeMap<&str, &str> = found.capacitors.iter().map(|c| (c.0.as_str(), c.1.as_str())).collect();
+        // the diode and the resistor are the connector's (its protection comes first), the capacitor the chip's
+        assert_eq!((of.get("D1"), of.get("R5"), of.get("C9")), (Some(&"J2"), Some(&"J2"), Some(&"U4")), "{of:?}");
+        assert_eq!(found.served[0], 3);
+        // and from the connector through the resistor to the chip is a chain
+        assert!(found.chains >= 1, "{}", found.chains);
+        // a resistor across two pads of one chip, on nets of nothing else, is that chip's too
+        for name in ["FB_A", "FB_B"] {
+            board.nets.push(Net { name: name.to_string(), supply: false, pair: false });
+        }
+        let (a, b) = (net(&board, "FB_A"), net(&board, "FB_B"));
+        let amp = board.parts.iter_mut().find(|part| part.name == "U1").unwrap();
+        amp.pads.extend([a, b]);
+        amp.offsets = (0..6).map(|i| [i as f64 - 2.5, 0.0]).collect();
+        let mut across = like.clone();
+        (across.name, across.pads) = ("R7".to_string(), vec![a, b]);
+        board.parts.push(across);
+        let found = floorplan(&board).unwrap();
+        assert!(found.capacitors.iter().any(|c| c.0 == "R7" && c.1 == "U1"), "{:?}", found.capacitors);
+    }
+
+    #[test]
     fn two_grounds_are_neighbours_across_a_gap_as_long_as_they_are_beside_each_other() {
         let (a, b) = ([0.0, 0.0, 10.0, 10.0], [14.0, 4.0, 30.0, 20.0]);
         assert_eq!(strip_between(a, b, 4.0), Some(([10.0, 4.0, 14.0, 10.0], true)));
@@ -3629,6 +3819,7 @@ mod tests {
             edge: name.starts_with('J'),
             capacitor: name.starts_with('C'),
             inductor: name.starts_with('L'),
+            diode: name.starts_with('D'),
             area: 10.0,
             pads: on.iter().map(|n| net(n)).collect(),
             height: None,
@@ -3783,6 +3974,7 @@ mod tests {
             edge: false,
             capacitor: false,
             inductor: false,
+            diode: false,
             area: 100.0,
             pads: pads[n].clone(),
             height: None,

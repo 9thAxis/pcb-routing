@@ -85,6 +85,12 @@
   that is tight. What of two pads is on another small net of such a chip (its divider, what sets its
   frequency, its bootstrap capacitor) stands by the chip's pad there. A large capacitor is by its pad
   within its own length and a millimetre, a small one within 3 mm.
+  A signal is laid out as it flows (`served`, `chains`, `back`): on a small net with one chip or connector,
+  a capacitor to a ground or a supply or across two nets of that chip stands by its pad there (a filter at
+  the input it is for) with the resistor in series with it; a diode from a connector's net likewise, and
+  what is in series with a connector's pin (its protection comes first); what is across two pads of one
+  chip and of nothing else stands by it (its feedback). The plan counts the chains from one chip or
+  connector through parts in series to another and names those that double back.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

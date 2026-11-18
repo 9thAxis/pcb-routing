@@ -3,7 +3,7 @@ answer as lines to read. Read only: nothing here moves a part."""
 
 import fnmatch
 
-from .names import CAPACITOR_PART, FACING_PART, INDUCTOR_PART, is_supply
+from .names import CAPACITOR_PART, DIODE_PART, FACING_PART, INDUCTOR_PART, is_supply
 from .steps import habits, planes
 
 
@@ -88,7 +88,8 @@ def floorplan(picture, rules, ask):
     # file places it by, is told as far from that: `anchor`; and each pad likewise: `offsets`)
     parts = [dict(name=reference, sheet=part.sheet or "", at=[round(v, 4) for v in mid[reference]], placed=placed(part),
                   edge=bool(guesses and FACING_PART.match(reference)),
-                  capacitor=bool(CAPACITOR_PART.match(reference)), inductor=bool(INDUCTOR_PART.match(reference)), area=round(area.get(reference, 1.0), 2),
+                  capacitor=bool(CAPACITOR_PART.match(reference)), inductor=bool(INDUCTOR_PART.match(reference)),
+                  diode=bool(DIODE_PART.match(reference)), area=round(area.get(reference, 1.0), 2),
                   pads=pads.get(reference, []), offsets=offsets.get(reference, []), pins=pins.get(reference, []),
                   anchor=[round(part.at[k] - mid[reference][k], 4) for k in (0, 1)], through=reference in drilled,
                   value=part.value or "", footprint=(part.footprint or "").split(":")[-1], angle=part.angle)
@@ -290,6 +291,16 @@ def floorplan_told(found, depth=2, every=False):
                   f"  each then turned so that its pads face what they are joined to: from pad to the nearest other pad of "
                   f"its net, {found['pads_first_mm']:.0f} mm in all before and {found['pads_mm']:.0f} mm after; "
                   f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad by the pad they are for (within 3 mm; a large one within its length)"]
+    if found.get("served"):
+        lines.append(f"  filter and protection parts that stand for one pad (a capacitor from a chip's input to ground or across "
+                     f"two of its inputs, a diode or a part in series at a connector): {found['served'][1]} of "
+                     f"{found['served'][0]} by that pad")
+    if "chains" in found:
+        back = found.get("back", [])
+        lines.append(f"  signal chains from one chip or connector through parts in series to another: {found['chains']}; "
+                     f"{len(back)} double back (their way through their parts is more than half as long again as straight)")
+        for a, b, through, direct, along in back[:None if every else 8]:
+            lines.append(f"    {a} to {b} through {', '.join(through)}: {direct:.0f} mm straight, {along:.0f} mm through them")
     for loop in found.get("loops", []):
         lines.append(f"  switching regulator {loop['chip']} (switch node {loop['node']}): {', '.join(loop['parts'])} stand by it; "
                      f"the pads of its loop lie within {loop['box'][0]:.1f} x {loop['box'][1]:.1f} mm ({loop['mm2']:.0f} mm2, "
