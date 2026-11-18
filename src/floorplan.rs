@@ -123,6 +123,9 @@ pub struct Net {
     /// Whether it is one half of a differential pair.
     #[serde(default)]
     pub pair: bool,
+    /// Whether it is sensitive: to be short, and kept from what disturbs.
+    #[serde(default)]
+    pub sensitive: bool,
 }
 
 /// A board, as far as its floorplan needs it.
@@ -169,6 +172,22 @@ pub struct Board {
     /// What a via takes, in mm: its pad and the clearance round it.
     #[serde(default = "usual_via")]
     pub via: f64,
+    /// Whether the copies of a sheet that repeats stand side by side as one body.
+    #[serde(default)]
+    pub rows: Rows,
+}
+
+/// Whether the copies of a sheet that repeats stand side by side.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Rows {
+    /// Wherever there is room for them so: for channels that are to match, and to be read at a glance.
+    Always,
+    /// Where their pads are then not much further from what they join than with each copy by itself.
+    #[default]
+    Cheap,
+    /// Never: each copy where its own nets are shortest.
+    Never,
 }
 
 fn usual_via() -> f64 {
@@ -356,6 +375,25 @@ pub struct Repeat {
     pub alike: usize,
     /// The sheet that was laid out.
     pub like: String,
+    /// How many of them stand together, side by side and turned alike, as one body; 0 if each stands by itself.
+    pub together: usize,
+    /// The nets that each copy has of its own, matched from copy to copy (by the pad of the matched part
+    /// they are on): how many there are.
+    pub matched: usize,
+    /// How much longer the longest of a net's copies is than the shortest, in mm: on the average over those
+    /// nets. The less, the more alike the copies are joined to what is round them: channels that match.
+    pub spread_mm: f64,
+    /// And at the worst, with the net of the first sheet that it is of.
+    pub worst_mm: f64,
+    /// See `worst_mm`.
+    pub worst: String,
+    /// The longest of all those nets, in mm.
+    pub longest_mm: f64,
+    /// The nets that are one and the same for every copy (a bias, a clock, what selects them): how many, and
+    /// how long they are in all, in mm. Copies side by side leave these short and straight.
+    pub shared: usize,
+    /// See `shared`.
+    pub shared_mm: f64,
 }
 
 /// A switching regulator with the parts of its loop, which stand by it.
@@ -590,6 +628,8 @@ pub struct Floorplan {
     /// many of them came out laid out alike, the parts in each, the chips), the most numerous first. Those
     /// of one make-up are laid out by the same steps, and so alike.
     pub alike: Vec<(usize, usize, usize, Vec<String>)>,
+    /// The sensitive nets: (how many, how long in all in mm, the longest in mm, its name).
+    pub sensitive: (usize, f64, f64, String),
     /// The sheets that repeat, the largest first: of each make-up one is laid out by itself and every copy
     /// placed as it lies.
     pub repeats: Vec<Repeat>,
@@ -1090,6 +1130,11 @@ const FEW: usize = 4;
 const OWN_PAD_MM: f64 = 1.0;
 /// A sheet is looked at for repeats if it has this many parts; and its parts are coloured this many times.
 const REPEAT_LEAST: usize = 3;
+/// Copies stand side by side if their pads are then no more than this many times as far from what they join
+/// as with each copy by itself.
+const ROW_WORTH: f64 = 1.25;
+/// What is left between two copies of a sheet that stand side by side, in mm.
+const BETWEEN_COPIES: f64 = 1.0;
 /// How far from its middle a sheet that is laid out by itself may reach, in mm.
 const UNIT_REACH: f64 = 40.0;
 const COLOURINGS: usize = 4;
@@ -2922,6 +2967,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             members_of.entry(head).or_default().push((c, by, net));
         }
     }
+    #[derive(Clone)]
     struct Block {
         /// Each of its parts: where its middle is from the block's, and how many quarters it is turned.
         at: Vec<(usize, Pt, u8)>,
@@ -3086,7 +3132,13 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // joined to (the kinds and pads of the parts on each net within the sheet; whether the net is a ground,
     // a supply, or leaves the sheet), until two parts have one colour only if they sit alike in their
     // sheets. The parts of two such sheets are matched colour by colour.
-    let mut unit_groups: Vec<(Vec<String>, usize, Vec<usize>)> = Vec::new(); // (the sheets, parts of each, a part of each)
+    // (the sheets, the parts of each that are placed whole, a part of each, and the parts of each in one order)
+    type Copies = (Vec<String>, usize, Vec<usize>, Vec<Vec<usize>>);
+    let mut unit_groups: Vec<Copies> = Vec::new();
+    // (for a body of several copies, by its first part: what is tried if it finds no room, in turn; each a
+    // set of bodies, by a part of each)
+    let mut alternatives: BTreeMap<usize, Vec<Vec<(usize, Block)>>> = BTreeMap::new();
+    let mut in_rows: BTreeMap<usize, usize> = BTreeMap::new(); // a body of copies, by its first part -> the copies side by side
     {
         let mut of_sheet: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for p in (0..parts.len()).filter(|&p| !stays(&parts[p])) {
@@ -3169,7 +3221,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     .filter(|&j| copies.iter().all(|(_, own)| within_sheet(own, own[j])))
                     .collect();
                 if whole.len() < REPEAT_LEAST {
-                    unit_groups.push((names, copies[0].1.len(), Vec::new()));
+                    unit_groups.push((
+                        names,
+                        copies[0].1.len(),
+                        Vec::new(),
+                        copies.iter().map(|copy| copy.1.clone()).collect(),
+                    ));
                     continue;
                 }
                 // The first is laid out: its blocks as they are, its other parts each by itself; the largest
@@ -3279,7 +3336,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     }
                 }
                 if !fits || shut.is_empty() {
-                    unit_groups.push((names, copies[0].1.len(), Vec::new()));
+                    unit_groups.push((
+                        names,
+                        copies[0].1.len(),
+                        Vec::new(),
+                        copies.iter().map(|copy| copy.1.clone()).collect(),
+                    ));
                     continue;
                 }
                 let low = |k: usize| shut.iter().map(|r| r[k]).fold(f64::INFINITY, f64::min);
@@ -3287,6 +3349,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 let mid = [(low(0) + high(0)) / 2.0, (low(1) + high(1)) / 2.0];
                 // (every copy is a block of its own parts lying as the first's: with the pads its own blocks gave)
                 let mut keys: Vec<usize> = Vec::new();
+                let mut singles: Vec<(usize, Block)> = Vec::new();
                 for (_, own) in &copies {
                     let mut pins: Vec<(usize, (usize, usize, usize))> = Vec::new();
                     let mut at: Vec<(usize, Pt, u8)> = Vec::new();
@@ -3306,9 +3369,39 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     }
                     let through = mine.iter().any(|&p| parts[p].through);
                     keys.push(at[0].0);
-                    laid_blocks.insert(at[0].0, Block { at, drawn, through, pins });
+                    singles.push((at[0].0, Block { at, drawn, through, pins }));
                 }
-                unit_groups.push((names, whole.len(), keys));
+                // The copies stand together, side by side and turned alike, as one body: in a row; failing
+                // that (from four of them) in two rows; failing that each by itself. So they are placed as a
+                // designer lays repeated channels, and what feeds them all runs along them.
+                let size = [high(0) - low(0), high(1) - low(1)];
+                let side_by_side = |across: usize| -> Block {
+                    let down = singles.len().div_ceil(across);
+                    let mut all = Block { at: Vec::new(), drawn: Vec::new(), through: false, pins: Vec::new() };
+                    for (n, (_, one)) in singles.iter().enumerate() {
+                        let step = [
+                            ((n % across) as f64 - (across - 1) as f64 / 2.0) * (size[0] + BETWEEN_COPIES),
+                            ((n / across) as f64 - (down - 1) as f64 / 2.0) * (size[1] + BETWEEN_COPIES),
+                        ];
+                        let moved = |placed: &(usize, Pt, u8)| {
+                            (placed.0, [placed.1[0] + step[0], placed.1[1] + step[1]], placed.2)
+                        };
+                        all.at.extend(one.at.iter().map(moved));
+                        all.drawn.extend(one.drawn.iter().map(moved));
+                        all.pins.extend(one.pins.iter().copied());
+                        all.through |= one.through;
+                    }
+                    all
+                };
+                let key = singles[0].0;
+                let mut then: Vec<Vec<(usize, Block)>> = Vec::new();
+                if singles.len() >= 4 {
+                    then.push(vec![(key, side_by_side(singles.len().div_ceil(2)))]);
+                }
+                laid_blocks.insert(key, side_by_side(singles.len()));
+                then.push(singles);
+                alternatives.insert(key, then);
+                unit_groups.push((names, whole.len(), keys, copies.iter().map(|copy| copy.1.clone()).collect()));
             }
         }
     }
@@ -3339,99 +3432,147 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             shut.extend(found.iter().copied());
             // (the largest first, a block by what its parts take; each one by one, on what the others left)
             let takes = |p: usize| -> f64 {
+                // (copies side by side take their turn as one of them would: by what one copy takes)
+                let copies =
+                    alternatives.get(&p).and_then(|options| options.last()).map_or(1, |singles| singles.len().max(1));
                 laid_blocks.get(&p).map_or(body(p)[0] * body(p)[1], |block| {
-                    block.at.iter().map(|&(m, _, _)| body(m)[0] * body(m)[1]).sum()
+                    block.at.iter().map(|&(m, _, _)| body(m)[0] * body(m)[1]).sum::<f64>() / copies as f64
                 })
             };
             let mut lot = lot;
             lot.sort_by(|&a, &b| takes(b).total_cmp(&takes(a)).then(a.cmp(&b)));
             for p in lot {
                 let want = middle(grounds[&p]);
-                let Some(block) = laid_blocks.get(&p) else {
+                let Some(first) = laid_blocks.get(&p) else {
                     let at = settled(work.rect, &[(body(p), want)], &shut)[0];
                     shut.extend(at.map(|at| taken(p, at)));
                     found.extend(at.map(|at| taken(p, at)));
                     stood.insert(p, at);
                     continue;
                 };
-                // A block is placed by the bodies of its parts, not by a box round them (blocks then lie
-                // into each other's corners), in any of the four ways it may be turned: of the ways that
-                // come about as near where it is wanted as the nearest, the one that leaves its pads nearest
-                // what they join outside the block. First near where it is wanted; then anywhere.
-                let pieces = |way: u8| -> Vec<[f64; 4]> {
-                    block.at.iter().map(|&(m, from, q)| taken(m, (quartered(way, from), (q + way) % 2 == 1))).collect()
-                };
-                let ways: Vec<Vec<[f64; 4]>> = (0..4).map(pieces).collect();
-                let outside = |way: u8, here: Pt| -> f64 {
-                    let mut all = 0.0;
-                    for &(m, from, q) in &block.at {
-                        for (i, net) in parts[m].pads.iter().enumerate() {
-                            let (Some(net), Some(&offset)) =
-                                (net.filter(|&net| is_signal(net)), parts[m].offsets.get(i))
-                            else {
-                                continue;
-                            };
-                            let own = quartered(q, offset);
-                            let pad = quartered(way, [from[0] + own[0], from[1] + own[1]]);
-                            let pad = [here[0] + pad[0], here[1] + pad[1]];
-                            let nearest = reach[net]
-                                .iter()
-                                .filter(|other| in_block.get(other) != Some(&p))
-                                .filter_map(|&other| wanted(other))
-                                .map(|there| (there[0] - pad[0]).abs() + (there[1] - pad[1]).abs())
-                                .fold(f64::INFINITY, f64::min);
-                            if nearest.is_finite() {
-                                all += nearest;
+                // (what is tried in turn: the block; for copies side by side, then what else they may be.
+                // All but the last only near where they are wanted; the last anywhere, and what of it finds
+                // no room is taken apart)
+                let mut options: Vec<Vec<(usize, &Block)>> = vec![vec![(p, first)]];
+                if let Some(more) = alternatives.get(&p) {
+                    options.extend(more.iter().map(|option| option.iter().map(|(key, block)| (*key, block)).collect()));
+                }
+                if board.rows == Rows::Never && options.len() > 1 {
+                    options = options.split_off(options.len() - 1);
+                }
+                let last = options.len() - 1;
+                // (where a block would come to stand, of the ways it may be turned: placed by the bodies of
+                // its parts, not by a box round them (blocks then lie into each other's corners); of the ways
+                // that come about as near where it is wanted as the nearest, the one that leaves its pads
+                // nearest what they join outside it, with how far that is)
+                let best_for = |block: &Block, anywhere: bool, shut: &Vec<[f64; 4]>| -> Option<(f64, u8, Pt)> {
+                    let pieces = |way: u8| -> Vec<[f64; 4]> {
+                        block
+                            .at
+                            .iter()
+                            .map(|&(m, from, q)| taken(m, (quartered(way, from), (q + way) % 2 == 1)))
+                            .collect()
+                    };
+                    let ways: Vec<Vec<[f64; 4]>> = (0..4).map(pieces).collect();
+                    let outside = |way: u8, here: Pt| -> f64 {
+                        let mut all = 0.0;
+                        for &(m, from, q) in &block.at {
+                            for (i, net) in parts[m].pads.iter().enumerate() {
+                                let (Some(net), Some(&offset)) =
+                                    (net.filter(|&net| is_signal(net)), parts[m].offsets.get(i))
+                                else {
+                                    continue;
+                                };
+                                let own = quartered(q, offset);
+                                let pad = quartered(way, [from[0] + own[0], from[1] + own[1]]);
+                                let pad = [here[0] + pad[0], here[1] + pad[1]];
+                                let nearest = reach[net]
+                                    .iter()
+                                    .filter(|other| in_block.get(other) != Some(&p))
+                                    .filter_map(|&other| wanted(other))
+                                    .map(|there| (there[0] - pad[0]).abs() + (there[1] - pad[1]).abs())
+                                    .fold(f64::INFINITY, f64::min);
+                                if nearest.is_finite() {
+                                    all += nearest;
+                                }
                             }
                         }
+                        all
+                    };
+                    // (a block is wanted where the grounds that came to its parts are, taken together)
+                    let want = {
+                        let (mut sum, mut all) = ([0.0, 0.0], 0.0);
+                        for &(m, _, _) in &block.at {
+                            if let Some(&ground) = grounds.get(&m) {
+                                let (mid, weight) = (middle(ground), body(m)[0] * body(m)[1]);
+                                sum = [sum[0] + weight * mid[0], sum[1] + weight * mid[1]];
+                                all += weight;
+                            }
+                        }
+                        if all > 0.0 {
+                            [sum[0] / all, sum[1] / all]
+                        } else {
+                            want
+                        }
+                    };
+                    let mut tried = settled_shape(work.rect, &ways, want, shut, BLOCK_NEAR);
+                    if anywhere && tried.iter().all(|at| at.is_none()) {
+                        tried = settled_shape(work.rect, &ways, want, shut, f64::INFINITY);
                     }
-                    all
+                    let nearest = tried.iter().flatten().map(|&at| dist(at, want)).fold(f64::INFINITY, f64::min);
+                    tried
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(way, at)| at.map(|at| (way as u8, at)))
+                        .filter(|&(_, at)| dist(at, want) <= nearest + AS_NEAR)
+                        .map(|(way, at)| (outside(way, at), way, at))
+                        .fold(
+                            None::<(f64, u8, Pt)>,
+                            |best, now| if best.is_some_and(|b| b.0 <= now.0) { best } else { Some(now) },
+                        )
                 };
-                // (a block is wanted where the grounds that came to its parts are, taken together)
-                let want = {
-                    let (mut sum, mut all) = ([0.0, 0.0], 0.0);
-                    for &(m, _, _) in &block.at {
-                        if let Some(&ground) = grounds.get(&m) {
-                            let (mid, weight) = (middle(ground), body(m)[0] * body(m)[1]);
-                            sum = [sum[0] + weight * mid[0], sum[1] + weight * mid[1]];
-                            all += weight;
+                for (n, option) in options.iter().enumerate() {
+                    let mut placed_all = true;
+                    for &(_, block) in option {
+                        let mut chosen = best_for(block, n == last || board.rows == Rows::Always, &shut);
+                        // (copies side by side are worth it if their pads are not much further from what
+                        // they join than with each copy where it would stand by itself)
+                        if let (true, Some((together, _, _))) = (n < last && board.rows == Rows::Cheap, chosen) {
+                            let alone: f64 = options[last]
+                                .iter()
+                                .map(|&(_, one)| best_for(one, false, &shut).map_or(f64::INFINITY, |c| c.0))
+                                .sum();
+                            if together > ROW_WORTH * alone {
+                                chosen = None;
+                            }
+                        }
+                        let Some((_, way, here)) = chosen else {
+                            placed_all = false;
+                            if n == last {
+                                // (no room for it as a block: its parts are placed with the rest, each by itself)
+                                block.at.iter().for_each(|&(m, _, _)| {
+                                    stood.insert(m, None);
+                                });
+                                continue;
+                            }
+                            break;
+                        };
+                        for &(m, from, q) in &block.at {
+                            let from = quartered(way, from);
+                            let (to, quarters) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
+                            stood.insert(m, Some((to, quarters % 2 == 1)));
+                            block_quarter.insert(m, quarters);
+                            shut.push(taken(m, (to, quarters % 2 == 1)));
+                            found.push(taken(m, (to, quarters % 2 == 1)));
                         }
                     }
-                    if all > 0.0 {
-                        [sum[0] / all, sum[1] / all]
-                    } else {
-                        want
+                    if placed_all || n == last {
+                        // (how many copies came to stand side by side as one body)
+                        if placed_all && n < last && alternatives.contains_key(&p) {
+                            in_rows.insert(p, alternatives[&p][last - 1].len());
+                        }
+                        break;
                     }
-                };
-                let mut tried = settled_shape(work.rect, &ways, want, &shut, BLOCK_NEAR);
-                if tried.iter().all(|at| at.is_none()) {
-                    tried = settled_shape(work.rect, &ways, want, &shut, f64::INFINITY);
-                }
-                let nearest = tried.iter().flatten().map(|&at| dist(at, want)).fold(f64::INFINITY, f64::min);
-                let chosen = tried
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(way, at)| at.map(|at| (way as u8, at)))
-                    .filter(|&(_, at)| dist(at, want) <= nearest + AS_NEAR)
-                    .map(|(way, at)| (outside(way, at), way, at))
-                    .fold(
-                        None::<(f64, u8, Pt)>,
-                        |best, now| if best.is_some_and(|b| b.0 <= now.0) { best } else { Some(now) },
-                    );
-                let Some((_, way, here)) = chosen else {
-                    // (no room for it as a block: its parts are placed with the rest, each by itself)
-                    block.at.iter().for_each(|&(m, _, _)| {
-                        stood.insert(m, None);
-                    });
-                    continue;
-                };
-                for &(m, from, q) in &block.at {
-                    let from = quartered(way, from);
-                    let (to, quarters) = ([here[0] + from[0], here[1] + from[1]], (q + way) % 4);
-                    stood.insert(m, Some((to, quarters % 2 == 1)));
-                    block_quarter.insert(m, quarters);
-                    shut.push(taken(m, (to, quarters % 2 == 1)));
-                    found.push(taken(m, (to, quarters % 2 == 1)));
                 }
             }
         }
@@ -3878,15 +4019,91 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     }
     face(&centre, &mut quarter, &pins);
     // (the sheets that repeat, as they came out: a copy is laid out like the others if it was placed whole)
+    // How long a net is: the box of its pads, as the boards stack.
+    let span_of = |net: usize| -> f64 {
+        let mut spots: Vec<Pt> = Vec::new();
+        for &q in &reach[net] {
+            let on = (0..parts[q].pads.len()).filter(|&i| parts[q].pads[i] == Some(net));
+            spots.extend(on.filter_map(|i| pad_at(q, i, quarter[q], &centre)));
+        }
+        if spots.len() < 2 {
+            return 0.0;
+        }
+        let low = |k: usize| spots.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min);
+        let high = |k: usize| spots.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max);
+        high(0) - low(0) + high(1) - low(1)
+    };
+    let round1 = |v: f64| (v * 10.0).round() / 10.0;
     let mut repeats: Vec<Repeat> = unit_groups
         .iter()
-        .map(|(names, count, keys)| Repeat {
-            sheets: names.clone(),
-            parts: *count,
-            alike: keys.iter().filter(|key| block_quarter.contains_key(key)).count(),
-            like: names[0].clone(),
+        .map(|(names, count, keys, copies)| {
+            // The nets of the copies, matched by the pad of the matched part they are on. A net that is
+            // one and the same for every copy is shared by them (a bias, a clock): its length is told. The
+            // others are each copy's own: how much the longest of a net's copies is longer than the
+            // shortest says how alike the copies are joined to what is round them.
+            let mut seen: BTreeSet<usize> = BTreeSet::new();
+            let (mut shared, mut shared_mm, mut matched, mut spread, mut longest) = (0, 0.0, 0, 0.0, 0.0f64);
+            let mut worst: (f64, String) = (0.0, String::new());
+            for (j, &p) in copies[0].iter().enumerate() {
+                for (i, net) in parts[p].pads.iter().enumerate() {
+                    let Some(net) = net.filter(|&net| is_signal(net) && seen.insert(net)) else { continue };
+                    let theirs: Vec<Option<usize>> = copies
+                        .iter()
+                        .map(|own| {
+                            own.get(j)
+                                .and_then(|&q| parts[q].pads.get(i).copied().flatten())
+                                .filter(|&of| is_signal(of))
+                        })
+                        .collect();
+                    if theirs.iter().any(|of| of.is_none()) {
+                        continue;
+                    }
+                    let theirs: Vec<usize> = theirs.into_iter().flatten().collect();
+                    if theirs.iter().all(|&of| of == net) {
+                        shared += 1;
+                        shared_mm += span_of(net);
+                        continue;
+                    }
+                    let spans: Vec<f64> = theirs.iter().map(|&of| span_of(of)).collect();
+                    let (least, most) = (
+                        spans.iter().copied().fold(f64::INFINITY, f64::min),
+                        spans.iter().copied().fold(0.0, f64::max),
+                    );
+                    matched += 1;
+                    spread += most - least;
+                    longest = longest.max(most);
+                    if most - least > worst.0 {
+                        worst = (most - least, net_name(net));
+                    }
+                }
+            }
+            Repeat {
+                sheets: names.clone(),
+                parts: *count,
+                alike: keys.iter().filter(|key| block_quarter.contains_key(key)).count(),
+                together: keys.first().and_then(|key| in_rows.get(key)).copied().unwrap_or(0),
+                like: names[0].clone(),
+                matched,
+                spread_mm: if matched > 0 { round1(spread / matched as f64) } else { 0.0 },
+                worst_mm: round1(worst.0),
+                worst: worst.1,
+                longest_mm: round1(longest),
+                shared,
+                shared_mm: round1(shared_mm),
+            }
         })
         .collect();
+    // (the sensitive nets: how many, how long in all, and the longest)
+    let mut sensitive: (usize, f64, f64, String) = (0, 0.0, 0.0, String::new());
+    for net in (0..all_nets.len()).filter(|&net| all_nets[net].sensitive && is_signal(net)) {
+        let far = span_of(net);
+        sensitive.0 += 1;
+        sensitive.1 += far;
+        if far > sensitive.2 {
+            (sensitive.2, sensitive.3) = (far, net_name(net));
+        }
+    }
+    let sensitive = (sensitive.0, sensitive.1.round(), round1(sensitive.2), sensitive.3);
     repeats.sort_by(|a, b| (b.sheets.len() * b.parts).cmp(&(a.sheets.len() * a.parts)).then(a.sheets.cmp(&b.sheets)));
     let pads_mm = all_reach(&centre, &quarter);
     // (a capacitor is by its pad within BESIDE_PIN; a large one within its own length and a millimetre: its
@@ -4260,6 +4477,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         bridges,
         blocks,
         alike,
+        sensitive,
         repeats,
         served,
         chains,
@@ -4460,7 +4678,7 @@ mod tests {
         // the regulator of the two grounds made a buck: a switch node to an inductor, the inductor to the 3V3
         let mut board = two_grounds();
         board.outline = [0.0, 0.0, 80.0, 40.0];
-        board.nets.push(Net { name: "SW".to_string(), supply: false, pair: false });
+        board.nets.push(Net { name: "SW".to_string(), supply: false, pair: false, sensitive: false });
         let node = board.nets.len() - 1;
         let net = |board: &Board, name: &str| board.nets.iter().position(|net| net.name == name);
         let (raw, out, ground) = (net(&board, "RAW"), net(&board, "A_3V3"), net(&board, "A_GND"));
@@ -4497,7 +4715,7 @@ mod tests {
         assert!(found_loop.mm2 <= 150.0 && found_loop.bodies > 0.0, "{found_loop:?}");
         // a divider on a small net of the chip is told with it, and stands by the chip
         let mut board = board.clone();
-        board.nets.push(Net { name: "FB".to_string(), supply: false, pair: false });
+        board.nets.push(Net { name: "FB".to_string(), supply: false, pair: false, sensitive: false });
         let sense = board.nets.len() - 1;
         board.parts.iter_mut().find(|part| part.name == "U2").unwrap().pads[3] = Some(sense);
         for (name, other) in [("R8", out), ("R9", ground)] {
@@ -4518,7 +4736,7 @@ mod tests {
         // ground at the chip
         let mut board = two_grounds();
         for name in ["IN", "MID"] {
-            board.nets.push(Net { name: name.to_string(), supply: false, pair: false });
+            board.nets.push(Net { name: name.to_string(), supply: false, pair: false, sensitive: false });
         }
         let net = |board: &Board, name: &str| board.nets.iter().position(|net| net.name == name);
         let (input, mid, ground) = (net(&board, "IN"), net(&board, "MID"), net(&board, "FIELD_0V"));
@@ -4545,7 +4763,7 @@ mod tests {
         assert!(found.chains >= 1, "{}", found.chains);
         // a resistor across two pads of one chip, on nets of nothing else, is that chip's too
         for name in ["FB_A", "FB_B"] {
-            board.nets.push(Net { name: name.to_string(), supply: false, pair: false });
+            board.nets.push(Net { name: name.to_string(), supply: false, pair: false, sensitive: false });
         }
         let (a, b) = (net(&board, "FB_A"), net(&board, "FB_B"));
         let amp = board.parts.iter_mut().find(|part| part.name == "U1").unwrap();
@@ -4601,7 +4819,11 @@ mod tests {
             stack: Vec::new(),
             gap: 4.0,
             via: 1.0,
-            nets: names.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false }).collect(),
+            rows: Rows::Cheap,
+            nets: names
+                .iter()
+                .map(|n| Net { name: n.to_string(), supply: false, pair: false, sensitive: false })
+                .collect(),
             parts: vec![
                 part("U1", "amp", [10.0, 10.0], [5.0, 4.0], &["VCC", "GND", "A1", "B1"], &chip, 0),
                 part("U2", "amp", [40.0, 10.0], [5.0, 4.0], &["VCC", "GND", "A2", "B2"], &chip, 1),
@@ -4634,7 +4856,12 @@ mod tests {
         // drawn on a sheet each, with one part more that stands by no pad, the two are sheets of one make-up:
         // the first is laid out by itself, and both are placed whole, as it lies
         let mut board = board;
-        board.nets.extend(["X1", "X2"].map(|name| Net { name: name.to_string(), supply: false, pair: false }));
+        board.nets.extend(["X1", "X2"].map(|name| Net {
+            name: name.to_string(),
+            supply: false,
+            pair: false,
+            sensitive: false,
+        }));
         let (x1, x2) = (Some(board.nets.len() - 2), Some(board.nets.len() - 1));
         for (name, of, to, turned) in [("R3", "A1", x1, 0), ("R4", "A2", x2, 1)] {
             let mut more = board.parts.iter().find(|part| part.name == "R1").unwrap().clone();
@@ -4658,6 +4885,20 @@ mod tests {
         let found = floorplan(&board).unwrap();
         let [repeat] = &found.repeats[..] else { panic!("{:?}", found.repeats) };
         assert_eq!((repeat.sheets.len(), repeat.parts, repeat.alike, repeat.like.as_str()), (2, 4, 2, "channel 1"));
+        // their own nets are matched copy against copy (the resistor's two, the one to the multiplexer), and
+        // told with how much the copies differ; nothing is shared by both but the supply, which is no signal
+        assert_eq!((repeat.matched, repeat.shared), (3, 0));
+        assert!(
+            repeat.spread_mm >= 0.0 && repeat.worst_mm >= repeat.spread_mm && repeat.longest_mm > 0.0,
+            "{repeat:?}"
+        );
+        // side by side wherever there is room, if that is asked; never, if that is
+        let mut asked = board.clone();
+        asked.rows = Rows::Always;
+        assert_eq!(floorplan(&asked).unwrap().repeats[0].together, 2);
+        asked.rows = Rows::Never;
+        let apart = floorplan(&asked).unwrap();
+        assert_eq!((apart.repeats[0].together, apart.repeats[0].alike), (0, 2));
         // alike: every two parts of the one are as far apart as the same two of the other
         let at = |name: &str| found.places.iter().find(|place| place.part == name).unwrap().at;
         let (one, other) = (["U1", "C1", "R1", "R3"], ["U2", "C2", "R2", "R4"]);
@@ -4724,7 +4965,11 @@ mod tests {
             stack: Vec::new(),
             gap: 4.0,
             via: 1.0,
-            nets: nets.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false }).collect(),
+            rows: Rows::Cheap,
+            nets: nets
+                .iter()
+                .map(|n| Net { name: n.to_string(), supply: false, pair: false, sensitive: false })
+                .collect(),
             parts: vec![
                 part("U1", 2.0, &["A_3V3", "A_GND", "SIG", "FILT"]),
                 part("C1", 3.0, &["A_3V3", "A_GND"]),
@@ -4835,11 +5080,11 @@ mod tests {
 
     /// Four chips in a square on one ground, each tied to the next round the square by eight nets.
     fn square() -> Board {
-        let mut nets = vec![Net { name: "GND".to_string(), supply: false, pair: false }];
+        let mut nets = vec![Net { name: "GND".to_string(), supply: false, pair: false, sensitive: false }];
         let mut pads: Vec<Vec<Option<usize>>> = vec![vec![Some(0)]; 4];
         for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
             for k in 0..8 {
-                nets.push(Net { name: format!("N{a}{b}_{k}"), supply: false, pair: false });
+                nets.push(Net { name: format!("N{a}{b}_{k}"), supply: false, pair: false, sensitive: false });
                 pads[a].push(Some(nets.len() - 1));
                 pads[b].push(Some(nets.len() - 1));
             }
@@ -4883,6 +5128,7 @@ mod tests {
                 .collect(),
             gap: 4.0,
             via: 1.0,
+            rows: Rows::Cheap,
             nets,
             parts: vec![part(0, 10.0, 10.0), part(1, 30.0, 10.0), part(2, 30.0, 30.0), part(3, 10.0, 30.0)],
         }

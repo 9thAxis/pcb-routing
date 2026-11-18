@@ -51,6 +51,7 @@ class Hints:
     boards: list = field(default_factory=list)  # the boards of the file, left to right: [{shift: [x, y], clear: mm}]
     heights: dict = field(default_factory=dict)  # the beginning of a footprint's name -> how high it stands, mm
     keepouts: list = field(default_factory=list)  # ground where no part may stand: [[x0, y0, x1, y1]]
+    rows: object = None  # whether the copies of a sheet that repeats stand side by side: always, cheap, never
 
 
 def read_hints(path):
@@ -74,8 +75,8 @@ def read_hints(path):
         raise ValueError(f"{name}: {error}")
     wrong = lambda where, why: ValueError(f"{name}: {where}: {why}")
     number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts", "boards", "heights", "keepouts"}:
-        raise wrong("the file", "an object with `nets`, `pairs`, `parts`, `boards`, `heights` and `keepouts`, nothing else")
+    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts", "boards", "heights", "keepouts", "rows"}:
+        raise wrong("the file", "an object with `nets`, `pairs`, `parts`, `boards`, `heights`, `keepouts` and `rows`, nothing else")
     if not (isinstance(data.get("nets", {}), dict) and isinstance(data.get("pairs", []), list)
             and isinstance(data.get("parts", {}), dict)):
         raise wrong("the file", "`nets` is an object (a pattern, and what is said of the nets it names), "
@@ -105,6 +106,9 @@ def read_hints(path):
             and k[0] < k[2] and k[1] < k[3] for k in keepouts):
         raise wrong("keepouts", "a list of grounds where no part may stand, each [x0, y0, x1, y1]")
     hints.keepouts = [list(k) for k in keepouts]
+    if data.get("rows") not in (None, "always", "cheap", "never"):
+        raise wrong("rows", "whether the copies of a sheet that repeats stand side by side: always, cheap or never")
+    hints.rows = data.get("rows")
     for pattern, said in data.get("nets", {}).items():
         if not isinstance(said, dict):
             raise wrong(f"nets[{pattern}]", "an object")

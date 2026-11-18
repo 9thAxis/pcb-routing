@@ -95,7 +95,8 @@ def floorplan(picture, rules, ask):
                   value=part.value or "", footprint=(part.footprint or "").split(":")[-1], angle=part.angle)
              for reference, part in sorted(picture.parts.items())]
     asked = [dict(name=net, supply=rules.intent(net).role == "supply" or is_supply(net) and rules.intent(net).role != "ground",
-                  pair=isinstance(rules.intent(net).pair, str)) for net in nets]
+                  pair=isinstance(rules.intent(net).pair, str), sensitive=rules.intent(net).role == "sensitive")
+             for net in nets]
     # (what a track takes across its way: the usual net's width and clearance; and the layers that carry routes)
     signal = [net for net in nets if rules.intent(net).role not in ("supply", "ground")] or nets
     takes = sorted(rules.track_width(net) + rules.clearance(net) for net in signal)
@@ -149,6 +150,7 @@ def floorplan(picture, rules, ask):
                     regions=boards if len(boards) > 1 else [], keepouts=shut,
                     shifts=shifts if len(boards) > 1 else [],
                     pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1),
+                    rows=(hints.rows if hints else None) or "cheap",
                     via=round(sorted(rules.via(net)[0] + rules.clearance(net) for net in signal)[len(signal) // 2], 4)))
     if not isinstance(found, dict) or "zones" not in found:
         return found
@@ -301,9 +303,18 @@ def floorplan_told(found, depth=2, every=False):
                          + ("all laid out alike" if same == count else f"{same} laid out alike, {count - same} NOT"))
     for repeat in found.get("repeats", [])[:None if every else 10]:
         names = ", ".join(repeat["sheets"][:4]) + (f" and {len(repeat['sheets']) - 4} more" if len(repeat["sheets"]) > 4 else "")
-        how = (f"{repeat['alike']} of them placed whole, laid out alike" if repeat["alike"]
-               else "placed part by part (not laid out alike)")
+        how = (f"{repeat['alike']} of them placed whole, laid out alike"
+               + (f", {repeat['together']} side by side" if repeat.get("together") else ", each by itself")
+               if repeat["alike"] else "placed part by part (not laid out alike)")
         lines.append(f"  {len(repeat['sheets'])} sheets of one make-up, {repeat['parts']} parts each ({names}): {how}")
+        if repeat.get("matched"):
+            lines.append(f"      their own nets, copy against copy: {repeat['matched']} nets, the longest copy of a net "
+                         f"{repeat['spread_mm']:.1f} mm longer than the shortest on the average, {repeat['worst_mm']:.1f} mm at "
+                         f"the worst ({repeat['worst']}); the longest such net {repeat['longest_mm']:.1f} mm; "
+                         f"{repeat['shared']} nets shared by all of them, {repeat['shared_mm']:.0f} mm in all")
+    if found.get("sensitive", [0])[0]:
+        count, total, worst, name = found["sensitive"]
+        lines.append(f"  sensitive nets: {count}, {total:.0f} mm in all, the longest {worst:.1f} mm ({name})")
     if found.get("served"):
         lines.append(f"  filter and protection parts that stand for one pad (a capacitor from a chip's input to ground or across "
                      f"two of its inputs, a diode or a part in series at a connector): {found['served'][1]} of "

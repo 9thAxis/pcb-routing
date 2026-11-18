@@ -105,7 +105,7 @@ class Floorplan(unittest.TestCase):
         self.assertIn(under["needs"], (0.5, 10.5))
         self.assertTrue(any(line.startswith("  under another board (x 9 to 14") for line in k.floorplan_told(found)))
         for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)}), dict(parts={"J1": dict(mate=3)}),
-                      dict(keepouts=[[3, 0, 1, 2]])):
+                      dict(keepouts=[[3, 0, 1, 2]]), dict(rows="sometimes")):
             with tempfile.TemporaryDirectory() as tmp:
                 Path(tmp, "b.routing.json").write_text(json.dumps(wrong))
                 with self.assertRaises(ValueError):

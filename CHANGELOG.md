@@ -110,6 +110,13 @@
   one). When the small parts are gone over, a part joined to few is tried by each of them and at their
   mean, not only at their middle, with room looked for further off where there is none near; and a part
   that could not be brought near its pad is not held where it stands.
+  The copies of a sheet that repeats may stand side by side as one body, turned alike: in a row, failing
+  that (from four) in two rows, failing that each by itself. The hints say when (`rows`: `always`,
+  wherever there is room; `cheap`, the default, where their pads are then no more than a quarter further
+  from what they join than with each copy by itself; `never`). For each group of copies the plan tells its
+  own nets copy against copy (how much longer the longest copy of a net is than the shortest: how well
+  the channels match), the longest of them, and the nets shared by all the copies with their length; and
+  the sensitive nets of the board with the longest of them.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;
