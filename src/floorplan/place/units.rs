@@ -21,6 +21,9 @@ pub(super) struct Units {
     pub(super) alternatives: BTreeMap<usize, Vec<Vec<(usize, Block)>>>,
 }
 
+/// Where each part of a sheet lies, and how many quarters it is turned from its drawing.
+type Lies = BTreeMap<usize, (Pt, u8)>;
+
 /// The colours of the parts of some sheets, the same numbers for all these sheets: each part by its kind,
 /// then again and again by what its pads are joined to, until two parts have one colour only if they sit
 /// alike in their sheets.
@@ -82,13 +85,12 @@ fn coloured(cx: &Known, sheets: &[&String], of_sheet: &BTreeMap<String, Vec<usiz
 /// each time what is tied the most to what lies already, set down as near the parts it is tied to as there
 /// is room, turned the way that leaves its pads nearest theirs. `model`: the parts of the sheet, of which
 /// those at `whole` are laid.
-#[allow(clippy::type_complexity)]
 fn laid_alone(
     cx: &Known,
     model: &[usize],
     whole: &[usize],
     laid_blocks: &BTreeMap<usize, Block>,
-) -> Option<(BTreeMap<usize, (Pt, u8)>, Vec<[f64; 4]>)> {
+) -> Option<(Lies, Vec<[f64; 4]>)> {
     let (parts, reach, nets) = (cx.parts, &cx.reach, &cx.nets);
     let chosen: BTreeSet<usize> = whole.iter().map(|&j| model[j]).collect();
     let mut items: Vec<Vec<(usize, Pt, u8)>> = Vec::new(); // each: its parts, where from its middle, quarters from their drawing

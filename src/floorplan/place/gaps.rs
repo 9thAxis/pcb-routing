@@ -1,11 +1,11 @@
 //! The parts that stand on the gaps between two domains.
 
-use super::domain_named;
+use super::{domain_named, Site, Standing};
 use crate::floorplan::boards::Boards;
 use crate::floorplan::constants::BESIDE;
 use crate::floorplan::ground::Work;
 use crate::floorplan::known::Known;
-use crate::floorplan::settle::{middle, off_rect, quartered, settled, spread, strip_between};
+use crate::floorplan::settle::{median, middle, off_rect, quartered, settled, spread, strip_between};
 use crate::floorplan::types::{Across, Bridge};
 use crate::geom::dist;
 use crate::model::Pt;
@@ -119,4 +119,66 @@ pub(super) fn on_gaps(cx: &Known, top: &[Work], on: &Boards, bridges: &mut [Brid
         }
     }
     Gaps { on: on_gap, quarter: gap_quarter, rects: gap_rects }
+}
+
+/// The parts on the gaps are stood along them once more, now by where the parts they are tied to have come
+/// to stand (and not the middles of their zones): each gap's parts spread as before.
+pub(super) fn slid(
+    site: &Site,
+    gap_rects: &mut BTreeMap<usize, [f64; 4]>,
+    bridges: &mut [Bridge],
+    standing: &mut Standing,
+) {
+    let (cx, top, gap_quarter, shift_of) = (site.cx, site.top, &site.gap_quarter, &site.shift_of);
+    let (board, parts, nets) = (cx.board, cx.parts, &cx.nets);
+    let Standing { stood, centre, quarter } = standing;
+    type Strip = (bool, [f64; 4], Vec<(usize, usize, f64, f64)>); // (bridge, part, want along, size)
+    let mut strips: BTreeMap<[i64; 4], Strip> = BTreeMap::new();
+    for (b, bridge) in bridges.iter().enumerate().filter(|(_, bridge)| bridge.on == Across::Gap) {
+        let Some(p) = parts.iter().position(|part| part.name == bridge.part) else { continue };
+        let (Some(home), Some(other)) = (domain_named(top, &bridge.grounds[0]), domain_named(top, &bridge.grounds[1]))
+        else {
+            continue;
+        };
+        let Some((strip, up)) = strip_between(top[home].rect, top[other].rect, board.gap) else { continue };
+        let shift = shift_of[p];
+        let mates: Vec<Pt> = (0..nets.len())
+            .filter(|&n| nets[n].contains(&p))
+            .flat_map(|n| nets[n].iter().filter(|&&q| q != p))
+            .filter_map(|&q| centre[q].map(|at| [at[0] + shift_of[q][0] - shift[0], at[1] + shift_of[q][1] - shift[1]]))
+            .collect();
+        let Some(want) = median(&mates) else { continue };
+        let key = strip.map(|v| (v * 1000.0).round() as i64);
+        let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
+        let quarters = gap_quarter.get(&p).copied().unwrap_or(0);
+        entry.2.push((b, p, want[usize::from(up)], cx.lying(p, quarters)[usize::from(up)] + BESIDE));
+    }
+    for (up, strip, on_it) in strips.into_values() {
+        let along = usize::from(up);
+        let (want, size): (Vec<f64>, Vec<f64>) = on_it.iter().map(|&(_, _, want, size)| (want, size)).unzip();
+        for (&(b, p, _, _), place) in on_it.iter().zip(spread(&want, &size, strip[along], strip[along + 2])) {
+            let (Some(was), quarters) = (centre[p], gap_quarter.get(&p).copied().unwrap_or(0)) else { continue };
+            let mut at = was;
+            at[along] = place;
+            // (it goes there if nothing that has its place is in its way there: no body, no other gap's part)
+            let here = cx.body_at(p, at, quarters);
+            let over = |r: [f64; 4]| {
+                r[2].min(here[2]) - r[0].max(here[0]) > 1e-6 && r[3].min(here[3]) - r[1].max(here[1]) > 1e-6
+            };
+            let bodies = stood
+                .iter()
+                .filter(|(&q, _)| q != p && cx.side_of(q) & cx.side_of(p) != 0 && shift_of[q] == shift_of[p])
+                .filter_map(|(&q, at)| {
+                    at.map(|_| centre[q]).flatten().map(|at| cx.taken(q, (at, quarter[q] % 2 == 1)))
+                });
+            let others = gap_rects.iter().filter(|(&q, _)| q != p).map(|(_, &r)| r);
+            if bodies.chain(others).chain(board.keepouts.iter().copied()).any(over) {
+                continue;
+            }
+            centre[p] = Some(at);
+            gap_rects.insert(p, here);
+            bridges[b].at = at.map(|v| (v * 100.0).round() / 100.0);
+            bridges[b].off = parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0);
+        }
+    }
 }

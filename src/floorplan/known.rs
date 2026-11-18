@@ -1,6 +1,6 @@
 //! What is known of a board before anything is laid out, and the small things every stage asks of it.
 
-use super::constants::{LARGE, SWITCHED};
+use super::constants::{BESIDE_PIN, LARGE, SWITCHED};
 use super::ground::Work;
 use super::power::{powered, Powered};
 use super::settle::{area, overlap, quartered};
@@ -345,5 +345,17 @@ impl Known<'_> {
     pub(super) fn drawn_rect(&self, p: usize, at: Pt, quarters: u8) -> [f64; 4] {
         let [w, h] = self.drawn_body(p, quarters);
         [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
+    }
+
+    /// How far from its pad a part may stand and be by it: within BESIDE_PIN; a large one within its own
+    /// length and a millimetre (its pad cannot be nearer than its body allows).
+    pub(super) fn by_pad(&self, c: usize) -> f64 {
+        BESIDE_PIN.max(self.body(c)[0].max(self.body(c)[1]) + 1.0)
+    }
+
+    /// Whether a part is a capacitor with a pad on a supply.
+    pub(super) fn of_supplies(&self, c: &usize) -> bool {
+        let (parts, found) = (self.parts, &self.found);
+        parts[*c].capacitor && parts[*c].pads.iter().flatten().any(|net| found.rails.contains_key(net))
     }
 }
