@@ -52,7 +52,14 @@
   the plane has its say in where zones go: groups fed alike are tied when zones are gathered into larger
   ones, and the zones under one pour pull each other when ground is given, that a pour be a few large
   pieces and not a patchwork (on a board with two supplies wanted almost everywhere: 8 pieces too many to
-  3, for 6 % more track between zones).
+  3, for 6 % more track between zones). Where ways turn from one road into another, the plan says how many
+  layer changes are made and keeps a square free for their vias where the roads have less (`junctions`).
+  And every part is given a place (`places`): within the ground of its zone the parts are pulled and cut
+  like the zones themselves (a capacitor from a supply to the ground by a chip of its zone on that supply),
+  then the bodies of each domain are settled, none over another and none on a road or on ground that is
+  shut, the largest first, each as near where it was pulled as the others allow, turned a quarter where
+  that is nearer. The plan says how long the signal nets are with the parts as they stand today and with
+  each at its place.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

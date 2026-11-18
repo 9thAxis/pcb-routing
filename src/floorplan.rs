@@ -58,6 +58,9 @@ pub struct Part {
     /// to the same place of the stack. Said of one, it holds for both.
     #[serde(default)]
     pub mate: Option<String>,
+    /// How wide and how high its body is on the board, in mm, as it stands; none given: a square of its area.
+    #[serde(default)]
+    pub size: Option<[f64; 2]>,
 }
 
 /// A net of the board.
@@ -272,6 +275,24 @@ pub struct Pour {
     pub pieces: usize,
 }
 
+/// A part with the place it is given within its zone.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Place {
+    /// The part.
+    pub part: String,
+    /// Where its middle is to stand.
+    pub at: Pt,
+    /// The ground its body takes there: [x0, y0, x1, y1]. None for a part on a gap, which is not settled.
+    pub rect: Option<[f64; 4]>,
+    /// Whether it is turned a quarter from how it stands today.
+    pub turn: bool,
+    /// Whether there was room for its body, one way or the other, on the ground of its domain. Where there
+    /// was not, its place is where it was pulled, over others.
+    pub fits: bool,
+    /// How far that is from where it stands today, in mm; None if it is not placed.
+    pub off: Option<f64>,
+}
+
 /// Where roads meet and ways turn from one into the other: each turn is a layer change, and its via wants
 /// ground that is no track's.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -434,6 +455,17 @@ pub struct Floorplan {
     pub tall: Vec<(String, f64, Vec<String>, f64)>,
     /// The parts that stand on two grounds, each with the place it is given.
     pub bridges: Vec<Bridge>,
+    /// A place for every part: within the ground of its zone, by the same pulling and cutting as the zones
+    /// themselves (each part pulled by what it is tied to, wherever that is; a capacitor from a supply to the
+    /// ground by a chip of its zone on that supply; a connector by the nearest edge); then the bodies of a
+    /// domain are settled, none over another and none on a road, the largest first, each as near where it
+    /// was pulled as the others allow, turned a quarter where that is nearer. Parts on two grounds have their place on a gap (see `bridges`).
+    pub places: Vec<Place>,
+    /// The length of all the signal nets with each placed part where it stands today, by the box of each net,
+    /// in mm (nets with a part not placed are left out); and the same nets with each part at its place.
+    pub parts_now_mm: f64,
+    /// The same nets with each part at its place (see `parts_now_mm`).
+    pub parts_then_mm: f64,
     /// The meetings of roads where ways turn, those with the most layer changes first: ground for their vias
     /// is kept free of parts there.
     pub junctions: Vec<Junction>,
@@ -477,6 +509,8 @@ const STRANDED_MM: f64 = 200.0;
 const POURED: f64 = 8.0;
 /// And what ties them when zones are gathered into larger ones.
 const GATHERED: f64 = 4.0;
+/// What ties a capacitor from a supply to the ground to the chip it stands by, as so many nets.
+const BYPASS: usize = 3;
 /// What a mm of parts more than their gap is long counts for when layings out are weighed, in mm.
 const CRAMPED_MM: f64 = 20.0;
 /// Two grounds no further apart than this many gaps, corner to corner, are neighbours.
@@ -789,6 +823,8 @@ struct Ground<'a> {
     asked: &'a BTreeMap<String, usize>,
     /// The part each part mates with, if any.
     mates: &'a [Option<usize>],
+    /// Whether it is parts that are given ground, within a zone: no road is kept between them.
+    fine: bool,
     /// For each supply poured on a plane layer: a part of each of the smallest zones it is poured under. Those
     /// zones are pulled together, that the pour be of one piece.
     kin: &'a [Vec<usize>],
@@ -858,6 +894,82 @@ fn spread(want: &[f64], size: &[f64], low: f64, high: f64) -> Vec<f64> {
         }
     }
     at
+}
+
+/// How fine the ground of a zone is looked at when its parts are settled on it, in mm.
+const SETTLE: f64 = 0.25;
+
+/// Bodies settled on a ground: each ([wide, high], where its middle wants to be) is given a place for its
+/// middle and whether it is turned a quarter, the largest first, each as near what it wants as what is
+/// settled before it and the ground `shut` allow, and as it stands rather than turned where both are as near.
+/// None for one there is no room left for.
+fn settled(rect: [f64; 4], bodies: &[([f64; 2], Pt)], shut: &[[f64; 4]]) -> Vec<Option<(Pt, bool)>> {
+    let cells = |mm: f64| (mm / SETTLE - 1e-6).ceil().max(1.0) as usize;
+    let (wide, high) = (cells(rect[2] - rect[0]), cells(rect[3] - rect[1]));
+    let mut taken = vec![false; wide * high];
+    let mark = |taken: &mut Vec<bool>, r: [f64; 4]| {
+        let low = |v: f64, from: f64, most: usize| (((v - from) / SETTLE + 1e-6).floor().max(0.0) as usize).min(most);
+        let top = |v: f64, from: f64, most: usize| (((v - from) / SETTLE - 1e-6).ceil().max(0.0) as usize).min(most);
+        for y in low(r[1], rect[1], high)..top(r[3], rect[1], high) {
+            for x in low(r[0], rect[0], wide)..top(r[2], rect[0], wide) {
+                taken[y * wide + x] = true;
+            }
+        }
+    };
+    shut.iter().for_each(|&k| mark(&mut taken, k));
+    let mut order: Vec<usize> = (0..bodies.len()).collect();
+    order.sort_by(|&a, &b| {
+        let area = |i: usize| bodies[i].0[0] * bodies[i].0[1];
+        area(b).total_cmp(&area(a)).then(a.cmp(&b))
+    });
+    let mut found: Vec<Option<(Pt, bool)>> = vec![None; bodies.len()];
+    let mut sums = vec![0u32; (wide + 1) * (high + 1)];
+    for i in order {
+        // (how much is taken up to each cell, that any body's ground is asked in one go)
+        for y in 0..high {
+            let mut row = 0u32;
+            for x in 0..wide {
+                row += u32::from(taken[y * wide + x]);
+                sums[(y + 1) * (wide + 1) + x + 1] = sums[y * (wide + 1) + x + 1] + row;
+            }
+        }
+        let ([w, h], want) = bodies[i];
+        let mut best: Option<(f64, usize, usize, bool)> = None;
+        for turn in [false, true] {
+            let (bw, bh) = if turn { (cells(h), cells(w)) } else { (cells(w), cells(h)) };
+            if bw > wide || bh > high || (turn && bw == bh) {
+                continue;
+            }
+            for y in 0..=high - bh {
+                for x in 0..=wide - bw {
+                    let at = |x: usize, y: usize| sums[y * (wide + 1) + x];
+                    if at(x + bw, y + bh) + at(x, y) != at(x + bw, y) + at(x, y + bh) {
+                        continue;
+                    }
+                    let mid = [
+                        rect[0] + (x as f64 + bw as f64 / 2.0) * SETTLE,
+                        rect[1] + (y as f64 + bh as f64 / 2.0) * SETTLE,
+                    ];
+                    let far = (mid[0] - want[0]).powi(2) + (mid[1] - want[1]).powi(2) + if turn { 1e-3 } else { 0.0 };
+                    if best.map_or(true, |b| far < b.0) {
+                        best = Some((far, x, y, turn));
+                    }
+                }
+            }
+        }
+        if let Some((_, x, y, turn)) = best {
+            let (bw, bh) = if turn { (cells(h), cells(w)) } else { (cells(w), cells(h)) };
+            let r = [
+                rect[0] + x as f64 * SETTLE,
+                rect[1] + y as f64 * SETTLE,
+                rect[0] + (x + bw) as f64 * SETTLE,
+                rect[1] + (y + bh) as f64 * SETTLE,
+            ];
+            mark(&mut taken, r);
+            found[i] = Some((middle(r), turn));
+        }
+    }
+    found
 }
 
 /// What a cut is known by from one laying out to the next: the zones it parts, by name.
@@ -1068,7 +1180,8 @@ fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains: bool, on: 
     // (whole tracks: a road for three nets on four layers is one track wide, not three quarters of one; and
     // one track at the least along every cut, or a zone with nothing to its neighbour has no way out past it)
     let abreast = (lanes / run_layers as f64).ceil().max(1.0);
-    let road = if domains { board.gap } else { board.pitch * abreast }.min(ROAD_MOST * length);
+    let road =
+        if on.fine { 0.0 } else { if domains { board.gap } else { board.pitch * abreast }.min(ROAD_MOST * length) };
     let low = if wide { rect[0] } else { rect[1] };
     let piece = |from: f64, to: f64| if wide { [from, rect[1], to, rect[3]] } else { [rect[0], from, rect[2], to] };
     // (the lots change sides where that was found the better)
@@ -1867,6 +1980,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             sided,
             asked,
             mates: &mate_of,
+            fine: false,
             kin: &kin,
         };
         let mut lots: Vec<Vec<Work>> = (0..boards.len()).map(|_| Vec::new()).collect();
@@ -2168,6 +2282,149 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         .collect();
     junctions
         .sort_by(|a, b| b.changes.cmp(&a.changes).then(a.at[0].total_cmp(&b.at[0])).then(a.at[1].total_cmp(&b.at[1])));
+    // A place for every part within its zone. The zones are gone over twice: the second time each part knows
+    // where those of the other zones came to stand.
+    let on_gap: BTreeMap<usize, Pt> = bridges
+        .iter()
+        .filter_map(|bridge| parts.iter().position(|part| part.name == bridge.part).map(|p| (p, bridge.at)))
+        .collect();
+    let mut fine_leaves: Vec<(usize, [f64; 4], Vec<usize>)> = Vec::new();
+    fn parts_of_leaves(work: &Work, domain: usize, out: &mut Vec<(usize, [f64; 4], Vec<usize>)>) {
+        if work.inside.is_empty() {
+            out.push((domain, work.rect, work.parts.clone()));
+        }
+        work.inside.iter().for_each(|inner| parts_of_leaves(inner, domain, out));
+    }
+    top.iter().enumerate().for_each(|(domain, work)| parts_of_leaves(work, domain, &mut fine_leaves));
+    let mut stand: Vec<Option<Pt>> = vec![None; parts.len()];
+    for (domain, rect, own) in &fine_leaves {
+        let (mid, shift) = (middle(*rect), shifts[to[*domain]]);
+        own.iter().for_each(|&p| stand[p] = Some([mid[0] + shift[0], mid[1] + shift[1]]));
+    }
+    for (domain, _, own) in &fine_leaves {
+        let shift = shifts[to[*domain]];
+        for (&p, at) in own.iter().filter_map(|p| on_gap.get(p).map(|at| (p, at))) {
+            stand[p] = Some([at[0] + shift[0], at[1] + shift[1]]);
+        }
+    }
+    // (the nets of the parts: the signals, and for each capacitor from a supply to a ground a tie to a chip of
+    // its zone on that supply, the chips taking them in turn)
+    let mut fine_nets: Vec<Vec<usize>> = nets.clone();
+    for (_, _, own) in &fine_leaves {
+        let mut taken: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+        for &c in own.iter().filter(|&&c| parts[c].capacitor && parts[c].pads.len() == 2) {
+            for &rail in parts[c].pads.iter().flatten().filter(|net| found.rails.contains_key(net)) {
+                let chip = own
+                    .iter()
+                    .filter(|&&q| !parts[q].capacitor && parts[q].pads.len() > 2 && parts[q].pads.contains(&Some(rail)))
+                    .min_by_key(|&&q| (taken.get(&(rail, q)).copied().unwrap_or(0), q));
+                if let Some(&chip) = chip {
+                    *taken.entry((rail, chip)).or_insert(0) += 1;
+                    fine_nets.extend(vec![vec![c, chip]; BYPASS]);
+                }
+            }
+        }
+    }
+    let (none, no_sides, no_asks, no_kin) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new(), Vec::new());
+    let no_rails: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+    let mut grounds: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
+    for _ in 0..2 {
+        for (domain, rect, own) in &fine_leaves {
+            let mut each: Vec<Work> = own
+                .iter()
+                .filter(|p| !on_gap.contains_key(p))
+                .map(|&p| Work { name: name(p), parts: vec![p], inside: Vec::new(), rect: [0.0; 4], more: 0.0 })
+                .collect();
+            let mut on = Ground {
+                board,
+                nets: &fine_nets,
+                rails: &no_rails,
+                at: std::mem::take(&mut stand),
+                roads: Vec::new(),
+                region: boards[to[*domain]],
+                shift: shifts[to[*domain]],
+                turned: &none,
+                crossed: &none,
+                sided: &no_sides,
+                asked: &no_asks,
+                mates: &mate_of,
+                fine: true,
+                kin: &no_kin,
+            };
+            arrange(&mut each, *rect, 0, false, &mut on);
+            stand = std::mem::take(&mut on.at);
+            grounds.extend(each.iter().map(|work| (work.parts[0], work.rect)));
+        }
+    }
+    // Then the bodies themselves are settled on the ground of each zone, each as near the middle of the ground
+    // that came to it as the others allow, the largest first; no part on ground that is shut.
+    let round2 = |v: f64| (v * 100.0).round() / 100.0;
+    let mut places: Vec<Place> = Vec::new();
+    let mut spot: Vec<Option<Pt>> = vec![None; parts.len()];
+    let body = |p: usize| {
+        let side = parts[p].area.sqrt();
+        parts[p].size.unwrap_or([side, side])
+    };
+    // (where each came to stand: its middle and whether it is turned; None where there was no room. A domain's
+    // bodies are settled together, off its roads and what is shut: a large part may reach over the ground of
+    // its zone, which was cut by what its parts take and not by their shapes)
+    let mut stood: BTreeMap<usize, Option<(Pt, bool)>> = BTreeMap::new();
+    for work in top.iter() {
+        let mine: Vec<usize> = work.parts.iter().copied().filter(|p| grounds.contains_key(p)).collect();
+        let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+        shut.extend(roads.iter().map(|road| road.rect));
+        let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+        stood.extend(mine.iter().copied().zip(settled(work.rect, &bodies, &shut)));
+    }
+    let taken = |p: usize, (at, turn): (Pt, bool)| {
+        let [w, h] = body(p);
+        let (w, h) = if turn { (h, w) } else { (w, h) };
+        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
+    };
+    for (domain, _, own) in &fine_leaves {
+        let shift = shifts[to[*domain]];
+        for &p in own {
+            let (at, rect, turn, fits) = match (on_gap.get(&p), stood.get(&p)) {
+                (Some(&at), _) => (at, None, false, true),
+                (None, Some(&Some((at, turn)))) => (at, Some(taken(p, (at, turn))), turn, true),
+                (None, Some(None)) => (middle(grounds[&p]), Some(grounds[&p]), false, false),
+                _ => continue,
+            };
+            spot[p] = Some([at[0] + shift[0], at[1] + shift[1]]);
+            places.push(Place {
+                part: name(p),
+                at: at.map(round2),
+                rect: rect.map(|r| r.map(round2)),
+                turn,
+                fits,
+                off: parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0),
+            });
+        }
+    }
+    places.sort_by(|a, b| a.part.cmp(&b.part));
+    // (how long the signal nets are with the parts as they stand, and with each at its place: nets all of
+    // whose parts stand on the board today; as the boards stack)
+    let (mut parts_now_mm, mut parts_then_mm) = (0.0, 0.0);
+    let part_shift: BTreeMap<usize, Pt> =
+        fine_leaves.iter().flat_map(|(domain, _, own)| own.iter().map(|&p| (p, shifts[to[*domain]]))).collect();
+    for net in &nets {
+        if !net.iter().all(|&p| parts[p].placed && spot[p].is_some()) {
+            continue;
+        }
+        let span = |points: Vec<Pt>| {
+            let low = |k: usize| points.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min);
+            let high = |k: usize| points.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max);
+            high(0) - low(0) + high(1) - low(1)
+        };
+        // (today the parts stand as the file draws them: on the board they are drawn on)
+        let today = |p: usize| {
+            let home = boards.iter().position(|b| parts[p].at[0] >= b[0] && parts[p].at[0] <= b[2]);
+            let shift = home.map_or(part_shift[&p], |b| shifts[b]);
+            [parts[p].at[0] + shift[0], parts[p].at[1] + shift[1]]
+        };
+        parts_now_mm += span(net.iter().map(|&p| today(p)).collect());
+        parts_then_mm += span(net.iter().filter_map(|&p| spot[p]).collect());
+    }
     // The pours, as they are told.
     let mut rects: Vec<[f64; 4]> = Vec::new();
     fn grounds_of(work: &Work, out: &mut Vec<[f64; 4]>) {
@@ -2324,6 +2581,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         travel,
         first,
         bridges,
+        places,
+        parts_now_mm: parts_now_mm.round(),
+        parts_then_mm: parts_then_mm.round(),
         junctions,
         pours,
         roads,
@@ -2402,14 +2662,53 @@ mod tests {
         );
         assert_eq!((pour.rects.len(), pour.parts, pour.pieces, pour.by_track.len()), (2, 5, 1, 0));
         assert_eq!((within(&found), found.travel.split), (Some(0), 0));
+        // within a zone a bypass capacitor stands by the chip it is for: nearer it than the zone's other parts are
+        let at = |name: &str| found.places.iter().find(|place| place.part == name).unwrap().at;
+        assert!(
+            dist(at("C4"), at("U2")) < 6.0 && dist(at("C1"), at("U1")) < dist(at("C1"), at("R1")) + 6.0,
+            "{:?}",
+            found.places
+        );
+        // the isolator has its place on the gap, and no ground of its own
+        let isolator = found.places.iter().find(|place| place.part == "U3").unwrap();
+        assert_eq!((isolator.rect, isolator.at), (None, found.bridges[0].at));
+        assert_eq!(found.places.len(), 14);
         // every layer change planned where roads meet is told with the ground its via wants
         let square = floorplan(&square()).unwrap();
+        // and every part has a place within the ground of its zone, none over another
+        assert_eq!(square.places.len(), 4);
+        let grounds: Vec<[f64; 4]> = square.places.iter().filter_map(|place| place.rect).collect();
+        for (i, a) in grounds.iter().enumerate() {
+            for b in &grounds[i + 1..] {
+                assert!(
+                    a[2].min(b[2]) - a[0].max(b[0]) < 1e-6 || a[3].min(b[3]) - a[1].max(b[1]) < 1e-6,
+                    "{a:?} {b:?}"
+                );
+            }
+        }
+        assert!(square.places.iter().all(|place| place.fits && place.off.is_some()), "{:?}", square.places);
         let changes: usize = square.junctions.iter().map(|junction| junction.changes).sum();
         assert!(changes <= square.travel.vias, "{:?} {:?}", square.junctions, square.travel);
         for junction in &square.junctions {
             assert_eq!(junction.needs, 2.0 * junction.changes as f64);
             assert_eq!(junction.side > 0.0, junction.needs > junction.has, "{junction:?}");
         }
+    }
+
+    #[test]
+    fn bodies_are_settled_none_over_another_as_near_what_they_want_as_may_be() {
+        let ground = [0.0, 0.0, 10.0, 4.0];
+        // two that want the same place: the larger has it, the other stands beside
+        let found = settled(ground, &[([2.0, 2.0], [5.0, 2.0]), ([4.0, 2.0], [5.0, 2.0])], &[]);
+        assert_eq!(found[1], Some(([5.0, 2.0], false)));
+        let (beside, _) = found[0].unwrap();
+        assert!((beside[0] - 5.0).abs() >= 3.0 - 1e-9 && beside[1] == 2.0, "{beside:?}");
+        // one too long for the ground as it stands is turned; one too large either way has no place
+        assert_eq!(settled([0.0, 0.0, 3.0, 10.0], &[([8.0, 2.0], [1.5, 5.0])], &[]), [Some(([1.5, 5.0], true))]);
+        assert_eq!(settled(ground, &[([12.0, 5.0], [5.0, 2.0])], &[]), [None]);
+        // and none stands on ground that is shut
+        let found = settled(ground, &[([2.0, 2.0], [1.0, 1.0])], &[[0.0, 0.0, 4.0, 4.0]]);
+        assert_eq!(found, [Some(([5.0, 1.0], false))]);
     }
 
     #[test]
@@ -2444,6 +2743,7 @@ mod tests {
             height: None,
             near: None,
             mate: None,
+            size: None,
         };
         Board {
             outline: [0.0, 0.0, 40.0, 10.0],
@@ -2588,6 +2888,7 @@ mod tests {
             height: None,
             near: None,
             mate: None,
+            size: None,
         };
         Board {
             outline: [0.0, 0.0, 40.0, 40.0],

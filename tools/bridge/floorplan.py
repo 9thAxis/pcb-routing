@@ -8,16 +8,17 @@ from .steps import habits, planes
 
 
 def _ground(picture):
-    """What each part takes on the board, in mm2: the box of its pads, grown by a millimetre on every side."""
+    """What each part takes on the board, [wide, high] in mm: the box of its pads, grown by a millimetre on every side."""
     boxes = {}
     for pad in picture.pads:
         if pad.part:
             x, y = pad.at
             box = boxes.setdefault(pad.part, [x, y, x, y])
             box[:] = [min(box[0], x), min(box[1], y), max(box[2], x), max(box[3], y)]
-    return {part: (box[2] - box[0] + 2.0) * (box[3] - box[1] + 2.0) for part, box in boxes.items()}
+    return {part: [box[2] - box[0] + 2.0, box[3] - box[1] + 2.0] for part, box in boxes.items()}
 
 
+BODY = 0.5  # what a part's body is taken to reach beyond the box of its pads, in mm
 RUNS = 0.7  # a layer runs one way if this much of the track on it does
 ENOUGH = 100.0  # and there is this much track on it to tell by, in mm
 
@@ -52,7 +53,8 @@ def floorplan(picture, rules, ask):
     for pad in picture.pads:
         if pad.part:
             pads.setdefault(pad.part, []).append(index.get(pad.net))
-    area = _ground(picture)
+    sizes = _ground(picture)
+    area = {part: size[0] * size[1] for part, size in sizes.items()}
     placed = lambda part: x0 <= part.at[0] <= x1 and y0 <= part.at[1] <= y1
     guesses = rules.settings.guesses
     parts = [dict(name=reference, sheet=part.sheet or "", at=part.at, placed=placed(part),
@@ -101,6 +103,10 @@ def floorplan(picture, rules, ask):
                 if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
         mate = [what["mate"] for pattern, what in (hints.parts if hints else [])
                 if "mate" in what and fnmatch.fnmatchcase(part["name"], pattern)]
+        if part["name"] in sizes:
+            # (its body, to be settled: the box of its pads and half a millimetre round it; what it takes of
+            # the board, above, is more: the tracks to it want room too)
+            part["size"] = [round(v - 2.0 + 2 * BODY, 3) for v in sizes[part["name"]]]
         part.update(**(dict(height=tall) if tall is not None else {}), **(dict(near=near[-1]) if near else {}),
                     **(dict(mate=mate[-1]) if mate else {}))
     # The height between two boards of a stack is not held to: it is what the standoffs are chosen for. The
@@ -239,6 +245,16 @@ def floorplan_told(found, depth=2, every=False):
         for j in short[:None if every else 8]:
             lines.append(f"  at ({j['at'][0]:.1f}, {j['at'][1]:.1f}): {j['changes']} layer changes, {j['needs']:.1f} mm2 for "
                          f"their vias, the roads have {j['has']:.2f}: {j['side']:.1f} mm square")
+    if found.get("places"):
+        places = found["places"]
+        tight = [p for p in places if not p["fits"]]
+        longer = 100 * (found["parts_then_mm"] / found["parts_now_mm"] - 1) if found["parts_now_mm"] else 0.0
+        lines += ["", f"a place for every part within its zone: {len(places)} parts, {sum(1 for p in places if p['turn'])} "
+                      f"turned a quarter; {len(tight)} found no room on the ground of their domain"
+                      + (f" ({', '.join(p['part'] for p in tight[:12])}{' ...' if len(tight) > 12 else ''})" if tight else ""),
+                  f"  the signal nets all of whose parts stand on the board today: {found['parts_now_mm']:.0f} mm as they "
+                  f"stand, {found['parts_then_mm']:.0f} mm with each part at its place ({abs(longer):.0f} % "
+                  f"{'longer' if longer > 0 else 'shorter'})"]
     travel, first = found.get("travel"), found.get("first")
     if travel and first and (first["mm"], first["vias"], first["over"]) != (travel["mm"], travel["vias"], travel["over"]):
         lines += ["", f"as first laid out: {first['mm']:.0f} mm, {first['vias']} layer changes, {first['over']} roads asked for "
