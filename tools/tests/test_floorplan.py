@@ -111,6 +111,31 @@ class Floorplan(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     k.read_hints(Path(tmp, "b.routing.json"))
 
+    def test_the_plan_is_judged_and_drawn(self):
+        import tempfile
+        from pathlib import Path
+        row = k.judged(self.found)
+        self.assertEqual((row["parts"], row["no_room"], row["over"], row["domains"]), (15, [], 0, 1))
+        self.assertGreater(row["now_mm"], 0)
+        # by how far apart in the plan the parts of each net are: all the nets compared are in one of the four
+        self.assertEqual(sum(count for _, count, _, _ in self.found["against"]) > 0,  True)
+        self.assertAlmostEqual(sum(now for _, _, now, _ in self.found["against"]), self.found["parts_now_mm"], delta=3)
+        # two parts on one side over one another are told; on two sides they are not
+        over = dict(places=[dict(part="A", rect=[0, 0, 2, 2], fits=True), dict(part="B", rect=[1, 1, 3, 3], fits=True)])
+        self.assertEqual(k.bodies_over(over), [("A", "B")])
+        over["places"][1]["back"] = True
+        self.assertEqual(k.bodies_over(over), [])
+        told = k.judged_told(dict(one=row, other=None))
+        self.assertTrue(told[0].startswith("2 boards, 15 parts; 1 failed: other"))
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            self.skipTest("the pictures need matplotlib")
+        import draw_floorplan
+        with tempfile.TemporaryDirectory() as tmp:
+            draw_floorplan.draw(self.found, Path(tmp, "plan.png"))
+            self.assertGreater(Path(tmp, "plan.png").stat().st_size, 10_000)
+
     def test_it_is_told_with_the_power_first(self):
         lines = k.power_told(self.found) + k.floorplan_told(self.found, 3)
         self.assertEqual(lines[0], "1 domains (grounds); 0 parts stand on two or more; 0 parts that nothing places in one")

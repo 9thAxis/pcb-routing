@@ -342,6 +342,8 @@ def floorplan_told(found, depth=2, every=False):
                   f"  the signal nets all of whose parts stand on the board today: {found['parts_now_mm']:.0f} mm as they "
                   f"stand, {found['parts_then_mm']:.0f} mm with each part at its place ({abs(longer):.0f} % "
                   f"{'longer' if longer > 0 else 'shorter'})",
+                  *[f"      {kind}: {count} nets, {now:.0f} mm as they stand, {then:.0f} mm placed "
+                    f"({100 * (then / now - 1):+.0f} %)" for kind, count, now, then in found.get("against", []) if count and now],
                   f"  each then turned so that its pads face what they are joined to: from pad to the nearest other pad of "
                   f"its net, {found['pads_first_mm']:.0f} mm in all before and {found['pads_mm']:.0f} mm after; "
                   f"{found['bypass'][1]} of {found['bypass'][0]} bypass capacitors have their supply pad by the pad they are for (within 3 mm; a large one within its length)"]

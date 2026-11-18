@@ -619,6 +619,11 @@ pub struct Floorplan {
     pub parts_now_mm: f64,
     /// The same nets with each part at its place (see `parts_now_mm`).
     pub parts_then_mm: f64,
+    /// And the same by how far apart in the plan the parts of each net are: (what they are, how many such
+    /// nets, their length as the parts stand today in mm, and with each part at its place): within one of
+    /// the smallest zones; between such zones of one larger zone; between larger zones of a domain; between
+    /// domains. Where the plan is shorter or longer than the board as it stands, this says at which scale.
+    pub against: Vec<(String, usize, f64, f64)>,
     /// How far the pads of the signal nets are from the nearest other pad of their net in all, in mm, with
     /// each part at its place and turned only as its body lies; and the same once each is turned so that
     /// its pads face what they are joined to.
@@ -4557,6 +4562,33 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // (how long the signal nets are with the parts as they stand, and with each at its place: nets all of
     // whose parts stand on the board today; as the boards stack)
     let (mut parts_now_mm, mut parts_then_mm) = (0.0, 0.0);
+    // (and the same by how far apart in the plan the parts of a net are: within one of the smallest zones;
+    // between such zones of one zone under a domain; between those; between domains)
+    let mut where_of: BTreeMap<usize, [usize; 3]> = BTreeMap::new(); // part -> (domain, the zone under it, the smallest zone)
+    fn told_where(work: &Work, at: [usize; 2], count: &mut usize, out: &mut BTreeMap<usize, [usize; 3]>) {
+        if work.inside.is_empty() {
+            out.extend(work.parts.iter().map(|&p| (p, [at[0], at[1], *count])));
+            *count += 1;
+        }
+        work.inside.iter().for_each(|inner| told_where(inner, at, count, out));
+    }
+    let mut smallest = 0;
+    for (domain, work) in top.iter().enumerate() {
+        if work.inside.is_empty() {
+            told_where(work, [domain, 0], &mut smallest, &mut where_of);
+        }
+        for (k, inner) in work.inside.iter().enumerate() {
+            told_where(inner, [domain, k], &mut smallest, &mut where_of);
+        }
+    }
+    let kinds = [
+        "within one of the smallest zones",
+        "between zones of one larger zone",
+        "between larger zones of a domain",
+        "between domains",
+    ];
+    let mut against: Vec<(String, usize, f64, f64)> =
+        kinds.iter().map(|kind| (kind.to_string(), 0, 0.0, 0.0)).collect();
     let part_shift: BTreeMap<usize, Pt> =
         fine_leaves.iter().flat_map(|(domain, _, own)| own.iter().map(|&p| (p, shifts[to[*domain]]))).collect();
     for net in &nets {
@@ -4574,8 +4606,23 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             let shift = home.map_or(part_shift[&p], |b| shifts[b]);
             [parts[p].at[0] + shift[0], parts[p].at[1] + shift[1]]
         };
-        parts_now_mm += span(net.iter().map(|&p| today(p)).collect());
-        parts_then_mm += span(net.iter().filter_map(|&p| spot[p]).collect());
+        let (now, then) =
+            (span(net.iter().map(|&p| today(p)).collect()), span(net.iter().filter_map(|&p| spot[p]).collect()));
+        parts_now_mm += now;
+        parts_then_mm += then;
+        let at: Vec<[usize; 3]> = net.iter().filter_map(|p| where_of.get(p).copied()).collect();
+        let same = |k: usize| at.windows(2).all(|pair| pair[0][..=k] == pair[1][..=k]);
+        let kind = if same(2) {
+            0
+        } else if same(1) {
+            1
+        } else if same(0) {
+            2
+        } else {
+            3
+        };
+        (against[kind].1, against[kind].2, against[kind].3) =
+            (against[kind].1 + 1, against[kind].2 + now, against[kind].3 + then);
     }
     // The pours, as they are told.
     let mut rects: Vec<[f64; 4]> = Vec::new();
@@ -4746,6 +4793,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         places,
         parts_now_mm: parts_now_mm.round(),
         parts_then_mm: parts_then_mm.round(),
+        against: against.into_iter().map(|(kind, count, now, then)| (kind, count, now.round(), then.round())).collect(),
         pads_first_mm: pads_first_mm.round(),
         pads_mm: pads_mm.round(),
         bypass,
