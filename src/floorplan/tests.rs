@@ -799,3 +799,65 @@ fn parts_on_the_two_sides_of_a_board_share_its_ground() {
     board.parts[1].through = true;
     assert!((super::ground::taken_by(&board, &[0, 1, 2]) - (b + a.max(c))).abs() < 1e-9);
 }
+
+#[test]
+fn on_a_board_with_room_to_spare_the_parts_of_a_zone_are_kept_together() {
+    // the same parts on a board sixteen times the size: those of the first domain's zone stand within a
+    // ground they fill to PACKED and not over all of the zone's; and no body is over another
+    let mut board = two_grounds();
+    board.outline = [0.0, 0.0, 160.0, 40.0];
+    let found = floorplan(&board).unwrap();
+    let rect = |name: &str| found.places.iter().find(|place| place.part == name).unwrap().rect.unwrap();
+    fn leaves<'a>(zone: &'a Zone, out: &mut Vec<&'a Zone>) {
+        if zone.inside.is_empty() {
+            out.push(zone);
+        }
+        zone.inside.iter().for_each(|inner| leaves(inner, out));
+    }
+    let mut smallest = Vec::new();
+    found.zones.iter().for_each(|zone| leaves(zone, &mut smallest));
+    let mut looked = 0;
+    for zone in smallest.iter().filter(|zone| zone.parts.len() >= 3) {
+        let within =
+            |r: &[f64; 4]| r[0] >= zone.rect[0] && r[1] >= zone.rect[1] && r[2] <= zone.rect[2] && r[3] <= zone.rect[3];
+        let own: Vec<[f64; 4]> = zone.parts.iter().map(|name| rect(name)).filter(within).collect();
+        let low = |k: usize| own.iter().map(|r| r[k]).fold(f64::INFINITY, f64::min);
+        let high = |k: usize| own.iter().map(|r| r[k]).fold(f64::NEG_INFINITY, f64::max);
+        let over = (high(2) - low(0)) * (high(3) - low(1));
+        let all = (zone.rect[2] - zone.rect[0]) * (zone.rect[3] - zone.rect[1]);
+        assert!(
+            over <= 1.5 * zone.area / PACKED && over < all / 2.0,
+            "{}: {over} of {all}, parts {}",
+            zone.name,
+            zone.area
+        );
+        looked += 1;
+    }
+    assert!(looked >= 2);
+    let all: Vec<[f64; 4]> = found.places.iter().filter_map(|place| place.rect).collect();
+    for (i, a) in all.iter().enumerate() {
+        for b in &all[i + 1..] {
+            assert!(a[2].min(b[2]) - a[0].max(b[0]) < 1e-6 || a[3].min(b[3]) - a[1].max(b[1]) < 1e-6, "{a:?} {b:?}");
+        }
+    }
+}
+
+#[test]
+fn a_body_that_is_nearly_square_is_not_turned_a_quarter_onto_what_stands_against_it() {
+    // bodies 2.9 by 2.7 with pads that would face better turned a quarter: each lies as it was settled or
+    // turned half round, and none is over another
+    let mut board = two_grounds();
+    for part in &mut board.parts {
+        part.size = Some([2.9, 2.7]);
+        part.area = 2.9 * 2.7;
+        part.offsets = (0..part.pads.len()).map(|i| [0.0, i as f64 - 1.0]).collect();
+    }
+    let found = floorplan(&board).unwrap();
+    let all: Vec<[f64; 4]> = found.places.iter().filter(|place| place.fits).filter_map(|place| place.rect).collect();
+    assert!(all.len() > 8);
+    for (i, a) in all.iter().enumerate() {
+        for b in &all[i + 1..] {
+            assert!(a[2].min(b[2]) - a[0].max(b[0]) < 1e-6 || a[3].min(b[3]) - a[1].max(b[1]) < 1e-6, "{a:?} {b:?}");
+        }
+    }
+}

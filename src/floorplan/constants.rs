@@ -97,3 +97,8 @@ pub(super) const LARGE: f64 = 64.0;
 pub(super) const MAIN: usize = 3;
 /// How fine the ground of a zone is looked at when its parts are settled on it, in mm.
 pub(super) const SETTLE: f64 = 0.25;
+
+/// How much of the ground its parts are laid out on the parts of one of the smallest zones fill: a zone has its
+/// share of the whole board, and on a board with room to spare its parts are kept together within it, towards
+/// what they are joined to, and not spread over all of it.
+pub(super) const PACKED: f64 = 0.5;

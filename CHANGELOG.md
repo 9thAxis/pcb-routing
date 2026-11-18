@@ -143,6 +143,10 @@
   The two sides of a board share its ground: a zone needs the more of what its parts take on the front and
   on the back, and a part with holes takes its ground on both. A part can be told to stay where it stands
   (`fixed` in the hints, `--fixed PATTERN` on the commands).
+  On a board with room to spare the parts of a zone are kept together: they are laid out on as much of
+  the zone's ground as they fill by half, as near as that lies to what they are joined to outside it, and
+  not spread over all of it (109 public boards: nets 0.76 of the designers' at the median, from 0.88).
+  A body that is nearly square is no longer turned a quarter onto what stands against it.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

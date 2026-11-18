@@ -2,8 +2,8 @@
 
 use super::blocks::Block;
 use super::Site;
-use crate::floorplan::constants::{AS_NEAR, BLOCK_NEAR, MAIN, QUIET_MM, ROW_WORTH};
-use crate::floorplan::ground::{arrange, Ground, Work};
+use crate::floorplan::constants::{AS_NEAR, BLOCK_NEAR, MAIN, PACKED, QUIET_MM, ROW_WORTH};
+use crate::floorplan::ground::{arrange, taken_by, Ground, Work};
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::{middle, quartered, settled, settled_shape};
 use crate::floorplan::types::Rows;
@@ -55,12 +55,46 @@ pub(super) fn grounds(site: &Site, fine_nets: &[Vec<usize>]) -> BTreeMap<usize, 
                 fine: true,
                 kin: &no_kin,
             };
+            let rect = &packed(site, fine_nets, &on.at, (*domain, *rect, own));
             arrange(&mut each, *rect, 0, false, &mut on);
             stand = std::mem::take(&mut on.at);
             grounds.extend(each.iter().map(|work| (work.parts[0], work.rect)));
         }
     }
     grounds
+}
+
+/// The ground the parts of one of the smallest zones are laid out on: not all of the zone's, which has its
+/// share of the whole board however empty that is, but as much as they fill to PACKED, of the zone's own
+/// shape, as near as it can lie within the zone to what they are joined to outside it (`stand`: where every
+/// part is taken to stand so far).
+fn packed(site: &Site, fine_nets: &[Vec<usize>], stand: &[Option<Pt>], leaf: (usize, [f64; 4], &[usize])) -> [f64; 4] {
+    let (cx, on_gap) = (site.cx, &site.on_gap);
+    let (domain, rect, own) = leaf;
+    let shift = site.on.shifts[site.on.to[domain]];
+    let inside: Vec<usize> = own.iter().copied().filter(|p| !on_gap.contains_key(p)).collect();
+    let (across, down) = (rect[2] - rect[0], rect[3] - rect[1]);
+    let share = taken_by(cx.board, &inside) / PACKED / (across * down).max(1e-9);
+    if share >= 1.0 || inside.is_empty() {
+        return rect;
+    }
+    // (no narrower than its largest part)
+    let most = inside.iter().map(|&p| cx.body(p)[0].max(cx.body(p)[1])).fold(0.0, f64::max);
+    let (wide, high) = ((across * share.sqrt()).max(most).min(across), (down * share.sqrt()).max(most).min(down));
+    let own: BTreeSet<usize> = inside.iter().copied().collect();
+    let (mut sum, mut all) = ([0.0, 0.0], 0.0);
+    for net in fine_nets.iter().filter(|net| net.len() > 1 && net.iter().any(|p| own.contains(p))) {
+        let each = 1.0 / (net.len() - 1) as f64;
+        for at in net.iter().filter(|p| !own.contains(p)).filter_map(|&p| stand[p]) {
+            sum = [sum[0] + each * (at[0] - shift[0]), sum[1] + each * (at[1] - shift[1])];
+            all += each;
+        }
+    }
+    let mid = middle(rect);
+    let pull = if all > 0.0 { [sum[0] / all, sum[1] / all] } else { mid };
+    let x = pull[0].clamp(rect[0] + wide / 2.0, rect[2] - wide / 2.0);
+    let y = pull[1].clamp(rect[1] + high / 2.0, rect[3] - high / 2.0);
+    [x - wide / 2.0, y - high / 2.0, x + wide / 2.0, y + high / 2.0]
 }
 
 /// Where the bodies came to stand.

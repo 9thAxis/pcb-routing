@@ -1,7 +1,7 @@
 //! How the parts are turned: so that their pads face what they are joined to.
 
 use super::Site;
-use crate::floorplan::constants::{BYPASS, SETTLE};
+use crate::floorplan::constants::BYPASS;
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::quartered;
 use crate::model::Pt;
@@ -87,7 +87,7 @@ impl<'a> Facing<'a> {
     }
 
     /// Each part is turned so that its pads face what they are joined to: of the ways its body may lie (as
-    /// it was settled, or that turned half round; any of the four for a square one or one on a gap), the one
+    /// it was settled, or that turned half round; any of the four for a square one), the one
     /// that leaves its pads nearest the nearest other pad of their nets.
     pub(super) fn face(&self, centre: &[Option<Pt>], quarter: &mut [u8], pins: &Pins) {
         let (cx, parts, on_gap, block_quarter) = (self.cx, self.cx.parts, self.on_gap, self.block_quarter);
@@ -106,7 +106,9 @@ impl<'a> Facing<'a> {
                     continue;
                 }
                 let [w, h] = cx.body(p);
-                let any = on_gap.contains_key(&p) || (w - h).abs() < SETTLE;
+                // (only a body that is square takes the same ground turned a quarter; one that is nearly so
+                // would reach over what was settled against it)
+                let any = (w - h).abs() < 1e-6;
                 let ways: Vec<u8> = if any { vec![0, 1, 2, 3] } else { vec![quarter[p] % 2, quarter[p] % 2 + 2] };
                 let mut best = (self.reach_of(p, quarter[p], centre, quarter, pins), quarter[p]);
                 for way in ways {
