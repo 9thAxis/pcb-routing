@@ -72,6 +72,12 @@
   first), lies away from the chip with its own supply pad toward the chip's, and takes that place though a
   small part stood there, which is settled again beside. The plan says how far the pads are from what they
   join before and after, and how many capacitors have their pad within 3 mm of the one they are for.
+  A capacitor takes a place by its pad only if all it moves is the nearer what it is joined to for it, and
+  may stand for a chip of another sheet; a connector is no chip. Domains that share a part on two grounds
+  are kept on one board. The parts on a gap are stood along it once more by where the parts they are tied
+  to came to stand; then the small parts are gone over a few times, each tried at the middle of what its
+  nets join it to and kept there if its nets are the shorter; a part of two pads with a net of its own to
+  one pad of another part (a resistor at its driver, a protector at its connector) goes to that pad.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

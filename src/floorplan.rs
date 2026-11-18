@@ -997,6 +997,12 @@ pub fn farads(value: &str) -> Option<f64> {
     scale.map(|scale| number * scale)
 }
 
+/// How often the small parts are gone over to shorten their nets, and how far from where a part wants to be
+/// room is looked for, in mm.
+const REFINES: usize = 4;
+const REFINE_MM: f64 = 8.0;
+/// What the nets of a part may grow by, in mm, when it is moved to the one pad it is there for.
+const OWN_PAD_MM: f64 = 1.0;
 /// A body of this many mm2 or more is settled before the others, over the whole ground of its domain.
 const LARGE: f64 = 64.0;
 /// A part with holes stands on no road down to this level (see [`Road::level`]).
@@ -2448,7 +2454,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         }
         best = now;
     }
-    let (laid, mut roads, travel, tall, bridges) = best;
+    let (laid, mut roads, travel, tall, mut bridges) = best;
     let top = laid;
     // Ground for the vias where ways turn: each takes its own and as much again, in a square where the roads meet.
     let mut junctions: Vec<Junction> = travel
@@ -2678,6 +2684,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 all += BYPASS as f64 * ((there[0] - here[0]).abs() + (there[1] - here[1]).abs());
             }
         }
+        // (and a chip counts the ways to the capacitors that stand for it)
+        for (&c, &(i, _, j)) in pins.iter().filter(|(_, pin)| pin.1 == p) {
+            if let (Some(here), Some(there)) = (pad_at(p, j, quarters, centre), pad_at(c, i, quarter[c], centre)) {
+                all += BYPASS as f64 * ((there[0] - here[0]).abs() + (there[1] - here[1]).abs());
+            }
+        }
         all
     };
     let face = |centre: &[Option<Pt>], quarter: &mut Vec<u8>, pins: &Pins| {
@@ -2772,6 +2784,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         shut.extend(mine.iter().filter(|&&q| q != c && hard(q)).filter_map(|&q| rect_of(q, &centre, &quarter)));
         let Some((at, turn)) = settled(ground, &[(lying, want)], &shut)[0] else { continue };
         if dist(at, pad) >= dist(was, pad) - 1e-6 {
+            // (it stands as near its pad already as there is room to: it is not moved from there later)
+            by_its_pad.insert(c);
             continue;
         }
         let turn = turn != quarter_more;
@@ -2810,6 +2824,135 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
             (centre, quarter) = (new_centre, new_quarter);
             by_its_pad.insert(c);
+        }
+    }
+    face(&centre, &mut quarter, &pins);
+    // The parts on the gaps are stood along them once more, now by where the parts they are tied to have come
+    // to stand (and not the middles of their zones): each gap's parts spread as before.
+    {
+        let domain_named = |name: &str| top.iter().position(|work| work.name == name);
+        type Strip = (bool, [f64; 4], Vec<(usize, usize, f64, f64)>); // (bridge, part, want along, size)
+        let mut strips: BTreeMap<[i64; 4], Strip> = BTreeMap::new();
+        for (b, bridge) in bridges.iter().enumerate().filter(|(_, bridge)| bridge.on == Across::Gap) {
+            let Some(p) = parts.iter().position(|part| part.name == bridge.part) else { continue };
+            let (Some(home), Some(other)) = (domain_named(&bridge.grounds[0]), domain_named(&bridge.grounds[1])) else {
+                continue;
+            };
+            let Some((strip, up)) = strip_between(top[home].rect, top[other].rect, board.gap) else { continue };
+            let shift = shift_of[p];
+            let mates: Vec<Pt> = (0..nets.len())
+                .filter(|&n| nets[n].contains(&p))
+                .flat_map(|n| nets[n].iter().filter(|&&q| q != p))
+                .filter_map(|&q| {
+                    centre[q].map(|at| [at[0] + shift_of[q][0] - shift[0], at[1] + shift_of[q][1] - shift[1]])
+                })
+                .collect();
+            let Some(want) = median(&mates) else { continue };
+            let key = strip.map(|v| (v * 1000.0).round() as i64);
+            let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
+            entry.2.push((b, p, want[usize::from(up)], parts[p].area.sqrt() + BESIDE));
+        }
+        for (up, strip, on_it) in strips.into_values() {
+            let along = usize::from(up);
+            let (want, size): (Vec<f64>, Vec<f64>) = on_it.iter().map(|&(_, _, want, size)| (want, size)).unzip();
+            for (&(b, p, _, _), place) in on_it.iter().zip(spread(&want, &size, strip[along], strip[along + 2])) {
+                let mut at = middle(strip);
+                at[along] = place;
+                centre[p] = Some(at);
+                bridges[b].at = at.map(|v| (v * 100.0).round() / 100.0);
+                bridges[b].off = parts[p].placed.then(|| (dist(parts[p].at, at) * 10.0).round() / 10.0);
+            }
+        }
+    }
+    // Then the small parts are gone over, a few times: each is tried at the middle of what its nets join it
+    // to (as near that as there is room, within REFINE_MM of it), and stays there if its nets are the shorter
+    // for it by the boxes of their parts. Not what was settled first, nor a capacitor by its pad.
+    let mut nets_of: Vec<Vec<usize>> = vec![Vec::new(); parts.len()];
+    for (n, net) in fine_nets.iter().enumerate() {
+        net.iter().for_each(|&p| nets_of[p].push(n));
+    }
+    let in_stack =
+        |q: usize, centre: &[Option<Pt>]| centre[q].map(|at| [at[0] + shift_of[q][0], at[1] + shift_of[q][1]]);
+    let boxes = |p: usize, at: Pt, centre: &[Option<Pt>]| -> f64 {
+        let mut all = 0.0;
+        for &n in &nets_of[p] {
+            let (mut low, mut high) = (at, at);
+            for there in fine_nets[n].iter().filter(|&&q| q != p).filter_map(|&q| in_stack(q, centre)) {
+                low = [low[0].min(there[0]), low[1].min(there[1])];
+                high = [high[0].max(there[0]), high[1].max(there[1])];
+            }
+            all += high[0] - low[0] + high[1] - low[1];
+        }
+        all
+    };
+    for _ in 0..REFINES {
+        let mut better = false;
+        for p in 0..parts.len() {
+            let settled_here = !on_gap.contains_key(&p) && stood.get(&p).is_some_and(|at| at.is_some());
+            let free = settled_here && !goes_first(p) && !by_its_pad.contains(&p) && !with_capacitors.contains(&p);
+            let Some(was) = centre[p].filter(|_| free) else { continue };
+            let shift = shift_of[p];
+            let mates: Vec<Pt> = nets_of[p]
+                .iter()
+                .flat_map(|&n| fine_nets[n].iter().filter(|&&q| q != p))
+                .filter_map(|&q| in_stack(q, &centre))
+                .map(|at| [at[0] - shift[0], at[1] - shift[1]])
+                .collect();
+            // (a part of two pads with one of them on a net of its own with one pad of another part is there
+            // for that pad, a resistor at its driver, a protector at its connector: it wants to be by it, and
+            // goes there if its nets are no longer for it)
+            let own_pad: Option<Pt> = if parts[p].pads.len() == 2 && !parts[p].capacitor {
+                let alone: Vec<(usize, usize)> = parts[p]
+                    .pads
+                    .iter()
+                    .flatten()
+                    .filter(|&&net| pads_on[net].len() == 2)
+                    .filter_map(|&net| pads_on[net].iter().copied().find(|other| other.0 != p))
+                    .collect();
+                match alone[..] {
+                    [(q, j)] => pad_at(q, j, quarter[q], &centre).map(|at| [at[0] - shift[0], at[1] - shift[1]]),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let Some(want) = own_pad.or_else(|| median(&mates)) else { continue };
+            if dist(want, was) < SETTLE {
+                continue;
+            }
+            let domain = domain_of_part[p];
+            let ground = top[domain].rect;
+            let window = [
+                ground[0].max(want[0] - REFINE_MM),
+                ground[1].max(want[1] - REFINE_MM),
+                ground[2].min(want[0] + REFINE_MM),
+                ground[3].min(want[1] + REFINE_MM),
+            ];
+            if window[2] - window[0] < SETTLE || window[3] - window[1] < SETTLE {
+                continue;
+            }
+            let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
+            shut.extend(roads.iter().filter(|road| road.gap).map(|road| road.rect));
+            for &q in top[domain].parts.iter().filter(|&&q| q != p && !on_gap.contains_key(&q)) {
+                if let Some(at) = centre[q].filter(|_| stood.get(&q).is_some_and(|at| at.is_some())) {
+                    shut.push(taken(q, (at, quarter[q] % 2 == 1)));
+                }
+            }
+            let [w, h] = body(p);
+            let lying = if quarter[p] % 2 == 1 { [h, w] } else { [w, h] };
+            let Some((at, turn)) = settled(window, &[(lying, want)], &shut)[0] else { continue };
+            let stack = |at: Pt| [at[0] + shift[0], at[1] + shift[1]];
+            let (now, then) = (boxes(p, stack(was), &centre), boxes(p, stack(at), &centre));
+            let nearer = own_pad.is_some_and(|pad| dist(at, pad) < dist(was, pad) - SETTLE && then <= now + OWN_PAD_MM);
+            if then < now - 1e-6 || nearer {
+                let turn = turn != (quarter[p] % 2 == 1);
+                (centre[p], quarter[p]) = (Some(at), u8::from(turn));
+                stood.insert(p, Some((at, turn)));
+                better = true;
+            }
+        }
+        if !better {
+            break;
         }
     }
     face(&centre, &mut quarter, &pins);
