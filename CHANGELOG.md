@@ -90,7 +90,10 @@
   the input it is for) with the resistor in series with it; a diode from a connector's net likewise, and
   what is in series with a connector's pin (its protection comes first); what is across two pads of one
   chip and of nothing else stands by it (its feedback). The plan counts the chains from one chip or
-  connector through parts in series to another and names those that double back.
+  connector through parts in series to another and names those that double back. Where the board says what
+  its pins are (KiCad writes it on the pads when a board is updated from its schematic), a part that could
+  stand for either of two chips is the receiver's and not the driver's, and a part in series with a net of
+  its own at each end goes to the pad that drives.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

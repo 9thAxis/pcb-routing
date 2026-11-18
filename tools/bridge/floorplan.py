@@ -77,7 +77,7 @@ def floorplan(picture, rules, ask):
             pads.setdefault(pad.part, []).append(index.get(pad.net))
             at = mid.get(pad.part, pad.at)
             offsets.setdefault(pad.part, []).append([round(pad.at[0] - at[0], 4), round(pad.at[1] - at[1], 4)])
-            pins.setdefault(pad.part, []).append(PINS.get(pad.kind, "unknown"))
+            pins.setdefault(pad.part, []).append(PINS.get(pad.kind.split("+")[0], "unknown"))  # (less "+no_connect")
             if pad.drill is not None:
                 drilled.add(pad.part)
     # (what a part takes of the board: its body; the room for tracks is what the zones are given beyond that)

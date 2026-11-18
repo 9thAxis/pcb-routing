@@ -2667,8 +2667,25 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut heads = reach[net].iter().copied().filter(|&q| is_head(q));
         heads.next().filter(|_| heads.next().is_none())
     };
-    for net in (0..all_nets.len()).filter(|&net| is_signal(net)) {
-        let Some(head) = only_head(net) else { continue };
+    // (what the schematic says a part's pad on a net is, where it says)
+    let pin_on = |q: usize, net: usize| -> Pin {
+        let at = parts[q].pads.iter().position(|&of| of == Some(net));
+        at.and_then(|i| parts[q].pins.get(i).copied()).unwrap_or_default()
+    };
+    // (the nets a chip takes a signal in on come first, those it drives last: a part that could stand for
+    // either of two chips, the resistor between a driver and a filtered input, is the receiver's, with its
+    // capacitor. An analog input is often drawn as a passive pin: so it is the drivers that are told apart)
+    let rank = |pin: Pin| match pin {
+        Pin::Input => 0u8,
+        Pin::Output | Pin::PowerOut => 2,
+        _ => 1,
+    };
+    let mut headed: Vec<(u8, usize, usize)> = (0..all_nets.len())
+        .filter(|&net| is_signal(net))
+        .filter_map(|net| only_head(net).map(|head| (rank(pin_on(head, net)), net, head)))
+        .collect();
+    headed.sort_unstable();
+    for (_, net, head) in headed {
         let small = reach[net].len() <= SERVED;
         let mut filtered = false;
         let mut in_series: Vec<usize> = Vec::new();
@@ -3088,10 +3105,18 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     .filter(|&&net| pads_on[net].len() == 2)
                     .filter_map(|&net| pads_on[net].iter().copied().find(|other| other.0 != p))
                     .collect();
-                match alone[..] {
-                    [(q, j)] => pad_at(q, j, quarter[q], &centre).map(|at| [at[0] - shift[0], at[1] - shift[1]]),
+                // (with a net of its own to a pad at each end, it is for the one that drives, if the schematic
+                // says which that is)
+                let drives =
+                    |&(q, j): &(usize, usize)| matches!(parts[q].pins.get(j), Some(Pin::Output) | Some(Pin::PowerOut));
+                let chosen = match alone[..] {
+                    [one] => Some(one),
+                    [a, b] if drives(&a) != drives(&b) => Some(if drives(&a) { a } else { b }),
                     _ => None,
-                }
+                };
+                chosen
+                    .and_then(|(q, j)| pad_at(q, j, quarter[q], &centre))
+                    .map(|at| [at[0] - shift[0], at[1] - shift[1]])
             } else {
                 None
             };
