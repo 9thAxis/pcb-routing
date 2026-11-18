@@ -3,7 +3,7 @@ answer as lines to read. Read only: nothing here moves a part."""
 
 import fnmatch
 
-from .names import CAPACITOR_PART, DIODE_PART, FACING_PART, INDUCTOR_PART, is_supply
+from .names import CAPACITOR_PART, DIODE_PART, FACING_PART, INDUCTOR_PART, NOISY_PART, is_supply
 from .steps import habits, planes
 
 
@@ -94,8 +94,10 @@ def floorplan(picture, rules, ask):
                   anchor=[round(part.at[k] - mid[reference][k], 4) for k in (0, 1)], through=reference in drilled,
                   value=part.value or "", footprint=(part.footprint or "").split(":")[-1], angle=part.angle)
              for reference, part in sorted(picture.parts.items())]
+    # (a net is sensitive here if the hints say so: a name alone does not make the parts on it be kept from
+    # what disturbs)
     asked = [dict(name=net, supply=rules.intent(net).role == "supply" or is_supply(net) and rules.intent(net).role != "ground",
-                  pair=isinstance(rules.intent(net).pair, str), sensitive=rules.intent(net).role == "sensitive")
+                  pair=isinstance(rules.intent(net).pair, str), sensitive=rules.intent(net).role == "sensitive" and rules.intent(net).source.get("role") != "names")
              for net in nets]
     # (what a track takes across its way: the usual net's width and clearance; and the layers that carry routes)
     signal = [net for net in nets if rules.intent(net).role not in ("supply", "ground")] or nets
@@ -134,6 +136,13 @@ def floorplan(picture, rules, ask):
         tall = height(of)
         near = [what["near"] for pattern, what in (hints.parts if hints else [])
                 if "near" in what and fnmatch.fnmatchcase(part["name"], pattern)]
+        for said in ("noisy", "quiet"):
+            told = [what[said] for pattern, what in (hints.parts if hints else [])
+                    if said in what and fnmatch.fnmatchcase(part["name"], pattern)]
+            if told:
+                part[said] = told[-1]
+        if "noisy" not in part and guesses and NOISY_PART.match(part["name"]):
+            part["noisy"] = True
         mate = [what["mate"] for pattern, what in (hints.parts if hints else [])
                 if "mate" in what and fnmatch.fnmatchcase(part["name"], pattern)]
         # (its body, to be settled: see `bodies`; what it takes of the board, above, is by its pads and more:
@@ -312,6 +321,14 @@ def floorplan_told(found, depth=2, every=False):
                          f"{repeat['spread_mm']:.1f} mm longer than the shortest on the average, {repeat['worst_mm']:.1f} mm at "
                          f"the worst ({repeat['worst']}); the longest such net {repeat['longest_mm']:.1f} mm; "
                          f"{repeat['shared']} nets shared by all of them, {repeat['shared_mm']:.0f} mm in all")
+    if found.get("disturbing", [0])[0]:
+        loud, hushed = found["disturbing"]
+        close = found.get("close", [])
+        lines.append(f"  {loud} parts disturb what is near them (switching regulators with their inductors, relays, "
+                     f"oscillators) and {hushed} are disturbed (on sensitive nets): {len(close)} pairs stand nearer than "
+                     f"15 mm on one board" + (f", the nearest {close[0][0]} and {close[0][1]} at {close[0][2]:.1f} mm" if close else ""))
+        for loud_part, hushed_part, far in close[:None if every else 6]:
+            lines.append(f"    {loud_part} and {hushed_part}: {far:.1f} mm")
     if found.get("sensitive", [0])[0]:
         count, total, worst, name = found["sensitive"]
         lines.append(f"  sensitive nets: {count}, {total:.0f} mm in all, the longest {worst:.1f} mm ({name})")

@@ -117,6 +117,12 @@
   own nets copy against copy (how much longer the longest copy of a net is than the shortest: how well
   the channels match), the longest of them, and the nets shared by all the copies with their length; and
   the sensitive nets of the board with the longest of them.
+  What disturbs is kept from what is disturbed (`disturbing`, `close`): a part disturbs if the hints say so
+  (`parts`, `noisy`), an oscillator by its reference, and a chip that switches an inductor with that
+  inductor and what else is on the node; a part is disturbed if the hints say so (`quiet`) or it has a
+  pad on a net the hints call sensitive. Layings out are weighed by how much nearer than 15 mm the zones
+  of the one are to the zones of the other; what disturbs is placed first, and what is disturbed then
+  keeps 15 mm from it wherever there is room. The plan names each pair that stands nearer.
   The work is the engine's; the bridge reads the board and tells the answer.
 - A board's work as steps (`tools/kicad_plan.py`, read only). The parts by the sheet of the schematic they
   are drawn on, a sheet whose parts stand in separate places as a block for each; the parts not placed yet;

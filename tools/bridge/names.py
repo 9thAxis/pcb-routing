@@ -18,6 +18,7 @@ CRYSTAL_PART = re.compile(r"^(Y|XTAL)\d")  # (not X: that is a connector as ofte
 CAPACITOR_PART = re.compile(r"^C\d")
 INDUCTOR_PART = re.compile(r"^L\d")
 DIODE_PART = re.compile(r"^(D|TVS|ZD)\d")
+NOISY_PART = re.compile(r"^(Y|XTAL|OSC)\d")  # oscillators: what disturbs its neighbours all the time
 # a part that someone plugs into or presses: a connector, a switch (not JP, a jumper)
 FACING_PART = re.compile(r"^(J|P|CN|CON|X|USB|RJ|SW|S|BTN|PB)\d")
 CHIP_PART = re.compile(r"^(U|IC)\d")

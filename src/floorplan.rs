@@ -49,6 +49,14 @@ pub struct Part {
     /// Whether it is a diode: from a connector's net to a ground or a supply it protects, and stands there.
     #[serde(default)]
     pub diode: bool,
+    /// Whether it disturbs what is near it (a relay, an oscillator; a switching regulator is found without
+    /// being told): true or false if that is said, else as found.
+    #[serde(default)]
+    pub noisy: Option<bool>,
+    /// Whether it is disturbed by what is near it (an amplifier's input, a reference); a part on a sensitive
+    /// net is so without being told.
+    #[serde(default)]
+    pub quiet: Option<bool>,
     /// The ground it takes on the board, in mm2.
     pub area: f64,
     /// The net of each of its pads, as an index into [`Board::nets`]; None for a pad on no net.
@@ -315,6 +323,9 @@ pub struct Travel {
     /// roads have of ground where they meet, in mm2.
     #[serde(skip)]
     turns: Vec<(Pt, usize, f64)>,
+    /// How much nearer than QUIET_MM the zones with parts that disturb are to the zones with parts that are
+    /// disturbed, in mm, summed over every such pair of the smallest zones on one board.
+    pub noise: f64,
     /// The pieces more than one that the supplies on the plane layers are in: each wants a way to the rest.
     pub split: usize,
     /// How much longer the parts that stand on the gaps are, side by side, than the gaps they stand on, in mm.
@@ -628,6 +639,11 @@ pub struct Floorplan {
     /// many of them came out laid out alike, the parts in each, the chips), the most numerous first. Those
     /// of one make-up are laid out by the same steps, and so alike.
     pub alike: Vec<(usize, usize, usize, Vec<String>)>,
+    /// How many parts disturb what is near them, and how many are disturbed.
+    pub disturbing: [usize; 2],
+    /// Each part that disturbs with each part that is disturbed and stands nearer it than QUIET_MM, on one
+    /// board: (the one, the other, how far their bodies are apart in mm), the nearest first.
+    pub close: Vec<(String, String, f64)>,
     /// The sensitive nets: (how many, how long in all in mm, the longest in mm, its name).
     pub sensitive: (usize, f64, f64, String),
     /// The sheets that repeat, the largest first: of each make-up one is laid out by itself and every copy
@@ -665,6 +681,10 @@ const VIA_MM: f64 = 10.0;
 const LOCAL_MM: f64 = 5.0;
 /// What a mm between a part and the point it is to stand near counts for, as so many mm of track.
 const NEAR: f64 = 5.0;
+/// What disturbs is to be this far from what is disturbed, in mm; and what a mm less than that between two
+/// zones counts for when layings out are weighed, as so many mm of track.
+const QUIET_MM: f64 = 15.0;
+const NOISE: f64 = 10.0;
 /// How far down each zone of a cut is tried in the other lot.
 const MOVE_LEVELS: usize = 1;
 /// A ground is cut across its shorter side only if that side is this much of the longer.
@@ -1944,6 +1964,26 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let mut apart: Vec<Apart> = Vec::new();
     let power_layers: Vec<String> =
         board.stack.iter().filter(|layer| layer.way == Way::Plane).skip(1).map(|layer| layer.name.clone()).collect();
+    // What disturbs, and what is disturbed. A part disturbs if that is said of it; and without being told, a
+    // chip that switches an inductor (see the loops), with that inductor and what else is on the node. A part
+    // is disturbed if that is said of it, or it has a pad on a sensitive net; but not one that disturbs.
+    let mut aggressor: Vec<bool> = parts.iter().map(|part| part.noisy == Some(true)).collect();
+    for node in (0..all_nets.len()).filter(|&net| is_signal(net) && reach[net].len() <= SWITCHED) {
+        let on: Vec<usize> = reach[node].iter().copied().collect();
+        let chips = on.iter().filter(|&&q| is_chip(q)).count();
+        let coils = on.iter().filter(|&&q| parts[q].inductor).count();
+        if chips == 1 && coils == 1 {
+            for &q in on.iter().filter(|&&q| parts[q].noisy != Some(false) && !parts[q].capacitor) {
+                aggressor[q] = true;
+            }
+        }
+    }
+    let victim: Vec<bool> = (0..parts.len())
+        .map(|p| {
+            let on_sensitive = parts[p].pads.iter().flatten().any(|&net| all_nets[net].sensitive);
+            !aggressor[p] && parts[p].quiet != Some(false) && (parts[p].quiet == Some(true) || on_sensitive)
+        })
+        .collect();
     let mut within = |lot: &[usize]| -> Vec<Work> {
         let mine: BTreeSet<usize> = lot.iter().copied().collect();
         let mut sheets: Vec<String> = mine.iter().map(|&p| sheet(p)).collect::<BTreeSet<_>>().into_iter().collect();
@@ -2425,6 +2465,19 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         let mut travel = travelled(&mut roads, &leaves, &nets);
         let rects: Vec<[f64; 4]> = leaves.iter().map(|leaf| leaf.1).collect();
         travel.split = pieces(&rects).iter().map(|&n| n.saturating_sub(1)).sum();
+        // (what disturbs is kept from what is disturbed: by the grounds of their zones, on one board)
+        for (a, &(domain, loud, own)) in leaves.iter().enumerate() {
+            if !own.iter().any(|&p| aggressor[p]) {
+                continue;
+            }
+            for (v, &(other, hushed, theirs)) in leaves.iter().enumerate() {
+                if a != v && to[domain] == to[other] && theirs.iter().any(|&p| victim[p]) {
+                    let apart = [0, 1].map(|k| (loud[k].max(hushed[k]) - loud[k + 2].min(hushed[k + 2])).max(0.0));
+                    travel.noise += (QUIET_MM - dist([0.0, 0.0], apart)).max(0.0);
+                }
+            }
+        }
+        travel.noise = travel.noise.round();
         // (how far what goes from domain to domain reaches, and how far what is to be near a point is from it:
         // by the middles of the smallest zones, as the boards stack)
         let mut spot_of: BTreeMap<usize, Pt> = BTreeMap::new();
@@ -2567,6 +2620,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             + CRAMPED_MM * travel.cramped
             + STRANDED_MM * travel.apart as f64
             + OVER_MM * travel.split as f64
+            + NOISE * travel.noise
             + VIA_MM * travel.vias as f64
             + OVER_MM * over as f64
             + STRANDED_MM * travel.stranded as f64
@@ -2941,7 +2995,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     // hardest to find room for. No track runs under a part with holes: it stands off the gaps and the roads
     // that part much of the board (a lesser road, a track or two, goes round it); the others may stand over
     // a road, whose tracks run on the layers beneath.
-    let goes_first = |p: usize| parts[p].through || body(p)[0] * body(p)[1] >= LARGE;
+    let goes_first = |p: usize| parts[p].through || aggressor[p] || body(p)[0] * body(p)[1] >= LARGE;
     // A chip (or a connector) and the parts that stand by its pads are a block: laid out once, by themselves
     // on empty ground (the chip in the middle, each part beside the pad it is for, in the order they are
     // taken), and then placed as one body. Where each is taken after its neighbours, the ground by a chip's
@@ -3410,6 +3464,12 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         laid_blocks.iter().flat_map(|(&head, block)| block.at.iter().map(move |&(p, _, _)| (p, head))).collect();
     let holed = |p: usize| laid_blocks.get(&p).map_or(parts[p].through, |block| block.through);
     let mut block_quarter: BTreeMap<usize, u8> = BTreeMap::new();
+    // What disturbs is placed before all else, and what is disturbed then keeps QUIET_MM from it wherever
+    // there is room for it so: the ground that near each part that disturbs, as it comes to stand.
+    let mut halos: Vec<[f64; 4]> = Vec::new();
+    let loud =
+        |p: usize| laid_blocks.get(&p).map_or(aggressor[p], |block| block.at.iter().any(|placed| aggressor[placed.0]));
+    let round_it = |r: [f64; 4]| [r[0] - QUIET_MM, r[1] - QUIET_MM, r[2] + QUIET_MM, r[3] + QUIET_MM];
     // (where a part that is not yet settled is taken to come: the middle of the ground that came to it)
     let wanted = |q: usize| on_gap.get(&q).copied().or_else(|| grounds.get(&q).map(|&r| middle(r)));
     for work in top.iter() {
@@ -3440,11 +3500,16 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 })
             };
             let mut lot = lot;
-            lot.sort_by(|&a, &b| takes(b).total_cmp(&takes(a)).then(a.cmp(&b)));
+            lot.sort_by(|&a, &b| loud(b).cmp(&loud(a)).then(takes(b).total_cmp(&takes(a))).then(a.cmp(&b)));
             for p in lot {
                 let want = middle(grounds[&p]);
                 let Some(first) = laid_blocks.get(&p) else {
-                    let at = settled(work.rect, &[(body(p), want)], &shut)[0];
+                    let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
+                    let away = if victim[p] { settled(work.rect, &[(body(p), want)], &kept)[0] } else { None };
+                    let at = away.or_else(|| settled(work.rect, &[(body(p), want)], &shut)[0]);
+                    if aggressor[p] {
+                        halos.extend(at.map(|at| round_it(taken(p, at))));
+                    }
                     shut.extend(at.map(|at| taken(p, at)));
                     found.extend(at.map(|at| taken(p, at)));
                     stood.insert(p, at);
@@ -3534,7 +3599,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 for (n, option) in options.iter().enumerate() {
                     let mut placed_all = true;
                     for &(_, block) in option {
-                        let mut chosen = best_for(block, n == last || board.rows == Rows::Always, &shut);
+                        let anywhere = n == last || board.rows == Rows::Always;
+                        let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
+                        let hushed = block.at.iter().any(|placed| victim[placed.0]);
+                        let away = if hushed { best_for(block, false, &kept) } else { None };
+                        let mut chosen = away.or_else(|| best_for(block, anywhere, &shut));
                         // (copies side by side are worth it if their pads are not much further from what
                         // they join than with each copy where it would stand by itself)
                         if let (true, Some((together, _, _))) = (n < last && board.rows == Rows::Cheap, chosen) {
@@ -3564,6 +3633,9 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                             block_quarter.insert(m, quarters);
                             shut.push(taken(m, (to, quarters % 2 == 1)));
                             found.push(taken(m, (to, quarters % 2 == 1)));
+                            if aggressor[m] {
+                                halos.push(round_it(taken(m, (to, quarters % 2 == 1))));
+                            }
                         }
                     }
                     if placed_all || n == last {
@@ -3587,6 +3659,17 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             .collect();
         let mut shut: Vec<[f64; 4]> = board.keepouts.clone();
         shut.extend(settled_first.iter().copied());
+        // (what is disturbed first, off the ground near what disturbs; what of it finds no room so, with the rest)
+        let hushed: Vec<usize> = mine.iter().copied().filter(|&p| victim[p]).collect();
+        let kept: Vec<[f64; 4]> = shut.iter().chain(&halos).copied().collect();
+        let bodies: Vec<([f64; 2], Pt)> = hushed.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
+        for (&p, at) in hushed.iter().zip(settled(*rect, &bodies, &kept)) {
+            if let Some(at) = at {
+                stood.insert(p, Some(at));
+                shut.push(taken(p, at));
+            }
+        }
+        let mine: Vec<usize> = mine.into_iter().filter(|p| !stood.get(p).is_some_and(|at| at.is_some())).collect();
         let bodies: Vec<([f64; 2], Pt)> = mine.iter().map(|&p| (body(p), middle(grounds[&p]))).collect();
         stood.extend(mine.iter().copied().zip(settled(*rect, &bodies, &shut)));
     }
@@ -3974,6 +4057,10 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                     shut.push(taken(q, (at, quarter[q] % 2 == 1)));
                 }
             }
+            // (what is disturbed is not moved onto the ground near what disturbs)
+            if victim[p] {
+                shut.extend(halos.iter().copied());
+            }
             let [w, h] = body(p);
             let lying = if quarter[p] % 2 == 1 { [h, w] } else { [w, h] };
             let stack = |at: Pt| [at[0] + shift[0], at[1] + shift[1]];
@@ -4093,6 +4180,28 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
             }
         })
         .collect();
+    // What disturbs and stands near what is disturbed, part by part: by how far their bodies are apart, as the
+    // boards stack (on one board: another board is another matter).
+    let stands_at = |p: usize| -> Option<[f64; 4]> {
+        let at = centre[p].filter(|_| !stays(&parts[p]))?;
+        let [w, h] = body(p);
+        let (w, h) = if quarter[p] % 2 == 1 { (h, w) } else { (w, h) };
+        Some([at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0])
+    };
+    let mut close: Vec<(String, String, f64)> = Vec::new();
+    for a in (0..parts.len()).filter(|&a| aggressor[a]) {
+        let Some(loud) = stands_at(a) else { continue };
+        for v in (0..parts.len()).filter(|&v| victim[v] && to[domain_of_part[v]] == to[domain_of_part[a]]) {
+            let Some(hushed) = stands_at(v) else { continue };
+            let apart = [0, 1].map(|k| (loud[k].max(hushed[k]) - loud[k + 2].min(hushed[k + 2])).max(0.0));
+            let far = dist([0.0, 0.0], apart);
+            if far < QUIET_MM {
+                close.push((name(a), name(v), round1(far)));
+            }
+        }
+    }
+    close.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+    let disturbing = [aggressor.iter().filter(|&&is| is).count(), victim.iter().filter(|&&is| is).count()];
     // (the sensitive nets: how many, how long in all, and the longest)
     let mut sensitive: (usize, f64, f64, String) = (0, 0.0, 0.0, String::new());
     for net in (0..all_nets.len()).filter(|&net| all_nets[net].sensitive && is_signal(net)) {
@@ -4477,6 +4586,8 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
         bridges,
         blocks,
         alike,
+        disturbing,
+        close,
         sensitive,
         repeats,
         served,
@@ -4713,6 +4824,18 @@ mod tests {
         let place = |name: &str| found.places.iter().find(|place| place.part == name).unwrap();
         assert!(dist(place("L1").at, place("U2").at) <= 6.5, "{:?} {:?}", place("L1"), place("U2"));
         assert!(found_loop.mm2 <= 150.0 && found_loop.bodies > 0.0, "{found_loop:?}");
+        // the regulator and its inductor disturb; what is on a sensitive net is disturbed, and where the board
+        // has room for it none of that stands within QUIET_MM of them
+        assert_eq!(found.disturbing, [2, 0]);
+        let mut quiet = board.clone();
+        quiet.nets.iter_mut().find(|net| net.name == "FILT").unwrap().sensitive = true;
+        let found = floorplan(&quiet).unwrap();
+        assert_eq!(found.disturbing, [2, 3]);
+        assert!(found.close.is_empty(), "{:?}", found.close);
+        // (a part said to disturb does; one said not to be disturbed is not)
+        quiet.parts.iter_mut().find(|part| part.name == "R2").unwrap().noisy = Some(true);
+        quiet.parts.iter_mut().find(|part| part.name == "R1").unwrap().quiet = Some(false);
+        assert_eq!(floorplan(&quiet).unwrap().disturbing, [3, 2]);
         // a divider on a small net of the chip is told with it, and stands by the chip
         let mut board = board.clone();
         board.nets.push(Net { name: "FB".to_string(), supply: false, pair: false, sensitive: false });
@@ -4792,6 +4915,8 @@ mod tests {
             capacitor: name.starts_with('C'),
             inductor: false,
             diode: false,
+            noisy: None,
+            quiet: None,
             area: size[0] * size[1],
             pads: pads.iter().map(|n| net(n)).collect(),
             height: None,
@@ -4940,6 +5065,8 @@ mod tests {
             capacitor: name.starts_with('C'),
             inductor: name.starts_with('L'),
             diode: name.starts_with('D'),
+            noisy: None,
+            quiet: None,
             area: 10.0,
             pads: on.iter().map(|n| net(n)).collect(),
             height: None,
@@ -5099,6 +5226,8 @@ mod tests {
             capacitor: false,
             inductor: false,
             diode: false,
+            noisy: None,
+            quiet: None,
             area: 100.0,
             pads: pads[n].clone(),
             height: None,

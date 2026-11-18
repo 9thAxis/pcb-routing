@@ -85,7 +85,9 @@ def read_hints(path):
     point = lambda value: (isinstance(value, list) and len(value) == 2
                            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value))
     for pattern, said in data.get("parts", {}).items():
-        if (not isinstance(said, dict) or set(said) - {"turn", "near", "mate"} or not isinstance(said.get("turn", True), bool)
+        if (not isinstance(said, dict) or set(said) - {"turn", "near", "mate", "noisy", "quiet"}
+                or not isinstance(said.get("turn", True), bool)
+                or not isinstance(said.get("noisy", True), bool) or not isinstance(said.get("quiet", True), bool)
                 or not ("near" not in said or point(said["near"])) or not isinstance(said.get("mate", ""), str)):
             raise wrong(f"parts[{pattern}]", "`turn`: true or false; `near`: a point [x, y]; `mate`: the reference "
                                              "of the part it mates with; nothing else")
