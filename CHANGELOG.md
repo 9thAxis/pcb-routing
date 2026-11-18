@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-18)
 
 - Where the parts of a board belong (`pcb_routing::floorplan`, the `floorplan` question, and
   `tools/kicad_floorplan.py`; read only). First the power: each ground is a domain of the parts that stand
