@@ -1,6 +1,6 @@
 //! What is known of a board before anything is laid out, and the small things every stage asks of it.
 
-use super::constants::{BESIDE_PIN, LARGE, SWITCHED};
+use super::constants::SWITCHED;
 use super::ground::{taken_by, Work};
 use super::power::{powered, Powered};
 use super::settle::{area, overlap, quartered};
@@ -90,6 +90,44 @@ impl<'a> Known<'a> {
                     return Err(invalid(format!("parts[{p}].{what}"), format!("{count} for {} pads", part.pads.len())));
                 }
             }
+        }
+        // (what is set of the making of the plan makes sense: lengths that are lengths, shares that are shares)
+        let tune = &board.tune;
+        let lengths = [
+            ("quiet_mm", tune.quiet_mm, 0.0),
+            ("between_copies_mm", tune.between_copies_mm, 0.0),
+            ("beside_mm", tune.beside_mm, 0.0),
+            ("beside_pin_mm", tune.beside_pin_mm, f64::MIN_POSITIVE),
+            ("block_reach_mm", tune.block_reach_mm, f64::MIN_POSITIVE),
+            ("large_mm2", tune.large_mm2, f64::MIN_POSITIVE),
+            ("refine_mm", tune.refine_mm, f64::MIN_POSITIVE),
+            ("row_worth", tune.row_worth, f64::MIN_POSITIVE),
+        ];
+        for (name, value, least) in lengths {
+            if !(value.is_finite() && value >= least) {
+                let wanted = if least > 0.0 { "more than 0" } else { "0 or more" };
+                return Err(invalid(format!("tune.{name}"), format!("{value}: {wanted}")));
+            }
+        }
+        let shares = [
+            ("packed", tune.packed, 1.0),
+            ("board_full", tune.board_full, 1.0),
+            ("board_most", tune.board_most, 1.0),
+            ("road_most", tune.road_most, 0.5),
+        ];
+        for (name, value, most) in shares {
+            if !(value > 0.0 && value <= most) {
+                return Err(invalid(format!("tune.{name}"), format!("{value}: more than 0 and no more than {most}")));
+            }
+        }
+        if tune.board_full > tune.board_most {
+            return Err(invalid("tune.board_full", format!("{}: no more than board_most", tune.board_full)));
+        }
+        if tune.sheeted.is_empty()
+            || tune.sheeted.len() > 8
+            || tune.sheeted.iter().any(|v| !(v.is_finite() && *v >= 0.0))
+        {
+            return Err(invalid("tune.sheeted", "one to eight weights of 0 or more"));
         }
         // (parts and nets are told by their names, and found by them: no two of one name)
         let mut named: BTreeMap<&str, usize> = BTreeMap::new();
@@ -340,7 +378,7 @@ impl Known<'_> {
 
     /// Whether a part is settled before the others: one with holes, one that disturbs, a large one.
     pub(super) fn goes_first(&self, p: usize) -> bool {
-        self.parts[p].through || self.aggressor[p] || self.body(p)[0] * self.body(p)[1] >= LARGE
+        self.parts[p].through || self.aggressor[p] || self.body(p)[0] * self.body(p)[1] >= self.board.tune.large_mm2
     }
 
     /// The sides of the board a part takes ground on: 1 the front, 2 the back, 3 both, for a part with holes.
@@ -386,7 +424,7 @@ impl Known<'_> {
     /// How far from its pad a part may stand and be by it: within BESIDE_PIN; a large one within its own
     /// length and a millimetre (its pad cannot be nearer than its body allows).
     pub(super) fn by_pad(&self, c: usize) -> f64 {
-        BESIDE_PIN.max(self.body(c)[0].max(self.body(c)[1]) + 1.0)
+        self.board.tune.beside_pin_mm.max(self.body(c)[0].max(self.body(c)[1]) + 1.0)
     }
 
     /// Whether a part is a capacitor with a pad on a supply.

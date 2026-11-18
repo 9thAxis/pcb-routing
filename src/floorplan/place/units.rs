@@ -2,7 +2,7 @@
 
 use super::blocks::{in_blocks, Block};
 use super::Site;
-use crate::floorplan::constants::{AS_NEAR, BETWEEN_COPIES, COLOURINGS, REPEAT_LEAST, UNIT_REACH};
+use crate::floorplan::constants::{AS_NEAR, COLOURINGS, REPEAT_LEAST, UNIT_REACH};
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::{median, quartered, settled_shape};
 use crate::geom::dist;
@@ -297,8 +297,8 @@ pub(super) fn units(
                 let mut all = Block { at: Vec::new(), drawn: Vec::new(), through: false, pins: Vec::new() };
                 for (n, (_, one)) in singles.iter().enumerate() {
                     let step = [
-                        ((n % across) as f64 - (across - 1) as f64 / 2.0) * (size[0] + BETWEEN_COPIES),
-                        ((n / across) as f64 - (down - 1) as f64 / 2.0) * (size[1] + BETWEEN_COPIES),
+                        ((n % across) as f64 - (across - 1) as f64 / 2.0) * (size[0] + cx.board.tune.between_copies_mm),
+                        ((n / across) as f64 - (down - 1) as f64 / 2.0) * (size[1] + cx.board.tune.between_copies_mm),
                     ];
                     let moved =
                         |placed: &(usize, Pt, u8)| (placed.0, [placed.1[0] + step[0], placed.1[1] + step[1]], placed.2);

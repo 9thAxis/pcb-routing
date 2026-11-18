@@ -2,8 +2,8 @@
 
 use super::boards::Boards;
 use super::constants::{
-    BESIDE, CORNER, CRAMPED_MM, CROSS_LEVELS, MOVE_LEVELS, NEAR, NOISE, OVER_MM, QUIET_MM, STRANDED_MM, TALL_MM,
-    TURNINGS, VIA_MM, WIDENINGS,
+    CORNER, CRAMPED_MM, CROSS_LEVELS, MOVE_LEVELS, NEAR, NOISE, OVER_MM, STRANDED_MM, TALL_MM, TURNINGS, VIA_MM,
+    WIDENINGS,
 };
 use super::ground::{arrange, Ground, Work};
 use super::known::Known;
@@ -138,7 +138,7 @@ impl Laying<'_> {
             for (v, &(other, hushed, theirs)) in leaves.iter().enumerate() {
                 if a != v && to[domain] == to[other] && theirs.iter().any(|&p| victim[p]) {
                     let apart = [0, 1].map(|k| (loud[k].max(hushed[k]) - loud[k + 2].min(hushed[k + 2])).max(0.0));
-                    travel.noise += (QUIET_MM - dist([0.0, 0.0], apart)).max(0.0);
+                    travel.noise += (cx.board.tune.quiet_mm - dist([0.0, 0.0], apart)).max(0.0);
                 }
             }
         }
@@ -197,7 +197,11 @@ impl Laying<'_> {
                     Some((o, (strip, up))) => {
                         let key = strip.map(|v| (v * 1000.0).round() as i64);
                         let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
-                        entry.2.push((bridges.len(), want[usize::from(up)], parts[p].area.sqrt() + BESIDE));
+                        entry.2.push((
+                            bridges.len(),
+                            want[usize::from(up)],
+                            parts[p].area.sqrt() + board.tune.beside_mm,
+                        ));
                         (Across::Gap, middle(strip), 0.0, o)
                     }
                     None => {

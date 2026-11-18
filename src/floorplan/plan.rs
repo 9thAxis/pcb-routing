@@ -1,7 +1,6 @@
 //! The floorplan of a board, from its power down to a place for every part.
 
 use super::boards::{on_boards, regions};
-use super::constants::SHEETED;
 use super::known::{standing, Known};
 use super::layout::laid_out;
 use super::place::{placed, Placed};
@@ -22,10 +21,11 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
     let (stays, held) = standing(board);
     let board = held.as_ref().unwrap_or(board);
     let cx = &Known::of(board, stays)?;
-    let plans: Vec<Floorplan> = SHEETED.par_iter().map(|&sheeted| laid(cx, sheeted)).collect();
+    let sheeted = &board.tune.sheeted;
+    let plans: Vec<Floorplan> = sheeted.par_iter().map(|&sheeted| laid(cx, sheeted)).collect();
     let judged = |plan: &Floorplan| (plan.places.iter().filter(|place| !place.fits).count(), plan.nets_mm);
     let tried: Vec<(f64, usize, f64)> =
-        SHEETED.iter().zip(&plans).map(|(&sheeted, plan)| (sheeted, judged(plan).0, judged(plan).1)).collect();
+        sheeted.iter().zip(&plans).map(|(&sheeted, plan)| (sheeted, judged(plan).0, judged(plan).1)).collect();
     let mut best = plans
         .into_iter()
         .reduce(|best, plan| {
@@ -36,7 +36,7 @@ pub fn floorplan(board: &Board) -> Result<Floorplan, Error> {
                 best
             }
         })
-        .expect("SHEETED is not empty");
+        .expect("a board has a way to be laid out: see Known::of");
     best.tried = tried;
     Ok(best)
 }

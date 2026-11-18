@@ -170,7 +170,7 @@ fn a_part_is_turned_so_its_pads_face_what_they_join_and_a_bypass_capacitor_stand
         let from = quartered((cap.turn / 90) as u8, offset);
         dist([cap.at[0] + from[0], cap.at[1] + from[1]], pad)
     };
-    assert!(end([-0.5, 0.0]) <= BESIDE_PIN && end([-0.5, 0.0]) < end([0.5, 0.0]), "{cap:?} {pad:?}");
+    assert!(end([-0.5, 0.0]) <= Tune::default().beside_pin_mm && end([-0.5, 0.0]) < end([0.5, 0.0]), "{cap:?} {pad:?}");
     assert!(found.pads_mm <= found.pads_first_mm);
 }
 
@@ -336,6 +336,7 @@ fn a_chip_and_the_parts_by_its_pads_are_a_block_and_two_of_one_make_up_are_laid_
         gap: 4.0,
         via: 1.0,
         rows: Rows::Cheap,
+        tune: Tune::default(),
         nets: names.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false, sensitive: false }).collect(),
         parts: vec![
             part("U1", "amp", [10.0, 10.0], [5.0, 4.0], &["VCC", "GND", "A1", "B1"], &chip, 0),
@@ -509,6 +510,7 @@ fn two_grounds() -> Board {
         gap: 4.0,
         via: 1.0,
         rows: Rows::Cheap,
+        tune: Tune::default(),
         nets: nets.iter().map(|n| Net { name: n.to_string(), supply: false, pair: false, sensitive: false }).collect(),
         parts: vec![
             part("U1", 2.0, &["A_3V3", "A_GND", "SIG", "FILT"]),
@@ -669,6 +671,7 @@ fn square() -> Board {
         gap: 4.0,
         via: 1.0,
         rows: Rows::Cheap,
+        tune: Tune::default(),
         nets,
         parts: vec![part(0, 10.0, 10.0), part(1, 30.0, 10.0), part(2, 30.0, 30.0), part(3, 10.0, 30.0)],
     }
@@ -826,7 +829,7 @@ fn on_a_board_with_room_to_spare_the_parts_of_a_zone_are_kept_together() {
         let over = (high(2) - low(0)) * (high(3) - low(1));
         let all = (zone.rect[2] - zone.rect[0]) * (zone.rect[3] - zone.rect[1]);
         assert!(
-            over <= 1.5 * zone.area / PACKED && over < all / 2.0,
+            over <= 1.5 * zone.area / Tune::default().packed && over < all / 2.0,
             "{}: {over} of {all}, parts {}",
             zone.name,
             zone.area
@@ -924,7 +927,7 @@ fn the_plan_given_is_the_best_of_the_ways_the_board_was_laid_out() {
     // one way for each weight of the sheets; the plan is the one with the fewest parts without room, and of
     // those the shortest nets
     let found = floorplan(&two_grounds()).unwrap();
-    assert_eq!(found.tried.iter().map(|way| way.0).collect::<Vec<f64>>(), SHEETED);
+    assert_eq!(found.tried.iter().map(|way| way.0).collect::<Vec<f64>>(), Tune::default().sheeted);
     let left = found.places.iter().filter(|place| !place.fits).count();
     assert!(found.tried.contains(&(
         found.tried.iter().find(|way| way.2 == found.nets_mm).unwrap().0,
@@ -935,4 +938,26 @@ fn the_plan_given_is_the_best_of_the_ways_the_board_was_laid_out() {
         assert!((left, found.nets_mm) <= (without, nets), "{:?}", found.tried);
     }
     assert!(found.nets_mm > 0.0);
+}
+
+#[test]
+fn what_is_set_of_the_making_of_a_plan_is_checked_and_used() {
+    // a share that is no share, a list of no weights: refused, and told which
+    let mut board = two_grounds();
+    board.tune.packed = 1.5;
+    assert!(floorplan(&board).unwrap_err().to_string().contains("tune.packed"));
+    board.tune = Tune { sheeted: Vec::new(), ..Tune::default() };
+    assert!(floorplan(&board).unwrap_err().to_string().contains("tune.sheeted"));
+    board.tune = Tune { board_full: 0.9, ..Tune::default() };
+    assert!(floorplan(&board).unwrap_err().to_string().contains("tune.board_full"));
+    // one weight: the board is laid out once, with it
+    board.tune = Tune { sheeted: vec![3.0], ..Tune::default() };
+    assert_eq!(floorplan(&board).unwrap().tried.iter().map(|way| way.0).collect::<Vec<f64>>(), [3.0]);
+    // every body counted large: each is settled by itself, and the plan still has a place for every part
+    board.tune = Tune { large_mm2: 1.0, ..Tune::default() };
+    assert!(floorplan(&board).unwrap().places.iter().all(|place| place.fits));
+    // and what is left out of a question has its default
+    let told: Tune = serde_json::from_str(r#"{"quiet_mm": 20}"#).unwrap();
+    assert_eq!(told, Tune { quiet_mm: 20.0, ..Tune::default() });
+    assert!(serde_json::from_str::<Tune>(r#"{"quiet": 20}"#).is_err());
 }

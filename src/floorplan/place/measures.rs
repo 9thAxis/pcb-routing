@@ -5,7 +5,7 @@ use super::facing::Facing;
 use super::pads::ByPads;
 use super::units::Copies;
 use super::{Site, Standing};
-use crate::floorplan::constants::{BACK, BESIDE_PIN, CHAIN_MOST, LOOP_MOST, QUIET_MM};
+use crate::floorplan::constants::{BACK, CHAIN_MOST, LOOP_MOST};
 use crate::floorplan::ground::Work;
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::{round1, round2};
@@ -112,7 +112,7 @@ pub(super) fn close(site: &Site, centre: &[Option<Pt>], quarter: &[u8]) -> Vec<(
             let Some(hushed) = stands_at(v) else { continue };
             let apart = [0, 1].map(|k| (loud[k].max(hushed[k]) - loud[k + 2].min(hushed[k + 2])).max(0.0));
             let far = dist([0.0, 0.0], apart);
-            if far < QUIET_MM {
+            if far < cx.board.tune.quiet_mm {
                 close.push((cx.name(a), cx.name(v), round1(far)));
             }
         }
@@ -264,8 +264,8 @@ pub(super) fn chains(cx: &Known, facing: &Facing, centre: &[Option<Pt>], quarter
             along += dist(here, b);
             let direct = dist(a, b);
             // (each part may stand as far from the pad on either side of it as a part of its size stands by a pad)
-            let room: f64 =
-                through.iter().map(|&m| 2.0 * cx.by_pad(m)).sum::<f64>() - (through.len() - 1) as f64 * BESIDE_PIN;
+            let room: f64 = through.iter().map(|&m| 2.0 * cx.by_pad(m)).sum::<f64>()
+                - (through.len() - 1) as f64 * cx.board.tune.beside_pin_mm;
             if along > BACK * direct + room {
                 let round = |v: f64| (v * 10.0).round() / 10.0;
                 back.push((

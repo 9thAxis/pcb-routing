@@ -209,6 +209,7 @@ def floorplan(picture, rules, ask, fixed=()):
                     shifts=shifts if len(boards) > 1 else [],
                     pitch=round(takes[len(takes) // 2], 4) if takes else 0.4, layers=max(len(layers), 1),
                     rows=(hints.rows if hints else None) or "cheap",
+                    tune=dict(hints.tune) if hints else {},
                     via=round(sorted(rules.via(net)[0] + rules.clearance(net) for net in signal)[len(signal) // 2], 4)))
     if not isinstance(found, dict) or "zones" not in found:
         return found

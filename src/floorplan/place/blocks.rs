@@ -2,7 +2,7 @@
 
 use super::beside::By;
 use super::Site;
-use crate::floorplan::constants::{BLOCK_REACH, SETTLE};
+use crate::floorplan::constants::SETTLE;
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::{quartered, settled};
 use crate::geom::dist;
@@ -28,7 +28,7 @@ fn lay_block(cx: &Known, head: usize, list: &[By]) -> Block {
     // (where each part is from the chip, and how many quarters it is turned from how it is drawn)
     let mut pos: BTreeMap<usize, (Pt, u8)> = [(head, ([0.0, 0.0], 0u8))].into_iter().collect();
     let [hw, hh] = cx.body(head);
-    let reach = hw.max(hh) / 2.0 + BLOCK_REACH;
+    let reach = hw.max(hh) / 2.0 + cx.board.tune.block_reach_mm;
     let ground = [-reach, -reach, reach, reach];
     // (what lies already, with the sides of the board it takes ground on)
     let mut shut: Vec<([f64; 4], u8)> = vec![(cx.drawn_rect(head, [0.0, 0.0], 0), cx.side_of(head))];
@@ -87,7 +87,7 @@ fn lay_block(cx: &Known, head: usize, list: &[By]) -> Block {
         let in_its_way: Vec<[f64; 4]> =
             shut.iter().filter(|lies| lies.1 & cx.side_of(c) != 0).map(|lies| lies.0).collect();
         let Some((at, turn)) = settled(ground, &[(lying, want)], &in_its_way)[0] else { continue };
-        if dist(at, pad) > BLOCK_REACH {
+        if dist(at, pad) > cx.board.tune.block_reach_mm {
             continue;
         }
         // (of the two ways it may lie there, the one with its own pad on the net toward the pad)

@@ -63,7 +63,7 @@ pub enum Ask {
         pads: Vec<TiePad>,
     },
     /// [`floorplan`](crate::floorplan::floorplan): answered with the floorplan.
-    Floorplan(crate::floorplan::Board),
+    Floorplan(Box<crate::floorplan::Board>),
     /// [`ties`], for several tracks at once: answered with true or false for each.
     Ties {
         /// The pieces of zone the tracks name.

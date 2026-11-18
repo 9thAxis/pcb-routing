@@ -175,6 +175,71 @@ pub struct Board {
     /// Whether the copies of a sheet that repeats stand side by side as one body.
     #[serde(default)]
     pub rows: Rows,
+    /// What of the making of the plan may be set: each with its default.
+    #[serde(default)]
+    pub tune: Tune,
+}
+
+/// What of the making of a plan a board may set. Lengths in mm, shares as part of one; what is left out has
+/// its default. The defaults were chosen by what the plans of 118 boards come to against the placing of their
+/// designers (see docs/floorplan-tuning.md): none of them is a rule of the board, each is a habit of placing.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tune {
+    /// What disturbs is to be this far from what is disturbed. 15.
+    pub quiet_mm: f64,
+    /// A capacitor is by the pad it is for if its own pad on that supply is no further from it than this
+    /// (a large one: its own length and a millimetre). 3.
+    pub beside_pin_mm: f64,
+    /// How far round a chip its block may reach; and how far from its pad a part of the block may stand. 8.
+    pub block_reach_mm: f64,
+    /// A body of this many mm2 or more is settled before the others, over the whole ground of its domain. 64.
+    pub large_mm2: f64,
+    /// How much of the ground its parts are laid out on the parts of one of the smallest zones fill, on a
+    /// board with room to spare: they are kept together, and not spread over all the zone has. 0.5.
+    pub packed: f64,
+    /// The most of a board's room that the parts of its domains may take where there are several boards:
+    /// the rest is for roads and for routing. 0.6.
+    pub board_full: f64,
+    /// And the most they may take where no parting of the domains leaves every board under `board_full`. 0.85.
+    pub board_most: f64,
+    /// The most of a piece of the board that the road across it takes. 0.2.
+    pub road_most: f64,
+    /// What is left between two copies of a sheet that stand side by side. 1.
+    pub between_copies_mm: f64,
+    /// What is left between two parts side by side on a gap. 1.
+    pub beside_mm: f64,
+    /// Copies stand side by side (`rows`: cheap) if their pads are then no more than this many times as far
+    /// from what they join as with each copy by itself. 1.25.
+    pub row_worth: f64,
+    /// How far from where a small part wants to be room is looked for when the small parts are gone over
+    /// (and twice and four times as far, if there is none). 8.
+    pub refine_mm: f64,
+    /// What ties the groups drawn on one sheet to each other when zones are gathered, as so many nets for
+    /// each: the board is laid out with each of these in turn, and the plan that comes out best is kept. How
+    /// much the drawing says of what belongs together differs from board to board, and a plan is sensitive
+    /// to it. 0, 2 and 4; one value lays the board out once.
+    pub sheeted: Vec<f64>,
+}
+
+impl Default for Tune {
+    fn default() -> Self {
+        Tune {
+            quiet_mm: 15.0,
+            beside_pin_mm: 3.0,
+            block_reach_mm: 8.0,
+            large_mm2: 64.0,
+            packed: 0.5,
+            board_full: 0.6,
+            board_most: 0.85,
+            road_most: 0.2,
+            between_copies_mm: 1.0,
+            beside_mm: 1.0,
+            row_worth: 1.25,
+            refine_mm: 8.0,
+            sheeted: vec![0.0, 2.0, 4.0],
+        }
+    }
 }
 
 /// Whether the copies of a sheet that repeats stand side by side.

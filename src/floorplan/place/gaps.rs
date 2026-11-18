@@ -2,7 +2,6 @@
 
 use super::{domain_named, Site, Standing};
 use crate::floorplan::boards::Boards;
-use crate::floorplan::constants::BESIDE;
 use crate::floorplan::ground::Work;
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::{median, middle, off_rect, quartered, settled, spread, strip_between};
@@ -67,7 +66,7 @@ pub(super) fn on_gaps(cx: &Known, top: &[Work], on: &Boards, bridges: &mut [Brid
                 let along = usize::from(up);
                 let key = strip.map(|v| (v * 1000.0).round() as i64);
                 let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
-                entry.2.push((b, p, here[along], cx.lying(p, quarters)[along] + BESIDE));
+                entry.2.push((b, p, here[along], cx.lying(p, quarters)[along] + cx.board.tune.beside_mm));
             }
         }
         for (up, strip, on_it) in strips.into_values() {
@@ -163,7 +162,7 @@ pub(super) fn slid(
         let key = strip.map(|v| (v * 1000.0).round() as i64);
         let entry = strips.entry(key).or_insert((up, strip, Vec::new()));
         let quarters = gap_quarter.get(&p).copied().unwrap_or(0);
-        entry.2.push((b, p, want[usize::from(up)], cx.lying(p, quarters)[usize::from(up)] + BESIDE));
+        entry.2.push((b, p, want[usize::from(up)], cx.lying(p, quarters)[usize::from(up)] + cx.board.tune.beside_mm));
     }
     for (up, strip, on_it) in strips.into_values() {
         let along = usize::from(up);

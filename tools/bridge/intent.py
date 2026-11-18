@@ -21,6 +21,12 @@ MOST = dict(width=20.0, clearance=20.0, gap=20.0, amps=30.0, volts=5000.0)
 NOT_ACTED_ON = ("ohms", "match")  # taken down and said back, but nothing in the router follows them yet
 
 
+# What of the making of a floorplan may be set in the hints (`tune`): see docs/floorplan-tuning.md, and Tune in
+# src/floorplan/types.rs, which checks the values.
+TUNE = ("quiet_mm", "beside_pin_mm", "block_reach_mm", "large_mm2", "packed", "board_full", "board_most", "road_most",
+        "between_copies_mm", "beside_mm", "row_worth", "refine_mm", "sheeted")
+
+
 @dataclass
 class Intent:
     """What is asked of a net beyond its class, and where each thing was taken from."""
@@ -52,6 +58,7 @@ class Hints:
     heights: dict = field(default_factory=dict)  # the beginning of a footprint's name -> how high it stands, mm
     keepouts: list = field(default_factory=list)  # ground where no part may stand: [[x0, y0, x1, y1]]
     rows: object = None  # whether the copies of a sheet that repeats stand side by side: always, cheap, never
+    tune: dict = field(default_factory=dict)  # what is set of the making of the plan (see docs/floorplan-tuning.md)
 
 
 def read_hints(path):
@@ -75,8 +82,8 @@ def read_hints(path):
         raise ValueError(f"{name}: {error}")
     wrong = lambda where, why: ValueError(f"{name}: {where}: {why}")
     number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts", "boards", "heights", "keepouts", "rows"}:
-        raise wrong("the file", "an object with `nets`, `pairs`, `parts`, `boards`, `heights`, `keepouts` and `rows`, nothing else")
+    if not isinstance(data, dict) or set(data) - {"nets", "pairs", "parts", "boards", "heights", "keepouts", "rows", "tune"}:
+        raise wrong("the file", "an object with `nets`, `pairs`, `parts`, `boards`, `heights`, `keepouts`, `rows` and `tune`, nothing else")
     if not (isinstance(data.get("nets", {}), dict) and isinstance(data.get("pairs", []), list)
             and isinstance(data.get("parts", {}), dict)):
         raise wrong("the file", "`nets` is an object (a pattern, and what is said of the nets it names), "
@@ -111,6 +118,13 @@ def read_hints(path):
     if data.get("rows") not in (None, "always", "cheap", "never"):
         raise wrong("rows", "whether the copies of a sheet that repeats stand side by side: always, cheap or never")
     hints.rows = data.get("rows")
+    tune = data.get("tune", {})
+    if not isinstance(tune, dict) or set(tune) - set(TUNE) or not all(
+            (isinstance(v, list) and v and all(isinstance(w, (int, float)) and not isinstance(w, bool) and w >= 0 for w in v))
+            if key == "sheeted" else (isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0)
+            for key, v in tune.items()):
+        raise wrong("tune", "an object of numbers (and `sheeted`: a list of them), of: " + ", ".join(TUNE))
+    hints.tune = dict(tune)
     for pattern, said in data.get("nets", {}).items():
         if not isinstance(said, dict):
             raise wrong(f"nets[{pattern}]", "an object")

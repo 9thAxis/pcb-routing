@@ -78,7 +78,8 @@ class Floorplan(unittest.TestCase):
             part.footprint = "lib:R_0603_1608Metric"
         picture.parts["U9"].footprint = "lib:CP_Elec_8x10.5"
         said = dict(boards=[{}, dict(shift=[-6.0, 0.0], clear=6.0)], heights={"R_0603": 0.5, "CP_Elec": 10.5},
-                    parts={"J1": dict(near=[3.0, 4.0]), "U1": dict(mate="U9")}, keepouts=[[1.0, 1.0, 2.0, 3.0]])
+                    parts={"J1": dict(near=[3.0, 4.0]), "U1": dict(mate="U9")}, keepouts=[[1.0, 1.0, 2.0, 3.0]],
+                    tune=dict(quiet_mm=20, sheeted=[1.0]))
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "b.routing.json").write_text(json.dumps(said))
             hints = k.read_hints(Path(tmp, "b.routing.json"))
@@ -87,6 +88,8 @@ class Floorplan(unittest.TestCase):
         (q,) = asked
         self.assertEqual((q["regions"], q["shifts"]), ([[0, 0, 14, 10], [15, 0, 20, 10]], [[0.0, 0.0], [-6.0, 0.0]]))
         self.assertEqual(q["keepouts"], [[1.0, 1.0, 2.0, 3.0]])
+        # what is set of the making of the plan is handed on as it is said
+        self.assertEqual(q["tune"], dict(quiet_mm=20, sheeted=[1.0]))
         # the height under the right board is not held to (the standoffs are chosen for it): nothing is asked
         self.assertNotIn("limits", q)
         parts = {part["name"]: part for part in q["parts"]}
@@ -110,7 +113,7 @@ class Floorplan(unittest.TestCase):
         self.assertIn(under["needs"], (0.5, 10.5))
         self.assertTrue(any(line.startswith("  under another board (x 9 to 14") for line in k.floorplan_told(found)))
         for wrong in (dict(boards=[dict(shift=[1])]), dict(heights={"R": "tall"}), dict(parts={"J1": dict(near=3)}), dict(parts={"J1": dict(mate=3)}), dict(parts={"J1": dict(noisy="very")}), dict(parts={"J1": dict(fixed=1)}),
-                      dict(keepouts=[[3, 0, 1, 2]]), dict(rows="sometimes")):
+                      dict(keepouts=[[3, 0, 1, 2]]), dict(rows="sometimes"), dict(tune=dict(quiet=3)), dict(tune=dict(packed="half")), dict(tune=dict(sheeted=2))):
             with tempfile.TemporaryDirectory() as tmp:
                 Path(tmp, "b.routing.json").write_text(json.dumps(wrong))
                 with self.assertRaises(ValueError):

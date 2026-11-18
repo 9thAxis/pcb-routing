@@ -4,7 +4,7 @@ use super::beside::Beside;
 use super::blocks::Block;
 use super::facing::{Facing, Pins};
 use super::{Site, Standing};
-use crate::floorplan::constants::{BLOCK_REACH, SETTLE};
+use crate::floorplan::constants::SETTLE;
 use crate::floorplan::settle::{quartered, settled};
 use crate::geom::dist;
 use crate::model::Pt;
@@ -134,7 +134,7 @@ pub(super) fn by_pads(
         if dist(at, pad) >= dist(was, pad) - 1e-6 {
             // (it stands as near its pad already as there is room to: if that is by it, it is not moved from
             // there later; if it is far, it is left to be moved with the other small parts)
-            if dist(was, pad) <= BLOCK_REACH {
+            if dist(was, pad) <= cx.board.tune.block_reach_mm {
                 by_its_pad.insert(c);
             }
             continue;

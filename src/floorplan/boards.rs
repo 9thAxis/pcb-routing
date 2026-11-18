@@ -1,6 +1,6 @@
 //! The boards of a box: which domain is on which.
 
-use super::constants::{ANCHOR, BOARD_FULL, BOARD_MOST};
+use super::constants::ANCHOR;
 use super::ground::Work;
 use super::known::Known;
 use super::settle::overlap;
@@ -99,7 +99,7 @@ pub(super) fn on_boards(cx: &Known, top: &[Work]) -> Boards {
             }
             let mut best: Option<(f64, f64, Vec<usize>)> = None;
             // (no board fuller than BOARD_FULL where that can be; else than BOARD_MOST; else as it may)
-            for most in [BOARD_FULL, BOARD_MOST, f64::INFINITY] {
+            for most in [board.tune.board_full, board.tune.board_most, f64::INFINITY] {
                 if best.is_some() {
                     break;
                 }

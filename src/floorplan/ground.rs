@@ -1,6 +1,6 @@
 //! Ground for each zone: the board cut again and again, the zones in the order they are pulled.
 
-use super::constants::{ANCHOR, POURED, RAIL_LANES, ROAD_MOST, SQUARISH};
+use super::constants::{ANCHOR, POURED, RAIL_LANES, SQUARISH};
 use super::settle::middle;
 use super::ties::{in_line, tied};
 use super::types::{Board, Road};
@@ -274,8 +274,11 @@ pub(super) fn arrange(zones: &mut [Work], rect: [f64; 4], level: usize, domains:
     // (whole tracks: a road for three nets on four layers is one track wide, not three quarters of one; and
     // one track at the least along every cut, or a zone with nothing to its neighbour has no way out past it)
     let abreast = (lanes / run_layers as f64).ceil().max(1.0);
-    let road =
-        if on.fine { 0.0 } else { if domains { board.gap } else { board.pitch * abreast }.min(ROAD_MOST * length) };
+    let road = if on.fine {
+        0.0
+    } else {
+        if domains { board.gap } else { board.pitch * abreast }.min(board.tune.road_most * length)
+    };
     let low = if wide { rect[0] } else { rect[1] };
     let piece = |from: f64, to: f64| if wide { [from, rect[1], to, rect[3]] } else { [rect[0], from, rect[2], to] };
     // (the lots change sides where that was found the better)

@@ -2,7 +2,7 @@
 
 use super::blocks::Block;
 use super::Site;
-use crate::floorplan::constants::{AS_NEAR, BLOCK_NEAR, MAIN, PACKED, QUIET_MM, ROW_WORTH};
+use crate::floorplan::constants::{AS_NEAR, BLOCK_NEAR, MAIN};
 use crate::floorplan::ground::{arrange, taken_by, Ground, Work};
 use crate::floorplan::known::Known;
 use crate::floorplan::settle::{middle, quartered, settled, settled_shape};
@@ -78,7 +78,7 @@ fn packed(site: &Site, fine_nets: &[Vec<usize>], stand: &[Option<Pt>], leaf: (us
     let shift = site.on.shifts[site.on.to[domain]];
     let inside: Vec<usize> = own.iter().copied().filter(|p| !on_gap.contains_key(p)).collect();
     let (across, down) = (rect[2] - rect[0], rect[3] - rect[1]);
-    let share = taken_by(cx.board, &inside) / PACKED / (across * down).max(1e-9);
+    let share = taken_by(cx.board, &inside) / cx.board.tune.packed / (across * down).max(1e-9);
     if share >= 1.0 || inside.is_empty() {
         return rect;
     }
@@ -227,7 +227,8 @@ pub(super) fn settled_first(
     let mut halos: Vec<[f64; 4]> = Vec::new();
     let loud =
         |p: usize| laid_blocks.get(&p).map_or(aggressor[p], |block| block.at.iter().any(|placed| aggressor[placed.0]));
-    let round_it = |r: [f64; 4]| [r[0] - QUIET_MM, r[1] - QUIET_MM, r[2] + QUIET_MM, r[3] + QUIET_MM];
+    let quiet = cx.board.tune.quiet_mm;
+    let round_it = |r: [f64; 4]| [r[0] - quiet, r[1] - quiet, r[2] + quiet, r[3] + quiet];
     for work in top.iter() {
         let mine: Vec<usize> = work
             .parts
@@ -319,7 +320,7 @@ pub(super) fn settled_first(
                                 .iter()
                                 .map(|&(_, one)| room.best_for(one, false, &shut).map_or(f64::INFINITY, |c| c.0))
                                 .sum();
-                            if together > ROW_WORTH * alone {
+                            if together > board.tune.row_worth * alone {
                                 chosen = None;
                             }
                         }

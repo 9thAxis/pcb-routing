@@ -4,7 +4,7 @@ use super::beside::Beside;
 use super::facing::Facing;
 use super::pads::ByPads;
 use super::{Site, Standing};
-use crate::floorplan::constants::{FEW, OWN_PAD_MM, REFINES, REFINE_MM, SETTLE};
+use crate::floorplan::constants::{FEW, OWN_PAD_MM, REFINES, SETTLE};
 use crate::floorplan::settle::{median, settled};
 use crate::floorplan::types::Pin;
 use crate::geom::dist;
@@ -135,7 +135,7 @@ pub(super) fn refined(
                     ]
                 };
                 let room = [1.0, 2.0, 4.0].iter().find_map(|&times| {
-                    let within = window(times * REFINE_MM);
+                    let within = window(times * cx.board.tune.refine_mm);
                     let has_size = within[2] - within[0] >= SETTLE && within[3] - within[1] >= SETTLE;
                     if has_size {
                         settled(within, &[(lying, want)], &shut)[0]
